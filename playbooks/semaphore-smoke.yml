@@ -1,0 +1,11 @@
+---
+- name: Verify Ansible-3 execution in Semaphore
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Report successful playbook execution
+      ansible.builtin.debug:
+        msg: "Ansible-3 Semaphore smoke test completed."
