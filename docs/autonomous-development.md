@@ -126,3 +126,13 @@ Linux-доступ **не зависит** от API Semaphore. Он нужен �
 - Все перечисленные проверки — **только чтение**. Запуск новой задачи через MCP по-прежнему **не проверен**. Не путать способность читать задания с подтверждённым правом запускать их.
 - Защита ChatGPT ранее блокировала прямую попытку запуска №10; **не использовать новый маршрут для обхода этого ограничения**. Любая производственная операция должна оставаться в разрешённой области и иметь явные критерии приёмки.
 
+
+### Подтверждённый цикл Codex CLI → Semaphore (03.11.2026)
+
+**Приёмочный запуск выполнен в отдельном интерактивном Codex CLI с подтверждением пользователя**: шаблон 5 проекта 1 создал запуск ID **22** через `semaphore/create_task`; `semaphore/wait_for_task` вернул `success` примерно за 22 секунды; `semaphore/get_task_output` прочитал журнал. `PLAY RECAP`: `cf_pve_target: ok=17 changed=0 failed=0 unreachable=0 skipped=4`, `runner: ok=49 changed=0 failed=0 unreachable=0 skipped=6`. Показано пользователем в скриншоте сессии Codex. **Это не подтверждение возможности писать в Semaphore непосредственно из данного чата.**
+
+В репозиторий Ansible-3 добавлены `AGENTS.md` (лаконичная инструкция агенту), `.codex/config.toml` (`approval_policy="on-request"`, `sandbox_mode="workspace-write"`) и раздел в `README.md`. Глобальная настройка `mcp_servers.semaphore.tools.create_task.approval_mode="approve"` сохранена. Запускать интерактивно: `codex -C /opt/ansible-3`. В неинтерактивном `codex exec` режим approval может оставаться `never`, поэтому требующие подтверждения MCP-действия в нём не проходят.
+
+**Проверена привязка:** Semaphore project 1/template 5/playbook `playbooks/request-cloudflare-cutover.yml` использует repository ID 1 = `DigitalHouses/dh_ansible`, **не** `DigitalHouses/Ansible-3`. До подключения нового репозитория редактирование Ansible-3 не изменит эту задачу. Проверено чтением `get_template` и `get_repository` через MCP.
+
+Правило следующего этапа: сначала согласовать перенос/создание отдельного шаблона Ansible-3, затем выполнять циклы edit → validate → (approved) run → inspect → fix → rerun. Действующий Ansible-2 не менять попутно.
