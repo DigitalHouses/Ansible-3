@@ -1,4 +1,32 @@
-# Настройки действуют только для доверенного репозитория Ansible-3.
-# Внешние действия MCP сохраняют свои независимые запросы подтверждения.
+# Настройки Ansible-3 (доверенный репозиторий).
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
+
+# Для Ansible-3 разрешены только инструменты чтения, создания тестовых объектов
+# и запуска согласованного шаблона. Остальные операции из полного каталога скрыты.
+[mcp_servers.semaphore]
+default_tools_approval_mode = "writes"
+enabled_tools = [
+  "list_projects", "get_project",
+  "list_repositories", "get_repository", "create_repository",
+  "list_inventories", "get_inventory", "create_inventory",
+  "list_environments", "get_environment",
+  "list_templates", "get_template", "create_template",
+  "list_tasks", "get_task", "create_task", "wait_for_task",
+  "get_task_output", "list_task_ansible_errors"
+]
+
+[mcp_servers.semaphore.env]
+SEMAPHORE_TOOL_PROFILE = "full"
+
+[mcp_servers.semaphore.tools.create_repository]
+approval_mode = "approve"
+
+[mcp_servers.semaphore.tools.create_inventory]
+approval_mode = "approve"
+
+[mcp_servers.semaphore.tools.create_template]
+approval_mode = "approve"
+
+[mcp_servers.semaphore.tools.create_task]
+approval_mode = "approve"
