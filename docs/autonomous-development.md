@@ -136,3 +136,9 @@ Linux-доступ **не зависит** от API Semaphore. Он нужен �
 **Проверена привязка:** Semaphore project 1/template 5/playbook `playbooks/request-cloudflare-cutover.yml` использует repository ID 1 = `DigitalHouses/dh_ansible`, **не** `DigitalHouses/Ansible-3`. До подключения нового репозитория редактирование Ansible-3 не изменит эту задачу. Проверено чтением `get_template` и `get_repository` через MCP.
 
 Правило следующего этапа: сначала согласовать перенос/создание отдельного шаблона Ansible-3, затем выполнять циклы edit → validate → (approved) run → inspect → fix → rerun. Действующий Ansible-2 не менять попутно.
+
+### Итоговая приёмка Ansible-3 smoke и ссылка на снимок окружения (03.11.2026)
+
+После описанных выше исторических этапов в проекте Semaphore `serzhan-home` создан **отдельный** repository **ID 4** → `DigitalHouses/Ansible-3` (`main`), inventory **ID 2** → `inventory/smoke.yml`, template **ID 15** → `playbooks/semaphore-smoke.yml`. Интерактивный Codex через штатные MCP-инструменты и подтверждения пользователя создал объекты и запустил smoke **ID 23**. Журнал подтверждает `status=success`, `localhost ok=1 changed=0 unreachable=0 failed=0`. Эти данные повторно сверены чтением MCP. Действующий `dh_ansible` / template 5 не менялись.
+
+**Актуальный паспорт окружения, инструкции эксплуатации и восстановления:** [development-environment.md](development-environment.md). В текущем разделе сохранена история внедрения; актуальные версии, разрешения и шаги восстановления поддерживать в паспорте, не в хронологии.
