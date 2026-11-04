@@ -97,13 +97,27 @@
         mode: '0600'
 
     - name: Verify PVE HTTPS identity using the CA seeded by bootstrap
-      ansible.builtin.uri:
-        url: "https://{{ pve.ipv4 }}:8006/api2/json/version"
-        ca_path: "{{ pve.ca_file }}"
-        validate_certs: true
-        use_proxy: false
-        status_code: [200, 401]
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --silent
+          - --show-error
+          - --noproxy
+          - '*'
+          - --cacert
+          - "{{ pve.ca_file }}"
+          - --connect-timeout
+          - '5'
+          - --max-time
+          - '15'
+          - --output
+          - /dev/null
+          - --write-out
+          - '%{http_code}'
+          - "https://{{ pve.ipv4 }}:8006/api2/json/version"
+      register: pve_tls_check
       changed_when: false
+      failed_when: pve_tls_check.rc != 0 or pve_tls_check.stdout not in ['200', '401']
 
     - name: Read Runner IPv4 address for SSH source restriction
       ansible.builtin.command: /usr/sbin/ip -4 -o addr show dev eth0
