@@ -1,0 +1,154 @@
+---
+- name: "00 - Update Semaphore task catalog"
+  hosts: runner
+  connection: local
+  gather_facts: true
+  vars_files:
+    - ../catalog/tasks.yml
+  vars:
+    dh_sem_api: https://127.0.0.1:3000/api
+    dh_sem_cert: /etc/semaphore/tls.crt
+    dh_site_name: "{{ ansible_facts['hostname'] | regex_replace('^ansible-', '') }}"
+  tasks:
+    - name: Require a site runner hostname
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['hostname'] is match('^ansible-[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+        fail_msg: "Task 00 must run only on an initialized Ansible-3 runner."
+
+    - name: Read local DEV automation token for task catalog
+      ansible.builtin.set_fact:
+        dh_api_headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.file', '/etc/semaphore/dev-automation-token') | trim }}"
+      no_log: true
+
+    - name: Get accessible Semaphore projects
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/projects"
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        return_content: true
+      register: dh_projects
+      no_log: true
+
+    - name: Resolve current site project
+      ansible.builtin.set_fact:
+        dh_project_id: "{{ dh_projects.json | selectattr('name', 'equalto', dh_site_name) | map(attribute='id') | first | default(0) | int }}"
+
+    - name: Require an existing site project
+      ansible.builtin.assert:
+        that: dh_project_id | int > 0
+        fail_msg: "No Semaphore project matches this site runner."
+
+    - name: Load configured repositories
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/repositories"
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        return_content: true
+      register: dh_repos
+      no_log: true
+
+    - name: Load configured inventories
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/inventory"
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        return_content: true
+      register: dh_inventories
+      no_log: true
+
+    - name: Load configured environments
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/environment"
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        return_content: true
+      register: dh_environments
+      no_log: true
+
+    - name: Resolve template dependencies
+      ansible.builtin.set_fact:
+        dh_repository_id: "{{ dh_repos.json | selectattr('name', 'equalto', 'Ansible-3') | map(attribute='id') | first | default(0) | int }}"
+        dh_inventory_id: "{{ dh_inventories.json | selectattr('name', 'equalto', 'Local runner') | map(attribute='id') | first | default(0) | int }}"
+        dh_environment_id: "{{ dh_environments.json | selectattr('name', 'equalto', 'default') | map(attribute='id') | first | default(0) | int }}"
+
+    - name: Require the bootstrap repository inventory and environment
+      ansible.builtin.assert:
+        that:
+          - dh_repository_id | int > 0
+          - dh_inventory_id | int > 0
+          - dh_environment_id | int > 0
+        fail_msg: "Missing bootstrap Semaphore repository, inventory or environment."
+
+    - name: Load current task templates
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates"
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        return_content: true
+      register: dh_existing_templates
+      no_log: true
+
+    - name: Create missing catalog templates
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates"
+        method: POST
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        body_format: json
+        body:
+          project_id: "{{ dh_project_id | int }}"
+          name: "{{ item.name }}"
+          repository_id: "{{ dh_repository_id | int }}"
+          inventory_id: "{{ dh_inventory_id | int }}"
+          environment_id: "{{ dh_environment_id | int }}"
+          playbook: "{{ item.playbook }}"
+          description: "{{ item.description }}"
+          app: ansible
+          arguments: "[]"
+          type: ""
+        status_code: 201
+      loop: "{{ dh_catalog }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: dh_existing_templates.json | selectattr('name', 'equalto', item.name) | list | length == 0
+      no_log: true
+
+    - name: Update changed catalog templates without deleting unmanaged tasks
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates/{{ dh_existing.id }}"
+        method: PUT
+        headers: "{{ dh_api_headers }}"
+        ca_path: "{{ dh_sem_cert }}"
+        body_format: json
+        body:
+          id: "{{ dh_existing.id }}"
+          project_id: "{{ dh_project_id | int }}"
+          name: "{{ item.name }}"
+          repository_id: "{{ dh_repository_id | int }}"
+          inventory_id: "{{ dh_inventory_id | int }}"
+          environment_id: "{{ dh_environment_id | int }}"
+          playbook: "{{ item.playbook }}"
+          description: "{{ item.description }}"
+          app: ansible
+          arguments: "[]"
+          type: ""
+        status_code: 204
+      vars:
+        dh_existing: "{{ dh_existing_templates.json | selectattr('name', 'equalto', item.name) | first | default({}) }}"
+      loop: "{{ dh_catalog }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - dh_existing.id is defined
+        - dh_existing.playbook != item.playbook or
+          dh_existing.repository_id | int != dh_repository_id | int or
+          dh_existing.inventory_id | int != dh_inventory_id | int or
+          dh_existing.environment_id | int != dh_environment_id | int or
+          dh_existing.description | default('') != item.description
+      no_log: true
+
+    - name: Report catalog processing
+      ansible.builtin.debug:
+        msg: "Task catalog checked: {{ dh_catalog | length }} implemented templates. Unlisted templates preserved."

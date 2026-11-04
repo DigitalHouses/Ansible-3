@@ -1,0 +1,294 @@
+---
+# Imported by bootstrap-runner.yml. REST API, no custom orchestration code.
+- name: Load initial Semaphore API authorization
+  ansible.builtin.set_fact:
+    dh_admin_headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.file', '/root/dh-semaphore-admin-token') | trim }}"
+  no_log: true
+
+- name: Get existing Semaphore projects
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/projects"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_projects
+  no_log: true
+
+- name: Resolve home project
+  ansible.builtin.set_fact:
+    dh_project_id: "{{ dh_projects.json | selectattr('name', 'equalto', dh_site_id) | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create home project when absent
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/projects"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: "{{ dh_site_id }}"
+      max_parallel_tasks: 1
+      demo: false
+    status_code: 201
+  when: dh_project_id | int == 0
+  register: dh_project_created
+  no_log: true
+
+- name: Determine project ID
+  ansible.builtin.set_fact:
+    dh_project_id: "{{ dh_project_created.json.id | default(dh_project_id) | int }}"
+
+- name: Get project Key Store entries
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/keys"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_keys
+  no_log: true
+
+- name: Find None key for public GitHub
+  ansible.builtin.set_fact:
+    dh_key_id: "{{ dh_keys.json | selectattr('name', 'equalto', 'Public Git (none)') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create None key for public GitHub
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/keys"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: Public Git (none)
+      project_id: "{{ dh_project_id | int }}"
+      type: none
+    status_code: 201
+  when: dh_key_id | int == 0
+  register: dh_key_created
+  no_log: true
+
+- name: Determine Key Store ID
+  ansible.builtin.set_fact:
+    dh_key_id: "{{ dh_key_created.json.id | default(dh_key_id) | int }}"
+
+- name: Find local runner inventory credential
+  ansible.builtin.set_fact:
+    dh_local_key_id: "{{ dh_keys.json | selectattr('name', 'equalto', 'Runner inventory (local-only)') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create local-only inventory credential
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/keys"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: Runner inventory (local-only)
+      project_id: "{{ dh_project_id | int }}"
+      type: login_password
+      login_password:
+        login: dh-local-only
+        password: "{{ lookup('ansible.builtin.password', '/etc/semaphore/.local_inventory_password length=32 chars=ascii_letters,digits') }}"
+    status_code: 201
+  when: dh_local_key_id | int == 0
+  register: dh_local_key_created
+  no_log: true
+
+- name: Determine local credential ID
+  ansible.builtin.set_fact:
+    dh_local_key_id: "{{ dh_local_key_created.json.id | default(dh_local_key_id) | int }}"
+
+- name: Get configured Git repositories
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/repositories"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_repositories
+  no_log: true
+
+- name: Find Ansible-3 repository
+  ansible.builtin.set_fact:
+    dh_repository_id: "{{ dh_repositories.json | selectattr('name', 'equalto', 'Ansible-3') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Register public Ansible-3 repository
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/repositories"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: Ansible-3
+      project_id: "{{ dh_project_id | int }}"
+      git_url: "{{ dh_public_repo }}"
+      git_branch: "{{ dh_git_ref }}"
+      ssh_key_id: "{{ dh_key_id | int }}"
+    status_code: 201
+  when: dh_repository_id | int == 0
+  register: dh_repository_created
+  no_log: true
+
+- name: Determine repository ID
+  ansible.builtin.set_fact:
+    dh_repository_id: "{{ dh_repository_created.json.id | default(dh_repository_id) | int }}"
+
+- name: Get configured inventories
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/inventory"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_inventories
+  no_log: true
+
+- name: Find local runner inventory
+  ansible.builtin.set_fact:
+    dh_inventory_id: "{{ dh_inventories.json | selectattr('name', 'equalto', 'Local runner') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create local runner inventory
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/inventory"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: Local runner
+      project_id: "{{ dh_project_id | int }}"
+      type: static-yaml
+      ssh_key_id: "{{ dh_local_key_id | int }}"
+      inventory: |
+        all:
+          hosts:
+            runner:
+              ansible_connection: local
+              ansible_python_interpreter: /usr/bin/python3
+    status_code: 201
+  when: dh_inventory_id | int == 0
+  register: dh_inventory_created
+  no_log: true
+
+- name: Determine inventory ID
+  ansible.builtin.set_fact:
+    dh_inventory_id: "{{ dh_inventory_created.json.id | default(dh_inventory_id) | int }}"
+
+- name: Get configured environments
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/environment"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_environments
+  no_log: true
+
+- name: Find initial environment
+  ansible.builtin.set_fact:
+    dh_environment_id: "{{ dh_environments.json | selectattr('name', 'equalto', 'default') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create initial environment
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/environment"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: default
+      project_id: "{{ dh_project_id | int }}"
+      json: "{}"
+      env: "{}"
+    status_code: 201
+  when: dh_environment_id | int == 0
+  register: dh_environment_created
+  no_log: true
+
+- name: Determine environment ID
+  ansible.builtin.set_fact:
+    dh_environment_id: "{{ dh_environment_created.json.id | default(dh_environment_id) | int }}"
+
+- name: Get all initial templates
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_templates
+  no_log: true
+
+- name: Find template number 00
+  ansible.builtin.set_fact:
+    dh_first_template_id: "{{ dh_templates.json | selectattr('name', 'equalto', '00-Обновить список задач') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Create template number 00
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      name: 00-Обновить список задач
+      project_id: "{{ dh_project_id | int }}"
+      repository_id: "{{ dh_repository_id | int }}"
+      inventory_id: "{{ dh_inventory_id | int }}"
+      environment_id: "{{ dh_environment_id | int }}"
+      app: ansible
+      playbook: playbooks/update-catalog.yml
+      arguments: "[]"
+      type: ""
+      description: Обновить каталог задач Ansible-3
+    status_code: 201
+  when: dh_first_template_id | int == 0
+  register: dh_first_template_created
+  no_log: true
+
+- name: Determine template number 00 ID
+  ansible.builtin.set_fact:
+    dh_first_template_id: "{{ dh_first_template_created.json.id | default(dh_first_template_id) | int }}"
+
+- name: Get Semaphore users for DEV project membership
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/users"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_users
+  no_log: true
+
+- name: Resolve DEV automation user ID
+  ansible.builtin.set_fact:
+    dh_dev_user_id: "{{ dh_users.json | selectattr('username', 'equalto', 'dev-automation') | map(attribute='id') | first | default(0) | int }}"
+
+- name: Require known DEV automation account
+  ansible.builtin.assert:
+    that: dh_dev_user_id | int > 0
+    fail_msg: "DEV automation user was not created in Semaphore."
+
+- name: Get current project members
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/users"
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    return_content: true
+  register: dh_project_users
+  no_log: true
+
+- name: Add DEV automation account with project Owner role
+  ansible.builtin.uri:
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/users"
+    method: POST
+    headers: "{{ dh_admin_headers }}"
+    ca_path: "{{ dh_sem_cert }}"
+    body_format: json
+    body:
+      user_id: "{{ dh_dev_user_id | int }}"
+      role: owner
+    status_code: 204
+  when: dh_project_users.json | selectattr('id', 'equalto', dh_dev_user_id | int) | list | length == 0
+  no_log: true
+
+- name: Report initialized Semaphore objects
+  ansible.builtin.debug:
+    msg: "SEMAPHORE_PROJECT={{ dh_project_id }} REPOSITORY={{ dh_repository_id }} INVENTORY={{ dh_inventory_id }} TEMPLATE_00={{ dh_first_template_id }}"

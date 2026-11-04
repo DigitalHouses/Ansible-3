@@ -1,0 +1,6 @@
+---
+# Only implemented tasks belong here. No auto-deletion of unlisted templates.
+dh_catalog:
+  - name: "00-Обновить список задач"
+    playbook: "playbooks/update-catalog.yml"
+    description: "Обновить каталог задач Ansible-3"

@@ -1,0 +1,377 @@
+---
+- name: Bootstrap Ansible-3 site runner
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    dh_sem_config: /etc/semaphore/config.json
+    dh_sem_cert: /etc/semaphore/tls.crt
+    dh_sem_api: https://127.0.0.1:3000/api
+    dh_sem_version: "2.19.18"
+    dh_sem_package: "/var/cache/dh-bootstrap/semaphore_2.19.18_linux_amd64.deb"
+    dh_sem_download: "https://github.com/semaphoreui/semaphore/releases/download/v2.19.18/semaphore_2.19.18_linux_amd64.deb"
+    dh_sem_sha256: "780a3118585d5baa5ed9614e870fa8496f2839450da627596e7b418969eddc72"
+    dh_public_repo: "https://github.com/DigitalHouses/Ansible-3.git"
+  tasks:
+    - name: Require explicit site and runner identity
+      ansible.builtin.assert:
+        that:
+          - dh_site_id is defined
+          - dh_runner_ip is defined
+          - dh_git_ref is defined
+          - dh_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+        fail_msg: "Bootstrap requires site, runner IPv4 and git ref from PVE."
+
+    - name: Install runner and Semaphore prerequisites
+      ansible.builtin.apt:
+        name:
+          - ansible-core
+          - ca-certificates
+          - curl
+          - git
+          - openssh-server
+          - openssl
+          - python3
+          - sudo
+        update_cache: true
+        state: present
+
+    - name: Allow DEV public-key SSH access to runner root
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install approved DEV public key
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "{{ lookup('ansible.builtin.file', playbook_dir + '/../bootstrap/files/dev-ssh-key.pub') | trim }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Limit root SSH authentication to keys
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/80-dh-runner.conf
+        mode: "0644"
+        content: |
+          PermitRootLogin prohibit-password
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+      notify: Reload SSH
+
+    - name: Enable SSH service
+      ansible.builtin.systemd_service:
+        name: ssh.service
+        enabled: true
+        state: started
+
+    - name: Create unprivileged Semaphore service account
+      ansible.builtin.user:
+        name: semaphore
+        system: true
+        create_home: false
+        home: /var/lib/semaphore
+        shell: /usr/sbin/nologin
+        state: present
+
+    - name: Create Semaphore configuration directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/semaphore, owner: root, group: semaphore, mode: "0750"}
+        - {path: /var/lib/semaphore, owner: semaphore, group: semaphore, mode: "0700"}
+        - {path: /var/lib/semaphore/tmp, owner: semaphore, group: semaphore, mode: "0700"}
+        - {path: /var/cache/dh-bootstrap, owner: root, group: root, mode: "0755"}
+
+    - name: Download pinned stable Semaphore package
+      ansible.builtin.get_url:
+        url: "{{ dh_sem_download }}"
+        dest: "{{ dh_sem_package }}"
+        checksum: "sha256:{{ dh_sem_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install Semaphore Debian package
+      ansible.builtin.apt:
+        deb: "{{ dh_sem_package }}"
+        state: present
+
+    - name: Generate localhost HTTPS certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:P-256
+          - -nodes
+          - -days
+          - "365"
+          - -keyout
+          - /etc/semaphore/tls.key
+          - -out
+          - /etc/semaphore/tls.crt
+          - -subj
+          - "/CN=ansible-{{ dh_site_id }}"
+          - -addext
+          - "subjectAltName=IP:{{ dh_runner_ip }},IP:127.0.0.1"
+        creates: /etc/semaphore/tls.crt
+      notify: Restart Semaphore
+
+    - name: Protect TLS private key
+      ansible.builtin.file:
+        path: /etc/semaphore/tls.key
+        owner: semaphore
+        group: semaphore
+        mode: "0600"
+
+    - name: Allow Semaphore to read certificate
+      ansible.builtin.file:
+        path: "{{ dh_sem_cert }}"
+        owner: root
+        group: semaphore
+        mode: "0640"
+
+    - name: Configure SQLite and HTTPS
+      ansible.builtin.copy:
+        dest: "{{ dh_sem_config }}"
+        owner: root
+        group: semaphore
+        mode: "0640"
+        content: |
+          {{
+            {
+              'dialect': 'sqlite',
+              'sqlite': {'host': '/var/lib/semaphore/database.sqlite'},
+              'port': ':3000',
+              'interface': '0.0.0.0',
+              'web_host': 'https://' + dh_runner_ip + ':3000',
+              'tmp_path': '/var/lib/semaphore/tmp',
+              'cookie_hash': (lookup('ansible.builtin.password', '/etc/semaphore/.cookie_hash length=32 chars=ascii_letters,digits') | b64encode),
+              'cookie_encryption': (lookup('ansible.builtin.password', '/etc/semaphore/.cookie_encryption length=32 chars=ascii_letters,digits') | b64encode),
+              'access_key_encryption': (
+                lookup('ansible.builtin.password', '/etc/semaphore/.access_key_encryption length=32 chars=ascii_letters,digits') | b64encode
+              ),
+              'tls': {'enabled': true, 'cert_file': dh_sem_cert, 'key_file': '/etc/semaphore/tls.key'}
+            } | to_nice_json
+          }}
+      no_log: true
+      notify: Restart Semaphore
+
+    - name: Migrate Semaphore database
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/semaphore
+          - migrate
+          - --config
+          - "{{ dh_sem_config }}"
+      become: true
+      become_user: semaphore
+      changed_when: false
+
+    - name: Ensure administrator password is stored locally
+      ansible.builtin.copy:
+        dest: /root/dh-semaphore-admin-password
+        content: "{{ lookup('ansible.builtin.password', '/root/dh-semaphore-admin-password length=32 chars=ascii_letters,digits') }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+      no_log: true
+
+    - name: Check administrator existence
+      ansible.builtin.command:
+        argv: [/usr/bin/semaphore, users, get, --config, "{{ dh_sem_config }}", --login, admin]
+      become: true
+      become_user: semaphore
+      changed_when: false
+      failed_when: false
+      register: dh_admin_check
+
+    - name: Create initial Semaphore administrator
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/semaphore
+          - users
+          - add
+          - --config
+          - "{{ dh_sem_config }}"
+          - --admin
+          - --login
+          - admin
+          - --name
+          - DigitalHouses Administrator
+          - --email
+          - admin@localhost
+          - --password
+          - "{{ lookup('ansible.builtin.file', '/root/dh-semaphore-admin-password') | trim }}"
+      become: true
+      become_user: semaphore
+      when: dh_admin_check.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: Ensure DEV login password exists locally
+      ansible.builtin.copy:
+        dest: /root/dh-semaphore-dev-password
+        content: "{{ lookup('ansible.builtin.password', '/root/dh-semaphore-dev-password length=32 chars=ascii_letters,digits') }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+      no_log: true
+
+    - name: Check DEV automation user
+      ansible.builtin.command:
+        argv: [/usr/bin/semaphore, users, get, --config, "{{ dh_sem_config }}", --login, dev-automation]
+      become: true
+      become_user: semaphore
+      changed_when: false
+      failed_when: false
+      register: dh_dev_user_check
+
+    - name: Create DEV automation user
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/semaphore
+          - users
+          - add
+          - --config
+          - "{{ dh_sem_config }}"
+          - --login
+          - dev-automation
+          - --name
+          - DEV Automation
+          - --email
+          - dev-automation@localhost
+          - --password
+          - "{{ lookup('ansible.builtin.file', '/root/dh-semaphore-dev-password') | trim }}"
+      become: true
+      become_user: semaphore
+      when: dh_dev_user_check.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: Check administrator token file
+      ansible.builtin.stat:
+        path: /root/dh-semaphore-admin-token
+      register: dh_admin_token_stat
+
+    - name: Issue initial administrator API token
+      ansible.builtin.command:
+        argv: [/usr/bin/semaphore, users, token, create, --config, "{{ dh_sem_config }}", --login, admin, --name, bootstrap]
+      become: true
+      become_user: semaphore
+      register: dh_created_admin_token
+      when: not dh_admin_token_stat.stat.exists
+      changed_when: true
+      no_log: true
+
+    - name: Save initial administrator token
+      ansible.builtin.copy:
+        dest: /root/dh-semaphore-admin-token
+        content: "{{ dh_created_admin_token.stdout | trim }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      when: not dh_admin_token_stat.stat.exists
+      no_log: true
+
+    - name: Check DEV token file
+      ansible.builtin.stat:
+        path: /etc/semaphore/dev-automation-token
+      register: dh_dev_token_stat
+
+    - name: Issue DEV automation API token
+      ansible.builtin.command:
+        argv: [/usr/bin/semaphore, users, token, create, --config, "{{ dh_sem_config }}", --login, dev-automation, --name, central-dev]
+      become: true
+      become_user: semaphore
+      register: dh_created_dev_token
+      when: not dh_dev_token_stat.stat.exists
+      changed_when: true
+      no_log: true
+
+    - name: Save DEV automation token for Semaphore and DEV SSH
+      ansible.builtin.copy:
+        dest: /etc/semaphore/dev-automation-token
+        content: "{{ dh_created_dev_token.stdout | trim }}\n"
+        owner: root
+        group: semaphore
+        mode: "0640"
+      when: not dh_dev_token_stat.stat.exists
+      no_log: true
+
+    - name: Install Semaphore systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/digitalhouses-semaphore.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=DigitalHouses Semaphore UI
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=semaphore
+          Group=semaphore
+          Environment=LANG=C.UTF-8
+          Environment=PATH=/usr/local/bin:/usr/bin:/bin
+          ExecStart=/usr/bin/semaphore server --config /etc/semaphore/config.json
+          Restart=on-failure
+          RestartSec=5
+          UMask=0077
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Semaphore
+
+    - name: Start Semaphore service
+      ansible.builtin.systemd_service:
+        name: digitalhouses-semaphore.service
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: Apply pending service configuration
+      ansible.builtin.meta: flush_handlers
+
+    - name: Confirm Semaphore HTTPS readiness
+      ansible.builtin.uri:
+        url: "{{ dh_sem_api }}/ping"
+        method: GET
+        ca_path: "{{ dh_sem_cert }}"
+        status_code: 200
+      register: dh_semaphore_ping
+      until: dh_semaphore_ping.status | default(0) == 200
+      retries: 20
+      delay: 2
+
+    - name: Initialize project, repository and first template
+      ansible.builtin.import_tasks: bootstrap-semaphore-api.yml
+
+  handlers:
+    - name: Restart Semaphore
+      ansible.builtin.systemd_service:
+        name: digitalhouses-semaphore.service
+        daemon_reload: true
+        state: restarted
+
+    - name: Reload SSH
+      ansible.builtin.systemd_service:
+        name: ssh.service
+        state: reloaded

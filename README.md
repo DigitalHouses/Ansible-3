@@ -30,3 +30,7 @@ codex
 **Исторический паспорт CT1231 на 03.11.2026:** [docs/development-environment.md](docs/development-environment.md) — версии, пути, MCP и smoke-test старого состояния. Он не описывает DEV v1 или новый bootstrap.
 
 **История решений и ограничений:** [docs/autonomous-development.md](docs/autonomous-development.md).
+
+## Bootstrap v3 — feature-версия, ещё не production
+
+Реализация нового bootstrap, Semaphore и задачи №00 подготовлена в ветке `feature/bootstrap-v3-v1`. См. [паспорт реализации и E2E-план](docs/bootstrap-v3-implementation.md). Отсутствует проверка развёртывания нового LXC на PVE; синтаксис/lint прошли, но это не приёмка. CT1231 остаётся остановленным и занятым, Legacy CT1199 сохраняется для аудита.
