@@ -32,6 +32,17 @@ HOST_GW="$(ip -4 route show default | awk '$1 == "default" && $2 == "via" {print
   echo 'BLOCKED: expected PVE vmbr0 with /24 and default gateway' >&2; exit 2;
 }
 HOST_IPV4="${HOST_CIDR%/*}"
+PVE_NODE="$(hostname -s)"
+PVE_HOSTNAME="$(hostname -f)"
+PVE_ROOT_CA=/etc/pve/pve-root-ca.pem
+[[ -n $PVE_NODE && -n $PVE_HOSTNAME && -s $PVE_ROOT_CA ]] || {
+  echo 'BLOCKED: missing PVE identity or cluster CA certificate' >&2; exit 2;
+}
+# An unauthenticated HTTP 401 is fine; the TLS verification must succeed.
+curl --silent --show-error --cacert "$PVE_ROOT_CA" --connect-timeout 5 --max-time 10 \
+  -o /dev/null "https://$HOST_IPV4:8006/api2/json/version" || {
+    echo 'BLOCKED: PVE API certificate is not trusted for vmbr0 IP' >&2; exit 2;
+  }
 IFS=. read -r A B C D <<< "$HOST_IPV4"
 NETWORK="${A}.${B}.${C}"
 RUNNER_IP="${DH_BOOTSTRAP_IP:-$NETWORK.231}"
@@ -111,10 +122,15 @@ CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/ansible-3 rev-parse HEAD)"
 [[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]] || { echo 'BLOCKED: invalid Git SHA' >&2; exit 2; }
 pct exec "$CTID" -- git -C /opt/ansible-3 checkout -q --detach "$CODE_RELEASE"
 
+# Only a public trust certificate is copied; no private PVE key.
+pct exec "$CTID" -- install -d -m 0755 /etc/digitalhouses
+pct push "$CTID" "$PVE_ROOT_CA" /etc/digitalhouses/pve-root-ca.pem \
+  --user root --group root --perms 0644
+
 echo '=== 3/4 Semaphore through Ansible ==='
 pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   /opt/ansible/venv/bin/ansible-playbook -i localhost, -c local \
-  -e "site_id=$SITE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF" \
+  -e "site_id=$SITE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF pve_ipv4=$HOST_IPV4 pve_node=$PVE_NODE pve_hostname=$PVE_HOSTNAME" \
   /opt/ansible-3/bootstrap/runner.yml
 
 echo '=== 4/4 Ready ==='

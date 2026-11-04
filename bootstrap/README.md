@@ -9,7 +9,10 @@ Bootstrap выполняет только:
    `DigitalHouses/Ansible-3` в `/opt/ansible-3`.
 3. Установку Semaphore `2.20.16-beta9` через Ansible; HTTPS, SQLite,
    отдельный пользователь сервиса.
-4. Создание проекта сайта в Semaphore и только ручного шаблона
+4. Передачу IP PVE, имени узла и его публичного CA-сертификата в runner
+   (`/etc/digitalhouses/pve.yml`, `/etc/digitalhouses/pve-root-ca.pem`).
+   Bootstrap не меняет IP PVE.
+5. Создание проекта сайта в Semaphore и только ручного шаблона
    **`00-Обновить список задач`**. Запуск шаблона не производится.
 
 №00 при запуске регистрирует *новые* шаблоны, явно добавленные в
