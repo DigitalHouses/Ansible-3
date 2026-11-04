@@ -108,6 +108,7 @@
           environment_id: "{{ bootstrap_templates[0].environment_id }}"
           allow_override_args_in_task: false
           autorun: false
+          survey_vars: "{{ item.survey_vars | default([]) }}"
         ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: [200, 201]

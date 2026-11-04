@@ -43,6 +43,7 @@
           - avahi-daemon
           - avahi-utils
           - openssh-client
+          - curl
         state: present
 
     - name: Advertise Runner as a workstation over mDNS
