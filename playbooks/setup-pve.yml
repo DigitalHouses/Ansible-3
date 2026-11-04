@@ -28,9 +28,10 @@
     ups_community: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_COMMUNITY') }}"
     ups_auth_pass: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_AUTH_PASSWORD') }}"
     ups_priv_pass: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_PRIV_PASSWORD') }}"
+    pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
     mqtt_host: "{{ lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST') }}"
     mqtt_user: "{{ lookup('ansible.builtin.env', 'DH_MQTT_USERNAME') }}"
-    mqtt_password: "{{ lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD') }}"
+    mqtt_password: "{{ DH_MQTT_PASSWORD | default('', true) }}"
   tasks:
     - name: Validate host setup request
       ansible.builtin.assert:
@@ -55,6 +56,63 @@
           - pve.node is match('^[a-zA-Z0-9][a-zA-Z0-9-]*$')
           - ups_mode != 'snmp' or ups_host is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
         fail_msg: Invalid task 10 configuration
+    - name: Create the local SSH configuration directory on Runner
+      ansible.builtin.file:
+        path: /var/lib/semaphore/.ssh
+        state: directory
+        owner: semaphore
+        group: semaphore
+        mode: '0700'
+
+    - name: Generate the site-local SSH key only if missing
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -f
+          - /var/lib/semaphore/.ssh/id_ed25519
+        creates: /var/lib/semaphore/.ssh/id_ed25519
+      no_log: true
+
+    - name: Ensure the local pinned host key file exists
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/.ssh/known_hosts
+        content: ''
+        force: false
+        owner: semaphore
+        group: semaphore
+        mode: '0600'
+
+    - name: Verify PVE HTTPS identity using the CA seeded by bootstrap
+      ansible.builtin.uri:
+        url: "https://{{ pve.ipv4 }}:8006/api2/json/version"
+        ca_path: "{{ pve.ca_file }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: [200, 401]
+      changed_when: false
+
+    - name: Read Runner IPv4 address for SSH source restriction
+      ansible.builtin.command: /usr/sbin/ip -4 -o addr show dev eth0
+      register: runner_address
+      changed_when: false
+
+    - name: Resolve Runner address without hardcoding the site subnet
+      ansible.builtin.set_fact:
+        runner_ipv4: >-
+          {{ (runner_address.stdout | regex_findall('inet ([0-9.]+)/')) | first }}
+
+    - name: Require Runner and PVE to share the expected management subnet
+      ansible.builtin.assert:
+        that:
+          - runner_ipv4 != pve.ipv4
+          - runner_ipv4.split('.')[:3] == pve.ipv4.split('.')[:3]
+        fail_msg: "Unexpected Runner source IP; refusing to grant root SSH from another network"
+
     - name: Check the bootstrap-enrolled SSH identity
       ansible.builtin.stat:
         path: /var/lib/semaphore/.ssh/id_ed25519
@@ -70,14 +128,51 @@
       register: ssh_host_check
       changed_when: false
       failed_when: false
-    - name: Require administrative SSH enrollment from bootstrap
+    - name: Pin the first-seen SSH identity when the legacy Runner has none
+      when: ssh_host_check.rc != 0
+      block:
+        - name: Require task 05 PVE root password for first SSH enrollment
+          ansible.builtin.assert:
+            that: pve_root_password | length > 0
+            fail_msg: "Missing PVE root credential from task 05; cannot enroll existing Runner"
+          no_log: true
+
+        - name: Discover PVE SSH public key over the verified LAN address
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/ssh-keyscan
+              - -T
+              - '5'
+              - -t
+              - ed25519
+              - "{{ pve.ipv4 }}"
+          register: first_ssh_key
+          changed_when: false
+          no_log: true
+
+        - name: Require exactly one initial ED25519 public host key
+          ansible.builtin.assert:
+            that: >-
+              (first_ssh_key.stdout_lines |
+               select('match', '^' ~ (pve.ipv4 | regex_escape) ~ ' ssh-ed25519 ') |
+               list | length) == 1
+            fail_msg: "Cannot pin an unambiguous PVE SSH host key"
+          no_log: true
+
+        - name: Record the first-use PVE host key for strict subsequent checking
+          ansible.builtin.known_hosts:
+            name: "{{ pve.ipv4 }}"
+            key: >-
+              {{ (first_ssh_key.stdout_lines |
+                  select('match', '^' ~ (pve.ipv4 | regex_escape) ~ ' ssh-ed25519 ') |
+                  first) }}
+            path: /var/lib/semaphore/.ssh/known_hosts
+            state: present
+
+    - name: Require a valid local SSH identity and pinned PVE key
       ansible.builtin.assert:
-        that:
-          - ssh_identity.stat.isreg | default(false)
-          - ssh_host_check.rc == 0
-        fail_msg: >-
-          PVE SSH trust is not enrolled. Fresh bootstrap must seed the
-          semaphore key and pinned PVE SSH host key before task 10 can run.
+        that: ssh_identity.stat.isreg | default(false)
+        fail_msg: "Runner has no SSH private key after initial enrollment"
     - name: Add the exact PVE to the in-memory inventory
       ansible.builtin.add_host:
         name: managed_pve
@@ -86,11 +181,13 @@
         ansible_user: root
         ansible_connection: ssh
         ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_password: "{{ pve_root_password if pve_root_password | length > 0 else omit }}"
         ansible_ssh_common_args: >-
-          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o StrictHostKeyChecking=yes -o ConnectTimeout=10
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
         ansible_python_interpreter: /usr/bin/python3
         expected_node: "{{ pve.node }}"
+        expected_runner_ipv4: "{{ runner_ipv4 }}"
         requested_mode: "{{ setup_mode }}"
         requested_repo_mode: "{{ repo_mode }}"
         requested_upgrade: "{{ upgrade_mode }}"
@@ -136,6 +233,10 @@
           - actual_node.stdout == expected_node
           - effective_uid.stdout == '0'
         fail_msg: Connected host identity differs from the bootstrap PVE node
+    - name: Enroll the Runner public key using native Ansible modules
+      ansible.builtin.include_tasks: ../tasks/pve-ssh-enrollment.yml
+      when: requested_mode == 'apply'
+
     - name: Read PVE version without modifying the host
       ansible.builtin.command: /usr/bin/pveversion
       changed_when: false
