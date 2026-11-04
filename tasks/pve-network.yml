@@ -233,17 +233,30 @@
     state: restarted
 
 - name: Verify the new PVE API address with its trusted CA
-  ansible.builtin.uri:
-    url: "https://{{ requested_new_ipv4 }}:8006/api2/json/version"
-    ca_path: /etc/digitalhouses/pve-root-ca.pem
-    use_proxy: false
-    validate_certs: true
-    status_code: 200
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/curl
+      - --silent
+      - --show-error
+      - --noproxy
+      - '*'
+      - --cacert
+      - "{{ recorded_pve.ca_file }}"
+      - --connect-timeout
+      - '5'
+      - --max-time
+      - '15'
+      - --output
+      - /dev/null
+      - --write-out
+      - '%{http_code}'
+      - "https://{{ requested_new_ipv4 }}:8006/api2/json/version"
   delegate_to: runner
+  changed_when: false
   retries: 10
   delay: 3
   register: verified_pve_api
-  until: verified_pve_api.status == 200
+  until: verified_pve_api.rc == 0 and verified_pve_api.stdout in ['200', '401']
 
 - name: Persist the new trusted PVE endpoint on the runner
   ansible.builtin.copy:
