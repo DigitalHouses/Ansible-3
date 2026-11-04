@@ -41,7 +41,7 @@
 
 - name: Get project Key Store entries
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/keys"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/keys?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
@@ -101,7 +101,7 @@
 
 - name: Get configured Git repositories
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/repositories"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/repositories?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
@@ -136,7 +136,7 @@
 
 - name: Get configured inventories
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/inventory"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/inventory?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
@@ -176,7 +176,7 @@
 
 - name: Get configured environments
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/environment"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/environment?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
@@ -210,7 +210,7 @@
 
 - name: Get all initial templates
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/templates?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
@@ -268,7 +268,7 @@
 
 - name: Get current project members
   ansible.builtin.uri:
-    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/users"
+    url: "{{ dh_sem_api }}/project/{{ dh_project_id }}/users?sort=name&order=asc"
     headers: "{{ dh_admin_headers }}"
     ca_path: "{{ dh_sem_cert }}"
     return_content: true
