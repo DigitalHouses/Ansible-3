@@ -17,3 +17,99 @@ tasks:
       - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+  - name: "10-Настроить PVE"
+    playbook: playbooks/setup-pve.yml
+    description: "PVE 8 post-install, Avahi, NUT UPS, DigitalHouses PVE Agent; без изменения гостей и дисков"
+    survey_vars:
+      - name: DH_PVE_MODE
+        title: "Режим №10"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Аудит — ничего не изменять", value: audit}
+          - {name: "Применить настройки", value: apply}
+      - name: DH_PVE_REPO_MODE
+        title: "PVE APT-репозитории"
+        type: enum
+        target: ""
+        required: true
+        default_value: keep
+        values:
+          - {name: "Не изменять текущие", value: keep}
+          - {name: "No-subscription (PVE 8, без лицензии)", value: nosub}
+      - name: DH_PVE_UPGRADE
+        title: "Обновить пакеты PVE"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Нет", value: "no"}
+          - {name: "Да, без перезагрузки", value: "yes"}
+      - name: DH_PVE_UPS_MODE
+        title: "Подключение UPS"
+        type: enum
+        target: ""
+        required: true
+        default_value: none
+        values:
+          - {name: "UPS отсутствует / не настраивать", value: none}
+          - {name: "USB HID — usbhid-ups", value: usb}
+          - {name: "Сетевой UPS — SNMP", value: snmp}
+      - name: DH_PVE_UPS_BRAND
+        title: "Производитель UPS"
+        type: enum
+        target: ""
+        required: true
+        default_value: cyberpower
+        values:
+          - {name: APC (Schneider Electric), value: apc}
+          - {name: CyberPower, value: cyberpower}
+          - {name: Eaton, value: eaton}
+          - {name: Vertiv / Liebert, value: vertiv}
+          - {name: Tripp Lite, value: tripplite}
+          - {name: Powercom, value: powercom}
+          - {name: PowerWalker, value: powerwalker}
+          - {name: IPPON, value: ippon}
+          - {name: Delta Electronics, value: delta}
+          - {name: Socomec, value: socomec}
+          - {name: Другой производитель, value: other}
+      - {name: DH_PVE_UPS_MODEL, title: "Модель UPS (необязательно)", type: "", target: "", required: false, values: []}
+      - {name: DH_PVE_UPS_IP, title: "Сетевой UPS — IP-адрес", type: "", target: "", required: false, values: []}
+      - name: DH_PVE_SNMP_VERSION
+        title: "Сетевой UPS — SNMP"
+        type: enum
+        target: ""
+        required: false
+        default_value: v3
+        values:
+          - {name: "SNMP v3 (authPriv)", value: v3}
+          - {name: "SNMP v2c", value: v2c}
+          - {name: "SNMP v1", value: v1}
+      - {name: DH_PVE_SNMP_USERNAME, title: "SNMP v3 — имя пользователя", type: "", target: "", required: false, values: []}
+      - name: DH_PVE_SNMP_AUTH_PROTOCOL
+        title: "SNMP v3 — алгоритм аутентификации"
+        type: enum
+        target: ""
+        required: false
+        default_value: SHA
+        values:
+          - {name: SHA, value: SHA}
+          - {name: SHA256, value: SHA256}
+          - {name: SHA384, value: SHA384}
+          - {name: SHA512, value: SHA512}
+      - name: DH_PVE_SNMP_PRIV_PROTOCOL
+        title: "SNMP v3 — шифрование"
+        type: enum
+        target: ""
+        required: false
+        default_value: AES
+        values:
+          - {name: AES, value: AES}
+          - {name: AES192, value: AES192}
+          - {name: AES256, value: AES256}
+      - {name: DH_PVE_SNMP_COMMUNITY, title: "SNMP v1/v2c — community (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_PVE_SNMP_AUTH_PASSWORD, title: "SNMP v3 — Auth password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_PVE_SNMP_PRIV_PASSWORD, title: "SNMP v3 — Priv password (пусто = сохранить)", type: secret, target: env, required: false, values: []}

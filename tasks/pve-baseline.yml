@@ -1,0 +1,61 @@
+---
+- name: Require Proxmox VE 8 before changing package sources
+  ansible.builtin.assert:
+    that: pve_version.stdout is match('^pve-manager/8\\.')
+    fail_msg: "PVE 9 has a different APT layout; task 10 only audits it"
+
+- name: Detect enterprise PVE package source
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/pve-enterprise.list
+  register: enterprise_repo
+
+- name: Disable subscription-only channel when no-subscription is selected
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/pve-enterprise.list
+    regexp: '^\\s*(deb\\s+https://enterprise\\.proxmox\\.com/debian/pve\\s+bookworm\\s+pve-enterprise.*)$'
+    replace: '# \\1'
+  when:
+    - requested_repo_mode == 'nosub'
+    - enterprise_repo.stat.exists
+
+- name: Configure the official PVE 8 no-subscription repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-no-subscription.list
+    content: "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription\n"
+    owner: root
+    group: root
+    mode: '0644'
+  when: requested_repo_mode == 'nosub'
+
+- name: Refresh APT package indexes
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install basic host and UPS packages
+  ansible.builtin.apt:
+    name: [avahi-daemon, avahi-utils, nut, usbutils, curl, ca-certificates]
+    state: present
+
+- name: Advertise the Proxmox workstation via Bonjour
+  ansible.builtin.lineinfile:
+    path: /etc/avahi/avahi-daemon.conf
+    regexp: '^\\s*#?\\s*publish-workstation\\s*='
+    insertafter: '^\\[publish\\]$'
+    line: publish-workstation=yes
+  register: avahi_conf
+
+- name: Run Bonjour after installation or configuration
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    enabled: true
+    state: "{{ 'restarted' if avahi_conf.changed else 'started' }}"
+
+- name: Optionally upgrade PVE packages without rebooting
+  ansible.builtin.apt:
+    upgrade: safe
+  when: requested_upgrade == 'yes'
+
+- name: Report post-install result
+  ansible.builtin.debug:
+    msg: "PVE 8 packages, Bonjour and NUT binaries configured; repo={{ requested_repo_mode }}, upgrade={{ requested_upgrade }}"
