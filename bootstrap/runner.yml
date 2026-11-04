@@ -224,6 +224,32 @@
         mode: '0440'
         validate: /usr/sbin/visudo -cf %s
 
+    - name: Permit Semaphore to traverse the Ansible runtime
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        mode: '0755'
+
+    - name: Permit Semaphore to read and execute Ansible virtualenv
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/chmod
+          - -R
+          - a+rX
+          - /opt/ansible/venv
+      changed_when: true
+
+    - name: Verify that the Semaphore service user can execute Ansible
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/runuser
+          - -u
+          - semaphore
+          - --
+          - /opt/ansible/venv/bin/ansible-playbook
+          - --version
+      changed_when: false
+
     - name: Install Semaphore systemd unit
       ansible.builtin.copy:
         dest: /etc/systemd/system/digitalhouses-semaphore.service
