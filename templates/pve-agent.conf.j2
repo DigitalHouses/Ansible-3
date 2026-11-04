@@ -1,0 +1,19 @@
+[general]
+instance_id =
+node_name = PVE
+log_level = info
+
+[mqtt]
+host = {{ requested_mqtt_host }}
+port = 1883
+username = {{ requested_mqtt_user }}
+password = {{ requested_mqtt_password }}
+topic_prefix = DigitalHouses/Global/digitalhouses_pve_agent
+discovery_prefix = homeassistant
+keepalive_seconds = 60
+
+[telemetry]
+enabled = false
+
+[events]
+pve_problem_debounce_seconds = 30

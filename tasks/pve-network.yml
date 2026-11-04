@@ -1,0 +1,268 @@
+---
+# This is an explicit, separately selected single-node PVE IP migration.
+# It preserves the network bridge, gateway, NICs, VMs, containers and ZFS.
+# A timed recovery transaction restores both configs if verification fails.
+- name: Require one explicitly requested IPv4 management migration
+  ansible.builtin.assert:
+    that:
+      - requested_mode == 'apply'
+      - requested_new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+      - requested_new_ipv4 != original_pve_ipv4
+      - requested_new_ipv4.split('.')[:3] == original_pve_ipv4.split('.')[:3]
+      - requested_new_ipv4.split('.')[-1] | int > 0
+      - requested_new_ipv4.split('.')[-1] | int < 255
+    fail_msg: "Invalid or unsafe network migration target"
+
+- name: Refuse in-place PVE cluster IP migration
+  ansible.builtin.stat:
+    path: /etc/pve/corosync.conf
+  register: node_cluster_config
+
+- name: Require a standalone PVE node
+  ansible.builtin.assert:
+    that:
+      - not node_cluster_config.stat.exists
+    fail_msg: "Cluster IP migrations need a cluster-wide plan; task 10 stops"
+
+- name: Check pending PVE GUI network configuration
+  ansible.builtin.stat:
+    path: /etc/network/interfaces.new
+  register: pending_pve_network
+
+- name: Refuse to overwrite pending network changes
+  ansible.builtin.assert:
+    that:
+      - not pending_pve_network.stat.exists
+    fail_msg: "PVE has pending interfaces.new changes; do not overwrite"
+
+- name: Inspect ifupdown2 and duplicate-IP probe programs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/sbin/ifreload
+    - /usr/bin/arping
+  register: network_tools
+
+- name: Require both network commands
+  ansible.builtin.assert:
+    that:
+      - network_tools.results | selectattr('stat.executable', 'equalto', true) | list | length == 2
+    fail_msg: "ifreload and arping are required before migration"
+
+- name: Read current managed bridge configuration
+  ansible.builtin.slurp:
+    src: /etc/network/interfaces
+  register: pve_interfaces_encoded
+
+- name: Read current local hostname mapping
+  ansible.builtin.slurp:
+    src: /etc/hosts
+  register: pve_hosts_encoded
+
+- name: Extract the host network config for exact-match verification
+  ansible.builtin.set_fact:
+    pve_interfaces_text: "{{ pve_interfaces_encoded.content | b64decode }}"
+    pve_hosts_text: "{{ pve_hosts_encoded.content | b64decode }}"
+
+- name: Require the simple expected bridge/network/hostname configuration
+  ansible.builtin.assert:
+    that:
+      - pve_interfaces_text is search('(?m)^iface vmbr0 inet static\\s*$')
+      - >-
+        (pve_interfaces_text |
+        regex_findall('(?m)^\\s*address\\s+' ~ (original_pve_ipv4 | regex_escape) ~ '/24\\s*$')
+        | length) == 1
+      - >-
+        (pve_hosts_text | regex_findall('(?m)^' ~ (original_pve_ipv4 | regex_escape) ~
+        '[ \\t]+[^\\n]*\\b' ~ expected_node ~ '\\b[^\\n]*$') | length) == 1
+      - requested_new_ipv4 not in pve_interfaces_text
+    fail_msg: "Complex/unknown PVE host config; migration requires a reviewed one-node plan"
+
+- name: Check management subnet without mutating the bridge
+  ansible.builtin.command: ip -4 -o addr show dev vmbr0
+  register: currently_configured_addresses
+  changed_when: false
+
+- name: Require old management IP active on vmbr0
+  ansible.builtin.assert:
+    that:
+      - original_pve_ipv4 ~ '/24' in currently_configured_addresses.stdout
+      - requested_new_ipv4 ~ '/24' not in currently_configured_addresses.stdout
+
+- name: Probe that the requested target does not answer ARP
+  ansible.builtin.command:
+    argv: [arping, -D, -c, '3', -I, vmbr0, "{{ requested_new_ipv4 }}"]
+  register: new_ip_arp_probe
+  changed_when: false
+  failed_when: new_ip_arp_probe.rc != 0
+
+- name: Pin the verified host SSH identity for the new address on the runner
+  ansible.builtin.slurp:
+    src: /etc/ssh/ssh_host_ed25519_key.pub
+  register: pve_ssh_public_key
+
+- name: Add new host address to runner pinned SSH known_hosts
+  ansible.builtin.known_hosts:
+    name: "{{ requested_new_ipv4 }}"
+    key: >-
+      {{ requested_new_ipv4 }} {{ (pve_ssh_public_key.content | b64decode).split()[0] }}
+      {{ (pve_ssh_public_key.content | b64decode).split()[1] }}
+    path: /var/lib/semaphore/.ssh/known_hosts
+    state: present
+  delegate_to: runner
+
+- name: Verify new management IP can reach SSH before changing config
+  block:
+    - name: Add temporary new-IP alias without removing the original IP
+      ansible.builtin.command:
+        argv: [ip, addr, add, "{{ requested_new_ipv4 }}/24", dev, vmbr0]
+      changed_when: true
+      register: temporary_alias
+    - name: Probe SSH reachability from the runner over the temporary alias
+      ansible.builtin.wait_for:
+        host: "{{ requested_new_ipv4 }}"
+        port: 22
+        state: started
+        connect_timeout: 3
+        timeout: 20
+      delegate_to: runner
+  always:
+    - name: Remove the temporary alias before applying persistent changes
+      ansible.builtin.command:
+        argv: [ip, addr, del, "{{ requested_new_ipv4 }}/24", dev, vmbr0]
+      changed_when: true
+      when: temporary_alias is defined and temporary_alias.rc == 0
+
+- name: Create host-only network rollback directory
+  ansible.builtin.file:
+    path: /var/lib/digitalhouses/pve-ip-rollback
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Snapshot the original bridge and host mapping for rollback
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  loop:
+    - {src: /etc/network/interfaces, dest: /var/lib/digitalhouses/pve-ip-rollback/interfaces.before}
+    - {src: /etc/hosts, dest: /var/lib/digitalhouses/pve-ip-rollback/hosts.before}
+
+- name: Install a one-shot timed recovery script
+  ansible.builtin.copy:
+    dest: /var/lib/digitalhouses/pve-ip-rollback/rollback.sh
+    owner: root
+    group: root
+    mode: '0700'
+    content: |
+      #!/bin/sh
+      set -eu
+      cp /var/lib/digitalhouses/pve-ip-rollback/interfaces.before /etc/network/interfaces
+      cp /var/lib/digitalhouses/pve-ip-rollback/hosts.before /etc/hosts
+      /usr/sbin/ifreload -a
+      /usr/bin/pvecm updatecerts --force
+      /usr/bin/systemctl restart pveproxy.service
+
+- name: Generate unique transaction ID
+  ansible.builtin.command: date +%s
+  register: network_transaction
+  changed_when: false
+
+- name: Arm the rollback timer before touching persistent network configuration
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemd-run
+      - "--unit=dh-pve-ip-rollback-{{ network_transaction.stdout }}"
+      - --on-active=240s
+      - /var/lib/digitalhouses/pve-ip-rollback/rollback.sh
+  changed_when: true
+
+- name: Replace only the explicit vmbr0 /24 management address
+  ansible.builtin.replace:
+    path: /etc/network/interfaces
+    regexp: "(?m)^([ \\t]*address[ \\t]+){{ original_pve_ipv4 | regex_escape }}/24([ \\t]*)$"
+    replace: "\\g<1>{{ requested_new_ipv4 }}/24\\g<2>"
+    backup: true
+
+- name: Update only the PVE node entry in hosts
+  ansible.builtin.replace:
+    path: /etc/hosts
+    regexp: "(?m)^{{ original_pve_ipv4 | regex_escape }}([ \\t]+[^\\n]*\\b{{ expected_node }}\\b[^\\n]*)$"
+    replace: "{{ requested_new_ipv4 }}\\g<1>"
+    backup: true
+
+- name: Apply network changes using the supported ifupdown2 reload
+  ansible.builtin.command: /usr/sbin/ifreload -a
+  async: 60
+  poll: 0
+  changed_when: true
+
+- name: Wait for new management SSH from the runner
+  ansible.builtin.wait_for:
+    host: "{{ requested_new_ipv4 }}"
+    port: 22
+    state: started
+    connect_timeout: 3
+    timeout: 80
+  delegate_to: runner
+
+- name: Switch the current Ansible host to its new pinned IP
+  ansible.builtin.set_fact:
+    ansible_host: "{{ requested_new_ipv4 }}"
+
+- name: Refresh the current SSH transport
+  ansible.builtin.meta: reset_connection
+
+- name: Verify remote Ansible connection on the new address
+  ansible.builtin.wait_for_connection:
+    timeout: 60
+
+- name: Reissue the PVE node TLS certificates for the new address
+  ansible.builtin.command:
+    argv: [/usr/bin/pvecm, updatecerts, --force]
+  changed_when: true
+
+- name: Restart PVE API proxy after the certificate update
+  ansible.builtin.systemd_service:
+    name: pveproxy.service
+    state: restarted
+
+- name: Verify the new PVE API address with its trusted CA
+  ansible.builtin.uri:
+    url: "https://{{ requested_new_ipv4 }}:8006/api2/json/version"
+    ca_path: /etc/digitalhouses/pve-root-ca.pem
+    use_proxy: false
+    validate_certs: true
+    status_code: 200
+  delegate_to: runner
+  retries: 10
+  delay: 3
+  register: verified_pve_api
+  until: verified_pve_api.status == 200
+
+- name: Persist the new trusted PVE endpoint on the runner
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/pve.yml
+    content: "{{ {'pve': recorded_pve | combine({'ipv4': requested_new_ipv4})} | to_nice_yaml }}"
+    owner: root
+    group: root
+    mode: '0644'
+  delegate_to: runner
+  become: true
+
+- name: Disarm rollback only after runner state and remote API verification
+  ansible.builtin.systemd_service:
+    name: "dh-pve-ip-rollback-{{ network_transaction.stdout }}.timer"
+    state: stopped
+
+- name: Report a successfully confirmed management IP migration
+  ansible.builtin.debug:
+    msg:
+      - "PVE_IP_MIGRATION=PASS ({{ original_pve_ipv4 }} -> {{ requested_new_ipv4 }})"
+      - "SSH and PVE API TLS verified from runner; recovery timer disarmed"
+      - "No VM/LXC, disk, bridge-ports or gateway changes"

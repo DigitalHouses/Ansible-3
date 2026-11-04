@@ -78,7 +78,7 @@ exec > >(tee -a "$LOG") 2>&1
 printf 'SITE=%s PVE=%s RUNNER=CT%s/%s/%s REF=%s\n' \
   "$SITE" "$HOST_CIDR" "$CTID" "$RUNNER_HOSTNAME" "$RUNNER_IP" "$GIT_REF"
 
-echo '=== 1/4 Debian 13 LXC ==='
+echo '=== 1/5 Debian 13 LXC ==='
 pveam update
 TEMPLATE="$(pveam available --section system |
   awk '$2 ~ /^debian-13-standard_[[:alnum:].+-]+_amd64\.tar\.zst$/ {print $2}' |
@@ -109,7 +109,7 @@ pct start "$CTID"
   echo 'BLOCKED: guest hostname differs' >&2; exit 2;
 }
 
-echo '=== 2/4 Ansible and Ansible-3 sources ==='
+echo '=== 2/5 Ansible and Ansible-3 sources ==='
 pct exec "$CTID" -- apt-get update -o APT::Update::Error-Mode=any
 pct exec "$CTID" -- env DEBIAN_FRONTEND=noninteractive apt-get install -y \
   --no-install-recommends git python3 python3-venv python3-pip ca-certificates
@@ -127,13 +127,52 @@ pct exec "$CTID" -- install -d -m 0755 /etc/digitalhouses
 pct push "$CTID" "$PVE_ROOT_CA" /etc/digitalhouses/pve-root-ca.pem \
   --user root --group root --perms 0644
 
-echo '=== 3/4 Semaphore through Ansible ==='
+echo '=== 3/5 Semaphore through Ansible ==='
 pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   /opt/ansible/venv/bin/ansible-playbook -i localhost, -c local \
   -e "site_id=$SITE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF pve_ipv4=$HOST_IPV4 pve_node=$PVE_NODE pve_hostname=$PVE_HOSTNAME" \
   /opt/ansible-3/bootstrap/runner.yml
 
-echo '=== 4/4 Ready ==='
+echo '=== 4/5 Pin host SSH and enroll the Semaphore runner ==='
+# Only the runner's PUBLIC key is added to the PVE host. The private key
+# remains inside the site LXC; the PVE SSH host key is pinned at bootstrap.
+[[ -s /etc/ssh/ssh_host_ed25519_key.pub ]] || {
+  echo 'BLOCKED: PVE ed25519 SSH host key is missing' >&2; exit 2;
+}
+pct exec "$CTID" -- install -d -m 0700 -o semaphore -g semaphore /var/lib/semaphore/.ssh
+if ! pct exec "$CTID" -- test -s /var/lib/semaphore/.ssh/id_ed25519; then
+  pct exec "$CTID" -- runuser -u semaphore -- ssh-keygen -q -t ed25519 -N '' \
+    -f /var/lib/semaphore/.ssh/id_ed25519
+fi
+RUNNER_SSH_PUB="$(pct exec "$CTID" -- cat /var/lib/semaphore/.ssh/id_ed25519.pub)"
+[[ $RUNNER_SSH_PUB == ssh-ed25519\ * ]] || {
+  echo 'BLOCKED: invalid Semaphore runner SSH public key' >&2; exit 2;
+}
+install -d -m 0700 /root/.ssh
+touch /root/.ssh/authorized_keys
+chmod 0600 /root/.ssh/authorized_keys
+AUTHORIZED_LINE="restrict,from=\"$RUNNER_IP\" $RUNNER_SSH_PUB"
+if ! grep -Fqx -- "$AUTHORIZED_LINE" /root/.ssh/authorized_keys; then
+  printf '%s\n' "$AUTHORIZED_LINE" >> /root/.ssh/authorized_keys
+fi
+PVE_SSH_HOST_PUB="$(awk '{print $1 " " $2}' /etc/ssh/ssh_host_ed25519_key.pub)"
+[[ $PVE_SSH_HOST_PUB == ssh-ed25519\ * ]] || {
+  echo 'BLOCKED: invalid PVE host SSH public key' >&2; exit 2;
+}
+PINNED_HOSTS="$(mktemp)"
+printf '%s %s\n' "$HOST_IPV4" "$PVE_SSH_HOST_PUB" > "$PINNED_HOSTS"
+pct push "$CTID" "$PINNED_HOSTS" /var/lib/semaphore/.ssh/known_hosts \
+  --user semaphore --group semaphore --perms 0600
+rm -f "$PINNED_HOSTS"
+pct exec "$CTID" -- runuser -u semaphore -- ssh -n \
+  -i /var/lib/semaphore/.ssh/id_ed25519 \
+  -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+  -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts \
+  "root@$HOST_IPV4" /usr/bin/true || {
+    echo 'BLOCKED: Semaphore-to-PVE pinned root SSH verification failed' >&2; exit 2;
+  }
+
+echo '=== 5/5 Ready ==='
 echo "BOOTSTRAP_FRESH_DONE=PASS commit=$CODE_RELEASE"
 echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
 echo "GET_SEMAPHORE_ADMIN_PASSWORD: pct exec $CTID -- cat /root/dh-semaphore-initial-admin-password"

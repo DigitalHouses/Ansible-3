@@ -1,0 +1,75 @@
+---
+- name: Inspect installed DigitalHouses PVE Agent build
+  ansible.builtin.stat:
+    path: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_build_stat
+
+- name: Read installed build identity
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_build
+  when: agent_build_stat.stat.exists
+
+- name: Check for an existing local PVE Agent configuration
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+  register: agent_config_stat
+
+- name: Create PVE Agent configuration directory when MQTT was supplied in task 05
+  ansible.builtin.file:
+    path: /etc/digitalhouses_pve_agent
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  when: requested_mqtt_host | length > 0
+
+- name: Seed canonical agent config without replacing previously managed identity
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/pve-agent.conf.j2"
+    dest: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - requested_mqtt_host | length > 0
+    - not agent_config_stat.stat.exists
+  no_log: true
+
+- name: Download pinned canonical release installer
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_pve_agent-v0.5.72/digitalhouses_pve_agent/install.sh
+    dest: /root/.digitalhouses-pve-agent-install.sh
+    checksum: sha256:a25b0e19ec8b01c1e5b720b27969ceef23c5ffc6cc1ac16b05e9246ffd790f10
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - requested_mqtt_host | length > 0
+    - not agent_build_stat.stat.exists
+
+- name: Install or update PVE Agent to the canonical release
+  ansible.builtin.command:
+    argv: [/usr/bin/bash, /root/.digitalhouses-pve-agent-install.sh]
+  environment:
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_pve_agent-v0.5.72
+    DIGITALHOUSES_INSTALL_MODE: production
+  when:
+    - requested_mqtt_host | length > 0
+    - not agent_build_stat.stat.exists
+  no_log: true
+  changed_when: true
+
+- name: Confirm agent is enabled and started
+  ansible.builtin.systemd_service:
+    name: digitalhouses_pve_agent.service
+    enabled: true
+    state: started
+  when: requested_mqtt_host | length > 0
+
+- name: Report agent readiness
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'PVE_AGENT=INSTALLED (MQTT connection may await broker)'
+         if requested_mqtt_host | length else
+         'PVE_AGENT=PENDING (enter MQTT broker in task 05)' }}
