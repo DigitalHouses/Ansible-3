@@ -56,8 +56,22 @@ tasks:
         default_value: none
         values:
           - {name: "UPS отсутствует / не настраивать", value: none}
-          - {name: "USB HID — usbhid-ups", value: usb}
+          - {name: "USB — локально подключённый UPS", value: usb}
           - {name: "Сетевой UPS — SNMP", value: snmp}
+      - name: DH_PVE_UPS_DRIVER
+        title: "Драйвер NUT (Auto или выбрать вручную)"
+        type: enum
+        target: ""
+        required: true
+        default_value: auto
+        values:
+          - {name: "Auto — USB HID / SNMP по типу подключения", value: auto}
+          - {name: "usbhid-ups — стандартный USB HID", value: usbhid-ups}
+          - {name: "nutdrv_qx — Megatec / Qx USB", value: nutdrv_qx}
+          - {name: "blazer_usb — старые Megatec USB", value: blazer_usb}
+          - {name: "bcmxcp_usb — Powerware / Eaton USB", value: bcmxcp_usb}
+          - {name: "tripplite_usb — старые Tripp Lite USB", value: tripplite_usb}
+          - {name: "snmp-ups — сетевой UPS", value: snmp-ups}
       - name: DH_PVE_UPS_BRAND
         title: "Производитель UPS"
         type: enum
@@ -88,6 +102,20 @@ tasks:
           - {name: "SNMP v3 (authPriv)", value: v3}
           - {name: "SNMP v2c", value: v2c}
           - {name: "SNMP v1", value: v1}
+      - name: DH_PVE_SNMP_MIB
+        title: "Сетевой UPS — SNMP MIB"
+        type: enum
+        target: ""
+        required: false
+        default_value: auto
+        values:
+          - {name: "Auto — определить через SNMP", value: auto}
+          - {name: "IETF / RFC 1628", value: ietf}
+          - {name: "APC", value: apcc}
+          - {name: "CyberPower", value: cyberpower}
+          - {name: "Eaton Network-M2", value: eaton_pw_nm2}
+          - {name: "Socomec Netvision", value: netvision}
+          - {name: "Tripp Lite", value: tripplite}
       - {name: DH_PVE_SNMP_USERNAME, title: "SNMP v3 — имя пользователя", type: "", target: "", required: false, values: []}
       - name: DH_PVE_SNMP_AUTH_PROTOCOL
         title: "SNMP v3 — алгоритм аутентификации"

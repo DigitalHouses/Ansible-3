@@ -1,4 +1,10 @@
 ---
+- name: Choose one NUT driver for the selected connection type
+  ansible.builtin.set_fact:
+    nut_selected_driver: >-
+      {{ ('usbhid-ups' if requested_ups_mode == 'usb' else 'snmp-ups')
+         if requested_ups_driver == 'auto' else requested_ups_driver }}
+
 - name: Read existing NUT configuration without exposing credentials
   ansible.builtin.slurp:
     src: /etc/nut/ups.conf
@@ -58,11 +64,11 @@
     marker: '# {mark} ANSIBLE MANAGED BLOCK - DigitalHouses UPS'
     block: |
       [ups]
-          driver = {{ 'usbhid-ups' if requested_ups_mode == 'usb' else 'snmp-ups' }}
+          driver = {{ nut_selected_driver }}
           port = {{ 'auto' if requested_ups_mode == 'usb' else requested_ups_host }}
           desc = DigitalHouses {{ requested_ups_brand }} {{ requested_ups_model }}
       {% if requested_ups_mode == 'snmp' %}
-          mibs = auto
+          mibs = {{ requested_snmp_mib }}
           snmp_version = {{ requested_snmp_version }}
       {% if requested_snmp_version in ['v1', 'v2c'] %}
           community = {{ nut_community }}
@@ -99,4 +105,6 @@
 
 - name: Report UPS driver readiness (no FSD or shutdown operation)
   ansible.builtin.debug:
-    msg: "NUT=PASS, transport={{ requested_ups_mode }}, manufacturer={{ requested_ups_brand }}, status={{ nut_status.stdout }}"
+    msg: >-
+      NUT=PASS, transport={{ requested_ups_mode }}, driver={{ nut_selected_driver }},
+      manufacturer={{ requested_ups_brand }}, status={{ nut_status.stdout }}

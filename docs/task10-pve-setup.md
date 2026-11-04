@@ -12,7 +12,7 @@ Site-specific IP не является глобальным значением �
 
 - Audit (по умолчанию): PVE identity, version и vmbr0; storage не опрашивается ради избегания зависших NFS-проб.
 - Apply: на PVE 8 установка системных пакетов, Bonjour/Avahi, обновление APT; No-Subscription и upgrade включаются отдельно.
-- NUT: драйвер USB HID или SNMP, версия v1/v2c/v3; 10 согласованных брендов плюс Other, модель, IP, секреты SNMP.
+- NUT: по умолчанию Auto (USB=usbhid-ups, сеть=snmp-ups), отдельный ручной выбор драйвера без перебора кандидатов. Для SNMP — MIB Auto или явный профиль. Версия v1/v2c/v3; 10 брендов плюс Other, модель, IP и секреты.
 - NUT при настройке должен реально отвечать на локальный upsc. Автоматический shutdown/FSD не включается.
 - DigitalHouses PVE Agent: существующий installer из canonical release digitalhouses_pve_agent-v0.5.72. MQTT credentials берутся из №05; собственный Python не добавлен.
 - В bootstrap: создание Semaphore SSH identity и копирование только публичного SSH ключа на PVE root с ограничением источника, привязка PVE SSH host key.
