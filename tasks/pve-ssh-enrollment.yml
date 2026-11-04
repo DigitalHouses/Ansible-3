@@ -66,9 +66,10 @@
       restrict,from="{{ expected_runner_ipv4 }}" {{ runner_public_ssh.content | b64decode | trim }}
     state: present
     create: true
-    owner: root
-    group: root
-    mode: '0600'
+    # pmxcfs owns /etc/pve/priv permissions; chown/chgrp are not supported.
+    owner: "{{ omit if pve_auth_path.stat.islnk | default(false) else 'root' }}"
+    group: "{{ omit if pve_auth_path.stat.islnk | default(false) else 'root' }}"
+    mode: "{{ omit if pve_auth_path.stat.islnk | default(false) else '0600' }}"
     unsafe_writes: true
   no_log: true
 
