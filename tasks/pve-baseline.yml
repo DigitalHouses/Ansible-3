@@ -32,10 +32,16 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: Install basic host and UPS packages
+- name: Install basic host packages
   ansible.builtin.apt:
-    name: [avahi-daemon, avahi-utils, nut, usbutils, iputils-arping, curl, ca-certificates]
+    name: [avahi-daemon, avahi-utils, iputils-arping, curl, ca-certificates]
     state: present
+
+- name: Install NUT only if the operator selected a UPS
+  ansible.builtin.apt:
+    name: [nut, usbutils]
+    state: present
+  when: requested_ups_mode != 'none'
 
 - name: Advertise the Proxmox workstation via Bonjour
   ansible.builtin.lineinfile:
@@ -58,4 +64,6 @@
 
 - name: Report post-install result
   ansible.builtin.debug:
-    msg: "PVE 8 packages, Bonjour and NUT binaries configured; repo={{ requested_repo_mode }}, upgrade={{ requested_upgrade }}"
+    msg: >-
+      PVE 8 host packages and Bonjour configured;
+      NUT={{ requested_ups_mode }}, repo={{ requested_repo_mode }}, upgrade={{ requested_upgrade }}

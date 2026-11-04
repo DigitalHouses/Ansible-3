@@ -40,12 +40,13 @@
   ansible.builtin.get_url:
     url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_pve_agent-v0.5.72/digitalhouses_pve_agent/install.sh
     dest: /root/.digitalhouses-pve-agent-install.sh
+    checksum: sha256:a25b0e19ec8b01c1e5b720b27969ceef23c5ffc6cc1ac16b05e9246ffd790f10
     owner: root
     group: root
     mode: '0700'
   when:
     - requested_mqtt_host | length > 0
-    - not agent_build_stat.stat.exists or 'source = digitalhouses_pve_agent-v0.5.72' not in (agent_build.content | default('') | b64decode)
+    - not agent_build_stat.stat.exists
 
 - name: Install or update PVE Agent to the canonical release
   ansible.builtin.command:
@@ -55,7 +56,7 @@
     DIGITALHOUSES_INSTALL_MODE: production
   when:
     - requested_mqtt_host | length > 0
-    - not agent_build_stat.stat.exists or 'source = digitalhouses_pve_agent-v0.5.72' not in (agent_build.content | default('') | b64decode)
+    - not agent_build_stat.stat.exists
   no_log: true
   changed_when: true
 

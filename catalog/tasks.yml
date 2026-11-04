@@ -28,7 +28,7 @@ tasks:
         required: true
         default_value: audit
         values:
-          - {name: "Аудит — ничего не изменять", value: audit}
+          - {name: "Аудит PVE — без изменений на хосте", value: audit}
           - {name: "Применить настройки", value: apply}
       - name: DH_PVE_REPO_MODE
         title: "PVE APT-репозитории"

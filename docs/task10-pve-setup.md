@@ -9,10 +9,13 @@
   и обновление без reboot, Bonjour/Avahi, пакеты NUT, PVE Agent.
 - NUT: нет UPS / локальный USB / сетевой SNMP; Auto выбирает
   `usbhid-ups` или `snmp-ups`, есть ручной выбор драйвера и MIB.
-  10 производителей + Other. Доступ к UPS подтверждается через `upsc`.
+  10 производителей + Other. Пакеты NUT устанавливаются только когда выбран UPS;
+  доступ к устройству подтверждается через `upsc`.
   NUT monitor/FSD и реальное отключение UPS **не включаются автоматически**.
 - `dh_pve_agent` устанавливается из проверенного canonical tag
-  `digitalhouses_pve_agent-v0.5.72`, MQTT host и credentials из №05.
+  `digitalhouses_pve_agent-v0.5.72` (installer SHA256 проверяется),
+  MQTT host и credentials из №05. Уже установленная версия агента
+  сохраняется: №10 не понижает её при повторном запуске.
   Если брокера пока нет, агент ожидает MQTT; установка сервиса отдельно.
 - FileBrowser Quantum: стабильный upstream `v2.0.2-stable`,
   бинарник SHA256 `5710dc6f51d77f1db884eace44f6952286c49f2ce40b6a59af37e0dc7c4a8bbd`.
@@ -79,7 +82,8 @@ verification. Runner `/etc/digitalhouses/pve.yml` обновляется тол�
    `restrict,from=<runner_ipv4>` и тестирует вход **без пароля**.
 
 Режим `audit` не меняет файлы на PVE. На Runner при первом
-подключении создаются локальный ключ/известные host keys.
+подключении устанавливается штатный `sshpass` (если есть пароль №05),
+создаются локальный ключ и запись `known_hosts`.
 Изменения на PVE происходят только при `apply`. Установка
 ключа не требует `pct destroy` или изменения bootstrap CT.
 
