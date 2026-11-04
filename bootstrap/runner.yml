@@ -45,8 +45,8 @@
     - name: Advertise Runner as a workstation over mDNS
       ansible.builtin.lineinfile:
         path: /etc/avahi/avahi-daemon.conf
-        regexp: '^\\s*#?\\s*publish-workstation\\s*='
-        insertafter: '^\\[publish\\]$'
+        regexp: '^\s*#?\s*publish-workstation\s*='
+        insertafter: '^\[publish\]$'
         line: publish-workstation=yes
         state: present
       register: avahi_workstation
