@@ -115,7 +115,7 @@
 
     - name: Generate Semaphore encryption material and admin password
       ansible.builtin.command:
-        argv: [/usr/bin/openssl, rand, -hex, '32']
+        argv: [/usr/bin/openssl, rand, -base64, '32']
       loop: [cookie_hash, cookie_encryption, access_key_encryption, admin_password]
       register: semaphore_random
       changed_when: true
