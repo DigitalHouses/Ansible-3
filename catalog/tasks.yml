@@ -6,14 +6,14 @@ tasks:
     description: Synchronize catalog entries from the public Ansible-3 repo
   - name: "05-Ввести и проверить credentials"
     playbook: playbooks/obtain-site-credentials.yml
-    description: "Enter or replace site credentials, then verify available services"
+    description: "Ввод и замена credentials объекта, проверка доступных сервисов"
     survey_vars:
-      - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "PVE root@pam password (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub site repository token (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare API token (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT broker host (blank = keep)", type: "", target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT username (blank = keep)", type: "", target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT password (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS admin@pbs password (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 Key ID (blank = keep)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 Application Key (blank = keep)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "PVE — пароль root@pam (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT — адрес брокера (пусто = сохранить)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT — логин (пусто = сохранить)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT — пароль (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
