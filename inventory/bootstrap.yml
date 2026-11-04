@@ -1,0 +1,6 @@
+---
+all:
+  hosts:
+    runner:
+      ansible_connection: local
+      ansible_python_interpreter: /opt/ansible/venv/bin/python

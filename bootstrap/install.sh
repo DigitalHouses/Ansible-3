@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# DigitalHouses Ansible-3: fresh PVE bootstrap; no custom Python.
+set -Eeuo pipefail
+umask 077
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+unset LANGUAGE
+
+[[ $EUID -eq 0 && -f /etc/pve/user.cfg && $# -eq 0 ]] || {
+  echo 'BLOCKED: launch as root on Proxmox VE, without arguments' >&2; exit 2;
+}
+read -r -p 'Site ID (<owner>-<type>): ' SITE
+SITE="${SITE%$'\r'}"
+[[ ${#SITE} -le 31 && $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
+  echo 'BLOCKED: invalid Site ID' >&2; exit 2;
+}
+read -r -p "Confirm site $SITE (y/n): " YES
+[[ $YES == y || $YES == Y ]] || { echo 'Cancelled'; exit 2; }
+
+CTID="${DH_BOOTSTRAP_CTID:-1231}"
+GIT_REF="${DH_BOOTSTRAP_REF:-main}"
+RUNNER_HOSTNAME="${DH_BOOTSTRAP_HOSTNAME:-ansible-$SITE}"
+PROTECTION="${DH_BOOTSTRAP_PROTECTION:-1}"
+[[ $CTID =~ ^[1-9][0-9]{2,5}$ && $GIT_REF =~ ^[a-zA-Z0-9._/-]+$ &&
+   $RUNNER_HOSTNAME =~ ^[a-z0-9][a-z0-9-]{0,62}$ &&
+   $PROTECTION =~ ^[01]$ ]] || {
+  echo 'BLOCKED: invalid CTID, Git ref or hostname' >&2; exit 2;
+}
+
+HOST_CIDR="$(ip -4 -o addr show dev vmbr0 | awk '$3 == "inet" {print $4; exit}')"
+HOST_GW="$(ip -4 route show default | awk '$1 == "default" && $2 == "via" {print $3; exit}')"
+[[ $HOST_CIDR == */24 && $HOST_GW =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo 'BLOCKED: expected PVE vmbr0 with /24 and default gateway' >&2; exit 2;
+}
+HOST_IPV4="${HOST_CIDR%/*}"
+IFS=. read -r A B C D <<< "$HOST_IPV4"
+NETWORK="${A}.${B}.${C}"
+RUNNER_IP="${DH_BOOTSTRAP_IP:-$NETWORK.231}"
+[[ $HOST_GW == "$NETWORK."* && $RUNNER_IP == "$NETWORK."* ]] || {
+  echo 'BLOCKED: PVE, gateway and Runner must share vmbr0 /24' >&2; exit 2;
+}
+LAST_OCTET="${RUNNER_IP##*.}"
+[[ $LAST_OCTET =~ ^[0-9]{1,3}$ ]] && (( 10#$LAST_OCTET >= 1 && 10#$LAST_OCTET <= 254 )) &&
+  [[ $RUNNER_IP != "$HOST_IPV4" && $RUNNER_IP != "$HOST_GW" ]] || {
+  echo 'BLOCKED: invalid or conflicting Runner IP' >&2; exit 2;
+}
+
+if pct config "$CTID" >/dev/null 2>&1 || qm config "$CTID" >/dev/null 2>&1; then
+  echo "BLOCKED: guest $CTID already exists. Use a separate test CTID/IP, or an empty PVE." >&2
+  exit 2
+fi
+LOG_DIR=/var/log/digitalhouses/ansible-3
+install -d -m 0700 "$LOG_DIR"
+LOG="$(mktemp "$LOG_DIR/bootstrap-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")"
+chmod 0600 "$LOG"
+MOUNTED=0
+on_exit() {
+  rc=$?
+  trap - EXIT
+  if (( MOUNTED )); then pct unmount "$CTID" || true; fi
+  echo "RESULT_RC=$rc"
+  echo "LOG_FILE=$LOG"
+  echo 'Failed partial CTs are NOT removed automatically.'
+}
+trap on_exit EXIT
+exec > >(tee -a "$LOG") 2>&1
+
+printf 'SITE=%s PVE=%s RUNNER=CT%s/%s/%s REF=%s\n' \
+  "$SITE" "$HOST_CIDR" "$CTID" "$RUNNER_HOSTNAME" "$RUNNER_IP" "$GIT_REF"
+
+echo '=== 1/4 Debian 13 LXC ==='
+pveam update
+TEMPLATE="$(pveam available --section system |
+  awk '$2 ~ /^debian-13-standard_[[:alnum:].+-]+_amd64\.tar\.zst$/ {print $2}' |
+  sort -V | tail -n 1)"
+[[ -n $TEMPLATE ]] || { echo 'BLOCKED: Debian 13 template unavailable' >&2; exit 2; }
+if ! pveam list local | grep -Fq "local:vztmpl/$TEMPLATE"; then
+  pveam download local "$TEMPLATE"
+fi
+(umask 022; pct create "$CTID" "local:vztmpl/$TEMPLATE" \
+  --hostname "$RUNNER_HOSTNAME" --ostype debian \
+  --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:16 \
+  --unprivileged 1 --features nesting=1 \
+  --net0 "name=eth0,bridge=vmbr0,ip=$RUNNER_IP/24,gw=$HOST_GW" \
+  --onboot 1 --startup order=2 --protection "$PROTECTION" --start 0)
+pct mount "$CTID"
+MOUNTED=1
+ETC="/var/lib/lxc/$CTID/rootfs/etc"
+[[ -d $ETC && ! -L $ETC ]] || { echo 'BLOCKED: unexpected guest /etc' >&2; exit 2; }
+case "$(stat -c %a "$ETC")" in
+  700) chmod 0755 "$ETC" ;;
+  755) ;;
+  *) echo 'BLOCKED: unexpected guest /etc mode' >&2; exit 2 ;;
+esac
+pct unmount "$CTID"
+MOUNTED=0
+pct start "$CTID"
+[[ $(pct exec "$CTID" -- hostname) == "$RUNNER_HOSTNAME" ]] || {
+  echo 'BLOCKED: guest hostname differs' >&2; exit 2;
+}
+
+echo '=== 2/4 Ansible and Ansible-3 sources ==='
+pct exec "$CTID" -- apt-get update -o APT::Update::Error-Mode=any
+pct exec "$CTID" -- env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  --no-install-recommends git python3 python3-venv python3-pip ca-certificates
+pct exec "$CTID" -- python3 -m venv /opt/ansible/venv
+pct exec "$CTID" -- /opt/ansible/venv/bin/pip install \
+  --disable-pip-version-check ansible-core==2.21.4
+pct exec "$CTID" -- git clone -q --depth 1 --single-branch \
+  --branch "$GIT_REF" https://github.com/DigitalHouses/Ansible-3.git /opt/ansible-3
+CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/ansible-3 rev-parse HEAD)"
+[[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]] || { echo 'BLOCKED: invalid Git SHA' >&2; exit 2; }
+pct exec "$CTID" -- git -C /opt/ansible-3 checkout -q --detach "$CODE_RELEASE"
+
+echo '=== 3/4 Semaphore through Ansible ==='
+pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+  /opt/ansible/venv/bin/ansible-playbook -i localhost, -c local \
+  -e "site_id=$SITE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF" \
+  /opt/ansible-3/bootstrap/runner.yml
+
+echo '=== 4/4 Ready ==='
+echo "BOOTSTRAP_FRESH_DONE=PASS commit=$CODE_RELEASE"
+echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
+echo "GET_SEMAPHORE_ADMIN_PASSWORD: pct exec $CTID -- cat /root/dh-semaphore-initial-admin-password"
+echo 'ONLY_TASK=00-Обновить список задач'

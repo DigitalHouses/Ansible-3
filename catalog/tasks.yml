@@ -1,0 +1,6 @@
+---
+# Explicit catalog of Semaphore task templates. No implicit deletion/update.
+tasks:
+  - name: 00-Обновить список задач
+    playbook: playbooks/update-task-catalog.yml
+    description: Synchronize catalog entries from the public Ansible-3 repo

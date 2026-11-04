@@ -1,0 +1,124 @@
+---
+# Manual Semaphore task 00: adds missing catalog templates without running them.
+- name: Update the public Ansible-3 task catalog
+  hosts: runner
+  gather_facts: false
+  become: false
+  vars:
+    semaphore_api: https://127.0.0.1:3000/api
+    semaphore_ca: /etc/semaphore/tls.crt
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    catalog: >-
+      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../catalog/tasks.yml')
+         | from_yaml }}
+  tasks:
+    - name: Load the catalog API token
+      ansible.builtin.slurp:
+        src: /etc/semaphore/catalog-token
+      register: token_file
+      no_log: true
+
+    - name: Read visible Semaphore projects
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/projects"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        ca_path: "{{ semaphore_ca }}"
+        use_proxy: false
+        status_code: 200
+      register: projects
+      no_log: true
+
+    - name: Identify exactly one site project
+      ansible.builtin.set_fact:
+        site_projects: "{{ projects.json | selectattr('name', 'equalto', site_id) | list }}"
+      no_log: true
+
+    - name: Require valid project and task catalog
+      ansible.builtin.assert:
+        that:
+          - site_projects | length == 1
+          - catalog.tasks is sequence
+          - catalog.tasks | length > 0
+        fail_msg: Invalid site project or task catalog
+
+    - name: Read existing task templates
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        ca_path: "{{ semaphore_ca }}"
+        use_proxy: false
+        status_code: 200
+      register: templates
+      no_log: true
+
+    - name: Locate the bootstrap template
+      ansible.builtin.set_fact:
+        bootstrap_templates: >-
+          {{ templates.json |
+             selectattr('name', 'equalto', '00-Обновить список задач') | list }}
+      no_log: true
+
+    - name: Verify the template to use as a reference
+      ansible.builtin.assert:
+        that:
+          - bootstrap_templates | length == 1
+          - bootstrap_templates[0].app == 'ansible'
+          - bootstrap_templates[0].repository_id is number
+          - bootstrap_templates[0].inventory_id is number
+          - bootstrap_templates[0].environment_id is number
+        fail_msg: Invalid task 00; catalog sync aborted
+
+    - name: Refuse invalid names and conflicting existing playbooks
+      ansible.builtin.assert:
+        that:
+          - >-
+            (templates.json | selectattr('name', 'equalto', item.name) |
+             selectattr('playbook', 'equalto', item.playbook) | list | length) ==
+            (templates.json | selectattr('name', 'equalto', item.name) |
+             list | length)
+          - item.name is match('^[0-9]{2,3}-')
+          - item.playbook is match('^playbooks/[a-z0-9_-]+\.yml$')
+        fail_msg: Invalid or conflicting task catalog entry
+        quiet: true
+      loop: "{{ catalog.tasks }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create missing templates without deleting or running tasks
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+        method: POST
+        body_format: json
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        body:
+          name: "{{ item.name }}"
+          project_id: "{{ site_projects[0].id }}"
+          app: ansible
+          description: "{{ item.description | default('Ansible-3 task') }}"
+          playbook: "{{ item.playbook }}"
+          arguments: '[]'
+          type: ''
+          inventory_id: "{{ bootstrap_templates[0].inventory_id }}"
+          repository_id: "{{ bootstrap_templates[0].repository_id }}"
+          environment_id: "{{ bootstrap_templates[0].environment_id }}"
+          allow_override_args_in_task: false
+          autorun: false
+        ca_path: "{{ semaphore_ca }}"
+        use_proxy: false
+        status_code: [200, 201]
+      loop: "{{ catalog.tasks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (templates.json | map(attribute='name') | list)
+      no_log: true
+
+    - name: Report catalog sync
+      ansible.builtin.debug:
+        msg: >-
+          Catalog checked for {{ site_id }}. Existing tasks kept;
+          only missing catalog templates added; nothing executed or deleted.
