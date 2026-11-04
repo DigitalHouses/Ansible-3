@@ -8,22 +8,25 @@
 
 В стандарте сохранены полезные материалы предыдущей редакции, первичные подтверждённые выводы аудита Ansible-2 и отдельно помечены предложения, которые ещё требуют согласования.
 
-**Исключены из новой реализации:** TrueNAS, NetAlertX и прежние самостоятельные задачи №20, №30, №50 и №90. Действующий Ansible-2 и рабочая инфраструктура не изменены. В Ansible-3 создан и успешно испытан минимальный smoke-playbook; продуктивные роли и задачи ещё не перенесены.
+**Исключены из новой реализации:** TrueNAS, NetAlertX и прежние самостоятельные задачи №20, №30, №50 и №90. После миграции исходный CT1231 остановлен, Ansible-2 сохранён в Legacy CT1199 для аудита. В Ansible-3 ранее был испытан минимальный smoke-playbook на историческом runner; продуктивные роли и новый bootstrap ещё не реализованы.
 
-## Работа с Codex на CT1231
+## Текущая среда разработки — DEV CT1254
 
-В консоли контейнера `ansible-serzhan-home`:
+Вся новая разработка ведётся из отдельного постоянного DEV: `dev` (`192.168.11.254`), см. [DigitalHouses/dev-infra](https://github.com/DigitalHouses/dev-infra). Рабочая копия Ansible-3 на DEV: `/home/dev/projects/Ansible-3`. Пример локального запуска:
 
 ```bash
-codex -C /opt/ansible-3
+cd /home/dev/projects/Ansible-3
+codex
 ```
 
-Дай Codex конкретную задачу на разработку или проверку. Инструкции он автоматически получает из [AGENTS.md](AGENTS.md), а настройки `.codex/config.toml` включают редактирование только рабочего проекта с запросами разрешений. Глобальное MCP-подключение `semaphore` уже настроено на CT1231, но само по себе не передаётся в обычный чат ChatGPT.
+Старый CT1231 остановлен; копия Ansible-2 сохранена как Legacy CT1199 (`192.168.11.199`), Semaphore там отключён. См. [результат миграции](docs/legacy-migration-2026-11-04.md) и [проект нового bootstrap](docs/bootstrap-v3-design-draft.md).
+
+Дай Codex конкретную задачу на разработку или проверку. Инструкции он автоматически получает из [AGENTS.md](AGENTS.md), а настройки `.codex/config.toml` включают редактирование только рабочего проекта с запросами разрешений. Историческое MCP-подключение `semaphore` было настроено внутри CT1231. Оно **не является** доступом DEV к новому site runner; новый API-доступ ещё предстоит реализовать в bootstrap.
 
 **Цикл:** изучить исходники и привязку Semaphore → изменить согласованный код → проверить → при явном задании и после штатного подтверждения запустить шаблон → получить статус, ошибки и `PLAY RECAP` → исправить при необходимости.
 
-**Важно:** в проекте Semaphore `serzhan-home` оба источника существуют параллельно: старый `dh_ansible` (repository ID 1, template №10 ID 5) и новый `Ansible-3` (repository ID 4, inventory ID 2, smoke-template ID 15). Новый шаблон уже проверен запуском **№23: success**, `localhost ok=1 changed=0 failed=0`. Изменения Ansible-3 **не влияют** на старую задачу №10. Перед функциональным тестом всегда проверять связь шаблона с правильным репозиторием.
+**Историческая приёмка (03.11.2026):** в Semaphore исходного CT1231 отдельно существовали старый `dh_ansible` (repository ID 1, template ID 5) и новый `Ansible-3` (repository ID 4, inventory ID 2, smoke-template ID 15). Smoke-запуск №23 был успешным (`localhost ok=1 changed=0 failed=0`). Это **не** текущий рабочий Semaphore нового bootstrap: CT1231 остановлен, а Legacy выключен для аудита.
 
-**Фактическое окружение и восстановление:** [docs/development-environment.md](docs/development-environment.md) — версии, пути, настройки Codex/MCP, разрешения, проверенные объекты Semaphore, smoke-test и runbook для чистого CT1231.
+**Исторический паспорт CT1231 на 03.11.2026:** [docs/development-environment.md](docs/development-environment.md) — версии, пути, MCP и smoke-test старого состояния. Он не описывает DEV v1 или новый bootstrap.
 
 **История решений и ограничений:** [docs/autonomous-development.md](docs/autonomous-development.md).
