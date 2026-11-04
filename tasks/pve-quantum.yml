@@ -1,0 +1,157 @@
+---
+# FileBrowser Quantum administrative full-root view.
+# Upstream discourages / sources because indexing the host is unsafe:
+# global viewable=true explicitly disables indexing for this source.
+- name: Require x86_64 for the pinned Quantum binary
+  ansible.builtin.command: /usr/bin/uname -m
+  register: pve_architecture
+  changed_when: false
+
+- name: Refuse an unsupported Quantum architecture
+  ansible.builtin.assert:
+    that: pve_architecture.stdout == 'x86_64'
+    fail_msg: "No pinned Quantum binary for this PVE architecture"
+
+- name: Inspect existing Quantum systemd unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/digitalhouses-filebrowser.service
+  register: quantum_service
+
+- name: Inspect existing Quantum config
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/filebrowser-quantum.yml
+  register: quantum_config
+
+- name: Check an existing upstream FileBrowser service
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, show, filebrowser.service, --property=LoadState, --value]
+  register: upstream_filebrowser_service
+  changed_when: false
+
+- name: Refuse unmanaged or duplicate Quantum instances
+  ansible.builtin.assert:
+    that:
+      - not quantum_service.stat.exists or quantum_config.stat.exists
+      - upstream_filebrowser_service.stdout == 'not-found'
+    fail_msg: "Existing FileBrowser detected; do not run duplicate root-capable instances"
+
+- name: Create root-only Quantum configuration/state directory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - /etc/digitalhouses
+    - /var/lib/digitalhouses/filebrowser-quantum
+
+- name: Configure local-only Quantum with indexing disabled for full root
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/filebrowser-quantum.yml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      http:
+        listen: "127.0.0.1"
+        port: 8090
+        disableWebDAV: true
+        trustProxyHeaders: false
+        disableRateLimit: false
+      server:
+        disableUpdateCheck: true
+        database:
+          path: "/var/lib/digitalhouses/filebrowser-quantum/filebrowser.sqlite"
+        sources:
+          - path: "/"
+            name: "Proxmox Host"
+            config:
+              defaultEnabled: true
+              private: true
+              rules:
+                - folderPath: "/"
+                  viewable: true
+      auth:
+        adminUsername: admin
+        methods:
+          password:
+            enabled: true
+  register: quantum_config_changed
+
+- name: Download pinned stable Quantum binary with upstream SHA256
+  ansible.builtin.get_url:
+    url: https://github.com/gtsteffaniak/filebrowser/releases/download/v2.0.2-stable/linux-amd64-filebrowser
+    dest: /usr/local/bin/digitalhouses-filebrowser
+    checksum: sha256:5710dc6f51d77f1db884eace44f6952286c49f2ce40b6a59af37e0dc7c4a8bbd
+    owner: root
+    group: root
+    mode: '0755'
+  register: quantum_binary
+
+- name: Install root-only localhost Quantum service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses-filebrowser.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses FileBrowser Quantum (local admin)
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/var/lib/digitalhouses/filebrowser-quantum
+      ExecStart=/usr/local/bin/digitalhouses-filebrowser -c /etc/digitalhouses/filebrowser-quantum.yml
+      Restart=on-failure
+      RestartSec=5
+      UMask=0077
+      NoNewPrivileges=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+
+      [Install]
+      WantedBy=multi-user.target
+  register: quantum_unit
+
+- name: Enable and start Quantum
+  ansible.builtin.systemd_service:
+    name: digitalhouses-filebrowser.service
+    daemon_reload: "{{ quantum_unit.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or quantum_binary.changed else 'started' }}"
+
+- name: Verify the Quantum listener is available on loopback
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8090
+    delay: 1
+    timeout: 30
+
+- name: Verify authenticated API remains private
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8090/api/users
+    method: GET
+    status_code: [401, 403]
+    use_proxy: false
+  register: quantum_unauthenticated_check
+  changed_when: false
+
+- name: Verify Quantum HTTP health endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8090/health
+    method: GET
+    status_code: 200
+    use_proxy: false
+  changed_when: false
+
+- name: Report local-only Quantum state
+  ansible.builtin.debug:
+    msg:
+      - "QUANTUM=READY on 127.0.0.1:8090 (not publicly exposed)"
+      - "Full / source with indexing DISABLED"
+      - "Initial admin password: retrieve once from root-only systemd journal"
+      - "Cloudflare Access and reverse proxy are separate tasks"

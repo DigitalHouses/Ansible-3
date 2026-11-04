@@ -19,7 +19,7 @@ tasks:
       - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
-    description: "PVE 8 post-install, Avahi, NUT UPS, DigitalHouses PVE Agent; без изменения гостей и дисков"
+    description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, безопасная миграция IP"
     survey_vars:
       - name: DH_PVE_MODE
         title: "Режим №10"
@@ -48,6 +48,25 @@ tasks:
         values:
           - {name: "Нет", value: "no"}
           - {name: "Да, без перезагрузки", value: "yes"}
+      - name: DH_PVE_NETWORK_ACTION
+        title: "PVE management IP"
+        type: enum
+        target: ""
+        required: true
+        default_value: keep
+        values:
+          - {name: "Оставить существующий IP", value: keep}
+          - {name: "Сменить IP с автоматическим rollback", value: migrate}
+      - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (для migrate, например 192.168.11.230)", type: "", target: "", required: false, values: []}
+      - name: DH_PVE_QUANTUM
+        title: "FileBrowser Quantum"
+        type: enum
+        target: ""
+        required: true
+        default_value: install
+        values:
+          - {name: "Установить / проверить", value: install}
+          - {name: "Пропустить", value: skip}
       - name: DH_PVE_UPS_MODE
         title: "Подключение UPS"
         type: enum

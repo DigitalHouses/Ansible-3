@@ -12,6 +12,9 @@
     setup_mode: "{{ DH_PVE_MODE | default('audit', true) }}"
     repo_mode: "{{ DH_PVE_REPO_MODE | default('keep', true) }}"
     upgrade_mode: "{{ DH_PVE_UPGRADE | default('no', true) }}"
+    ip_action: "{{ DH_PVE_NETWORK_ACTION | default('keep', true) }}"
+    new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
+    quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
     ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
     ups_snmp_mib: "{{ DH_PVE_SNMP_MIB | default('auto', true) }}"
@@ -35,6 +38,10 @@
           - setup_mode in ['audit', 'apply']
           - repo_mode in ['keep', 'nosub']
           - upgrade_mode in ['no', 'yes']
+          - ip_action in ['keep', 'migrate']
+          - quantum_action in ['install', 'skip']
+          - ip_action != 'migrate' or setup_mode == 'apply'
+          - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
           - ups_mode in ['none', 'usb', 'snmp']
           - ups_driver in ['auto', 'usbhid-ups', 'nutdrv_qx', 'blazer_usb', 'bcmxcp_usb', 'tripplite_usb', 'snmp-ups']
           - ups_mode != 'usb' or ups_driver != 'snmp-ups'
@@ -87,6 +94,11 @@
         requested_mode: "{{ setup_mode }}"
         requested_repo_mode: "{{ repo_mode }}"
         requested_upgrade: "{{ upgrade_mode }}"
+        requested_ip_action: "{{ ip_action }}"
+        requested_new_ipv4: "{{ new_ipv4 }}"
+        requested_quantum_action: "{{ quantum_action }}"
+        original_pve_ipv4: "{{ pve.ipv4 }}"
+        recorded_pve: "{{ pve }}"
         requested_ups_mode: "{{ ups_mode }}"
         requested_ups_driver: "{{ ups_driver }}"
         requested_snmp_mib: "{{ ups_snmp_mib }}"
@@ -151,10 +163,21 @@
     - name: Install or verify the pinned DigitalHouses PVE agent
       ansible.builtin.include_tasks: ../tasks/pve-agent.yml
       when: requested_mode == 'apply'
+    - name: Install FileBrowser Quantum with administrative root source
+      ansible.builtin.include_tasks: ../tasks/pve-quantum.yml
+      when:
+        - requested_mode == 'apply'
+        - requested_quantum_action == 'install'
+    - name: Migrate PVE management IP with timed rollback and runner verification
+      ansible.builtin.include_tasks: ../tasks/pve-network.yml
+      when:
+        - requested_mode == 'apply'
+        - requested_ip_action == 'migrate'
+        - requested_new_ipv4 != original_pve_ipv4
     - name: Report intentionally separate steps
       ansible.builtin.debug:
         msg:
-          - "PVE IP migration to .230: NOT EXECUTED (requires recoverable network transition)"
-          - "FileBrowser Quantum full-root source: NOT EXECUTED (upstream warns against / and /var)"
+          - "PVE IP: {{ 'kept at ' + original_pve_ipv4 if requested_ip_action == 'keep' else 'requested ' + requested_new_ipv4 }}"
+          - "Quantum: {{ requested_quantum_action }}"
           - "PBS storage and backup jobs: deferred until PBS deployment"
           - "NUT automated shutdown: not armed by task 10"

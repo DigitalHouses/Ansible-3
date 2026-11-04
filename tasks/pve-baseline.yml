@@ -34,7 +34,7 @@
 
 - name: Install basic host and UPS packages
   ansible.builtin.apt:
-    name: [avahi-daemon, avahi-utils, nut, usbutils, curl, ca-certificates]
+    name: [avahi-daemon, avahi-utils, nut, usbutils, iputils-arping, curl, ca-certificates]
     state: present
 
 - name: Advertise the Proxmox workstation via Bonjour
