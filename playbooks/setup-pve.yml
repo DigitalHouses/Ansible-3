@@ -99,15 +99,22 @@
 
 - name: 10 - Audit or configure the Proxmox host
   hosts: managed_pve_hosts
-  gather_facts: true
+  gather_facts: false
   become: false
   tasks:
-    - name: Require the expected PVE node and Debian host OS
+    - name: Read actual host identity without discovering storage mount points
+      ansible.builtin.command: hostname -s
+      changed_when: false
+      register: actual_node
+    - name: Read effective SSH identity
+      ansible.builtin.command: id -u
+      changed_when: false
+      register: effective_uid
+    - name: Require the expected Proxmox node and root connection
       ansible.builtin.assert:
         that:
-          - ansible_user_id == 'root'
-          - ansible_hostname == expected_node
-          - ansible_distribution == 'Debian'
+          - actual_node.stdout == expected_node
+          - effective_uid.stdout == '0'
         fail_msg: Connected host identity differs from the bootstrap PVE node
     - name: Read PVE version without modifying the host
       ansible.builtin.command: /usr/bin/pveversion
@@ -120,7 +127,7 @@
     - name: Report the host preflight
       ansible.builtin.debug:
         msg:
-          - "PVE_NODE={{ ansible_hostname }}"
+          - "PVE_NODE={{ actual_node.stdout }}"
           - "PVE_VERSION={{ pve_version.stdout }}"
           - "NETWORK={{ pve_network.stdout }}"
           - "MODE={{ requested_mode }}"
