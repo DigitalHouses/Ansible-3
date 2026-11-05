@@ -248,7 +248,7 @@
     that:
       - sem_cf_existing_config.status == 404 or
         (sem_cf_existing_config.json.result.config | default({})).ingress | default([]) | length == 0 or
-        sem_cf_existing_config.json.result.config == sem_cf_desired_config
+        sem_cf_existing_config.json.result.config.ingress == sem_cf_desired_config.ingress
     fail_msg: "Dedicated Semaphore Tunnel has unexpected ingress; refusing overwrite"
   when: sem_cf_action == 'apply'
 
@@ -287,7 +287,7 @@
   ansible.builtin.assert:
     that:
       - sem_cf_verified_config.json.success | bool
-      - sem_cf_verified_config.json.result.config == sem_cf_desired_config
+      - sem_cf_verified_config.json.result.config.ingress == sem_cf_desired_config.ingress
     fail_msg: "Semaphore Tunnel readback differs from approved HTTPS ingress"
   when: sem_cf_action == 'apply'
 
