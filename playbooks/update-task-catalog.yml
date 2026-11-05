@@ -156,8 +156,8 @@
             (item.survey_vars | map(attribute='title') | list)
             or (current_survey | map(attribute='type', default='') | list) !=
             (item.survey_vars | map(attribute='type', default='') | list)
-            or (current_survey | map(attribute='values', default=[]) | map('default', [], true) | list) !=
-            (item.survey_vars | map(attribute='values', default=[]) | map('default', [], true) | list)
+            or (current_survey | selectattr('type', 'equalto', 'enum') | map(attribute='values') | list) !=
+            (item.survey_vars | selectattr('type', 'equalto', 'enum') | map(attribute='values') | list)
             or (current_survey | map(attribute='default_value', default='') | list) !=
             (item.survey_vars | map(attribute='default_value', default='') | list)
             or (current_survey | map(attribute='required', default=false) | list) !=
