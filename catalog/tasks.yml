@@ -17,6 +17,10 @@ tasks:
       - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_COMMUNITY, title: "UPS SNMP v2c — community (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_USERNAME, title: "UPS SNMP v3 — логин (пусто = сохранить)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_AUTH_PASSWORD, title: "UPS SNMP v3 — Auth password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "UPS SNMP v3 — Privacy password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
     description: "Повторяемое подключение DEV через отдельный Semaphore API-токен"
@@ -71,95 +75,28 @@ tasks:
           - {name: "Установить / проверить", value: install}
           - {name: "Пропустить", value: skip}
       - name: DH_PVE_UPS_MODE
-        title: "Подключение UPS"
+        title: "UPS — подключение"
         type: enum
         target: ""
         required: true
         default_value: none
         values:
-          - {name: "UPS отсутствует / не настраивать", value: none}
-          - {name: "USB — локально подключённый UPS", value: usb}
-          - {name: "Сетевой UPS — SNMP", value: snmp}
+          - {name: "Нет UPS / не настраивать", value: none}
+          - {name: "USB — подключён к PVE", value: usb}
+          - {name: "Сетевой — SNMP v2c", value: snmp_v2c}
+          - {name: "Сетевой — SNMP v3", value: snmp_v3}
+      - {name: DH_PVE_UPS_IP, title: "UPS — IP (только для сетевого)", type: "", target: "", required: false, values: []}
       - name: DH_PVE_UPS_DRIVER
-        title: "Драйвер NUT (Auto или выбрать вручную)"
+        title: "UPS — драйвер NUT"
         type: enum
         target: ""
         required: true
         default_value: auto
         values:
-          - {name: "Auto — USB HID / SNMP по типу подключения", value: auto}
-          - {name: "usbhid-ups — стандартный USB HID", value: usbhid-ups}
-          - {name: "nutdrv_qx — Megatec / Qx USB", value: nutdrv_qx}
-          - {name: "blazer_usb — старые Megatec USB", value: blazer_usb}
-          - {name: "bcmxcp_usb — Powerware / Eaton USB", value: bcmxcp_usb}
-          - {name: "tripplite_usb — старые Tripp Lite USB", value: tripplite_usb}
-          - {name: "snmp-ups — сетевой UPS", value: snmp-ups}
-      - name: DH_PVE_UPS_BRAND
-        title: "Производитель UPS"
-        type: enum
-        target: ""
-        required: true
-        default_value: cyberpower
-        values:
-          - {name: APC (Schneider Electric), value: apc}
-          - {name: CyberPower, value: cyberpower}
-          - {name: Eaton, value: eaton}
-          - {name: Vertiv / Liebert, value: vertiv}
-          - {name: Tripp Lite, value: tripplite}
-          - {name: Powercom, value: powercom}
-          - {name: PowerWalker, value: powerwalker}
-          - {name: IPPON, value: ippon}
-          - {name: Delta Electronics, value: delta}
-          - {name: Socomec, value: socomec}
-          - {name: Другой производитель, value: other}
-      - {name: DH_PVE_UPS_MODEL, title: "Модель UPS (необязательно)", type: "", target: "", required: false, values: []}
-      - {name: DH_PVE_UPS_IP, title: "Сетевой UPS — IP-адрес", type: "", target: "", required: false, values: []}
-      - name: DH_PVE_SNMP_VERSION
-        title: "Сетевой UPS — SNMP"
-        type: enum
-        target: ""
-        required: false
-        default_value: v3
-        values:
-          - {name: "SNMP v3 (authPriv)", value: v3}
-          - {name: "SNMP v2c", value: v2c}
-          - {name: "SNMP v1", value: v1}
-      - name: DH_PVE_SNMP_MIB
-        title: "Сетевой UPS — SNMP MIB"
-        type: enum
-        target: ""
-        required: false
-        default_value: auto
-        values:
-          - {name: "Auto — определить через SNMP", value: auto}
-          - {name: "IETF / RFC 1628", value: ietf}
-          - {name: "APC", value: apcc}
-          - {name: "CyberPower", value: cyberpower}
-          - {name: "Eaton Network-M2", value: eaton_pw_nm2}
-          - {name: "Socomec Netvision", value: netvision}
-          - {name: "Tripp Lite", value: tripplite}
-      - {name: DH_PVE_SNMP_USERNAME, title: "SNMP v3 — имя пользователя", type: "", target: "", required: false, values: []}
-      - name: DH_PVE_SNMP_AUTH_PROTOCOL
-        title: "SNMP v3 — алгоритм аутентификации"
-        type: enum
-        target: ""
-        required: false
-        default_value: SHA
-        values:
-          - {name: SHA, value: SHA}
-          - {name: SHA256, value: SHA256}
-          - {name: SHA384, value: SHA384}
-          - {name: SHA512, value: SHA512}
-      - name: DH_PVE_SNMP_PRIV_PROTOCOL
-        title: "SNMP v3 — шифрование"
-        type: enum
-        target: ""
-        required: false
-        default_value: AES
-        values:
-          - {name: AES, value: AES}
-          - {name: AES192, value: AES192}
-          - {name: AES256, value: AES256}
-      - {name: DH_PVE_SNMP_COMMUNITY, title: "SNMP v1/v2c — community (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_PVE_SNMP_AUTH_PASSWORD, title: "SNMP v3 — Auth password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_PVE_SNMP_PRIV_PASSWORD, title: "SNMP v3 — Priv password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+          - {name: "Auto (рекомендуется)", value: auto}
+          - {name: "usbhid-ups — USB HID", value: usbhid-ups}
+          - {name: "nutdrv_qx — Qx/Megatec USB", value: nutdrv_qx}
+          - {name: "blazer_usb — старый Megatec USB", value: blazer_usb}
+          - {name: "bcmxcp_usb — Eaton USB", value: bcmxcp_usb}
+          - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
+          - {name: "snmp-ups — сетевой", value: snmp-ups}
