@@ -7,6 +7,16 @@
 - `DH_PVE_MODE=audit` — только hostname, PVE version, vmbr0. Никаких storage/NFS-проб.
 - `apply` на PVE 8: APT postinstall, опциональный no-subscription канал
   и обновление без reboot, Bonjour/Avahi, пакеты NUT, PVE Agent.
+- Имя нового PVE инженер задаёт **при установке** по стандарту
+  `pve-<owner>.home.arpa`. №10 считывает `site.owner_slug` из
+  `inventories/<site_id>/site.yml` приватного `DigitalHouses/site-<site_id>`
+  через существующий GitHub credential №05. `site.id` обязан совпасть с
+  идентификатором Runner. Других полей `owner` или значений по умолчанию нет.
+  В `audit` выводятся ожидаемый/фактический FQDN и предупреждение о legacy
+  имени; **системное имя действующего узла не меняется**. В `apply` Avahi
+  публикует `pve-<owner>.local`; это имя независимо от `hostname -s` PVE.
+  Записи `*.home.arpa` в локальном DNS — отдельная настройка DNS-сервера,
+  №10 их не создаёт. Недоступный site manifest блокирует №10 до изменений.
 - NUT Survey №10: ровно **3 поля** — подключение (нет, USB, SNMP v2c,
   SNMP v3), IP сетевого UPS и драйвер (Auto либо явный выбор).
   Auto = `usbhid-ups` для USB, `snmp-ups` для сети; это не аппаратный
