@@ -1,0 +1,246 @@
+---
+# Task 10: FileBrowser Quantum runs only on PVE loopback. Publish it through
+# the existing dedicated PVE Tunnel, using the established wildcard Access
+# policy. Do not open PVE ports, create a new tunnel or loosen Cloudflare Access.
+- name: Verify Quantum is healthy on the actual PVE loopback interface
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8090/health
+    use_proxy: false
+    status_code: 200
+    timeout: 10
+  delegate_to: managed_pve
+  register: quantum_local_health
+  changed_when: false
+
+- name: Verify Quantum does not allow anonymous administration
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8090/api/users
+    use_proxy: false
+    status_code: [401, 403]
+    timeout: 10
+  delegate_to: managed_pve
+  changed_when: false
+
+- name: List existing Cloudflare Access apps to find the protecting policy
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_cf_apps
+  changed_when: false
+  no_log: true
+
+- name: Select exact or wildcard Access protection for Quantum
+  ansible.builtin.set_fact:
+    quantum_exact_access_apps: >-
+      {{ quantum_cf_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', quantum_public_hostname) | list }}
+    quantum_wildcard_access_apps: >-
+      {{ quantum_cf_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', '*.' ~ cf_zone_name) | list }}
+
+- name: Require a unique existing protective Access application
+  ansible.builtin.assert:
+    that:
+      - quantum_cf_apps.json.success | bool
+      - quantum_cf_apps.json.result_info.total_pages | default(1) | int == 1
+      - quantum_exact_access_apps | length <= 1
+      - quantum_wildcard_access_apps | length <= 1
+      - quantum_exact_access_apps | length == 1 or quantum_wildcard_access_apps | length == 1
+    fail_msg: "Quantum Access protection is absent or ambiguous; refusing to publish a root-capable application"
+
+- name: Choose the narrowest applicable Access policy
+  ansible.builtin.set_fact:
+    quantum_protecting_access_app: >-
+      {{ (quantum_exact_access_apps if quantum_exact_access_apps | length == 1
+          else quantum_wildcard_access_apps) | first }}
+
+- name: Read existing Access policies without exposing users or groups
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps/{{ quantum_protecting_access_app.id }}/policies?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_access_policies
+  changed_when: false
+  no_log: true
+
+- name: Prove that Access restricts users and never permits anonymous bypass
+  ansible.builtin.assert:
+    that:
+      - quantum_access_policies.json.success | bool
+      - quantum_access_policies.json.result_info.total_pages | default(1) | int == 1
+      - quantum_access_policies.json.result | selectattr('decision', 'equalto', 'bypass') | list | length == 0
+      - quantum_access_policies.json.result | selectattr('decision', 'equalto', 'allow') | list | length > 0
+      - >-
+        quantum_access_policies.json.result | map(attribute='include') | flatten
+        | selectattr('everyone', 'defined') | list | length == 0
+      - >-
+        quantum_access_policies.json.result | selectattr('decision', 'equalto', 'allow')
+        | map(attribute='include') | flatten
+        | selectattr('email', 'defined') | list | length > 0
+    fail_msg: "Cloudflare Access has no verified restricted email allow-policy for FileBrowser"
+
+- name: Read dedicated PVE Tunnel ingress after optional PVE origin update
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_current_tunnel
+  changed_when: false
+  no_log: true
+
+- name: Store Quantum ingress and expected exact route
+  ansible.builtin.set_fact:
+    quantum_original_config: "{{ quantum_current_tunnel.json.result.config }}"
+    quantum_expected_route:
+      hostname: "{{ quantum_public_hostname }}"
+      service: http://127.0.0.1:8090
+
+- name: Reject any foreign route or unverified PVE origin in the dedicated tunnel
+  ansible.builtin.assert:
+    that:
+      - quantum_current_tunnel.json.success | bool
+      - quantum_original_config.ingress | length in [2, 3]
+      - quantum_original_config.ingress[0].hostname == public_hostname
+      - quantum_original_config.ingress[0].service == desired_origin
+      - quantum_original_config.ingress[0].originRequest.caPool == expected_ca_pool
+      - quantum_original_config.ingress[0].originRequest.noTLSVerify is sameas false
+      - quantum_original_config.ingress[-1].service == 'http_status:404'
+      - quantum_original_config.ingress[-1].hostname is not defined
+      - quantum_original_config.ingress | length != 3 or quantum_original_config.ingress[1] == quantum_expected_route
+    fail_msg: "PVE Tunnel drift, foreign Quantum route or stale PVE origin: refusing route changes"
+
+- name: Fetch exact Quantum DNS name, including conflicting record types
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ quantum_public_hostname }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_dns_existing
+  changed_when: false
+  no_log: true
+
+- name: Refuse a foreign or conflicting Quantum DNS record
+  ansible.builtin.assert:
+    that:
+      - quantum_dns_existing.json.success | bool
+      - quantum_dns_existing.json.result_info.total_pages | default(1) | int == 1
+      - quantum_dns_existing.json.result | length <= 1
+      - >-
+        quantum_dns_existing.json.result | length == 0 or
+        (quantum_dns_existing.json.result[0].type == 'CNAME' and
+         quantum_dns_existing.json.result[0].name == quantum_public_hostname and
+         quantum_dns_existing.json.result[0].proxied | bool and
+         (quantum_dns_existing.json.result[0].content | lower) ==
+         ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
+    fail_msg: "Quantum DNS name is occupied by an unowned record"
+
+- name: Report exact Quantum public ingress before changes
+  ansible.builtin.debug:
+    msg:
+      - "QUANTUM_URL=https://{{ quantum_public_hostname }}/"
+      - "QUANTUM_TUNNEL_INGRESS_EXISTS={{ quantum_original_config.ingress | length == 3 }}"
+      - "QUANTUM_DNS_EXISTS={{ quantum_dns_existing.json.result | length == 1 }}"
+      - "QUANTUM_ACCESS=RESTRICTED"
+      - "QUANTUM_CF_MODE={{ requested_mode }}"
+
+- name: Publish only the additional Quantum ingress before the catch-all
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
+    method: PUT
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      config: >-
+        {{ quantum_original_config | combine({'ingress':
+           quantum_original_config.ingress[:-1] +
+           [quantum_expected_route, quantum_original_config.ingress[-1]]}) }}
+    use_proxy: false
+    status_code: 200
+    timeout: 30
+  changed_when: true
+  no_log: true
+  when:
+    - requested_mode == 'apply'
+    - quantum_original_config.ingress | length == 2
+
+- name: Create only the missing protected Quantum DNS CNAME
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      proxied: true
+      name: "{{ quantum_public_hostname }}"
+      content: "{{ matching_tunnels[0].id }}.cfargotunnel.com"
+    use_proxy: false
+    status_code: [200, 201]
+    timeout: 30
+  changed_when: true
+  no_log: true
+  when:
+    - requested_mode == 'apply'
+    - quantum_dns_existing.json.result | length == 0
+
+- name: Verify Cloudflare readback includes protected Quantum ingress
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_final_tunnel
+  changed_when: false
+  no_log: true
+  when: requested_mode == 'apply'
+
+- name: Verify Quantum ingress and all earlier PVE rules were preserved
+  ansible.builtin.assert:
+    that:
+      - quantum_final_tunnel.json.success | bool
+      - >-
+        quantum_final_tunnel.json.result.config ==
+        (quantum_original_config | combine({'ingress':
+          quantum_original_config.ingress[:-1] +
+          ([quantum_expected_route] if quantum_original_config.ingress | length == 2 else []) +
+          [quantum_original_config.ingress[-1]]}))
+    fail_msg: "Cloudflare readback differs from approved Quantum-only addition"
+  when: requested_mode == 'apply'
+
+- name: Check that the public Quantum address requires Cloudflare Access login
+  ansible.builtin.uri:
+    url: "https://{{ quantum_public_hostname }}/"
+    method: GET
+    validate_certs: true
+    follow_redirects: none
+    use_proxy: false
+    status_code: 302
+    timeout: 12
+  register: quantum_access_challenge
+  changed_when: false
+  until: >-
+    quantum_access_challenge.status | default(0) == 302 and
+    (quantum_access_challenge.location | default('')) is
+    match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
+  retries: 6
+  delay: 3
+  no_log: true
+  when: requested_mode == 'apply'
+
+- name: Report FileBrowser Quantum HTTPS entrypoint commissioned
+  ansible.builtin.debug:
+    msg:
+      - "QUANTUM_PUBLIC=READY https://{{ quantum_public_hostname }}/"
+      - "QUANTUM_ACCESS=RESTRICTED; LOCAL_ORIGIN=127.0.0.1:8090"
+  when: requested_mode == 'apply'
