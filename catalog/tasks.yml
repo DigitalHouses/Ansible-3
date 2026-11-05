@@ -66,11 +66,11 @@ tasks:
           - {name: "Сменить IP с автоматическим rollback", value: migrate}
       - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (для migrate, например 192.168.11.230)", type: "", target: "", required: false, values: []}
       - name: DH_PVE_CF_ACTION
-        title: "Cloudflare Access к PVE"
+        title: "Cloudflare Access к PVE и File Browser"
         type: enum
         target: ""
         required: true
-        default_value: skip
+        default_value: apply
         values:
           - {name: "Не менять Cloudflare", value: skip}
           - {name: "Проверить туннель и Access", value: audit}

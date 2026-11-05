@@ -151,7 +151,7 @@
 - name: Report local-only Quantum state
   ansible.builtin.debug:
     msg:
-      - "QUANTUM=READY on 127.0.0.1:8090 (not publicly exposed)"
+      - "QUANTUM=LOCAL_READY on 127.0.0.1:8090 (public Access commissioning follows)"
       - "Full / source with indexing DISABLED"
       - "Initial admin password: retrieve once from root-only systemd journal"
       - "Cloudflare Access and reverse proxy are separate tasks"

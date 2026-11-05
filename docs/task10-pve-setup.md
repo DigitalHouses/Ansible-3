@@ -150,7 +150,7 @@ PVE identity. Нет живой проверки PVE, NUT оборудовани
 ## Позже
 
 PBS storage и 2 штатных PVE backup jobs (local/cloud) только
-после PBS развёртывания. Cloudflare Access для PVE/Quantum,
+после PBS развёртывания. Cloudflare Access для HAOS/Mosquitto,
 HAOS/Mosquitto deployment, NUT shutdown commissioning —
 отдельные задачи, не должны запускаться побочно.
 
@@ -182,3 +182,32 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
 Шаблон переименован в архивный, его старый playbook оставлен как
 безопасный `fail` с указанием №10; никаких Cloudflare-изменений он
 больше не выполняет. В новом каталоге №40 отсутствует.
+
+### File Browser Quantum — обязательная внешняя готовность (новая норма №10)
+
+При `DH_PVE_MODE=apply`, `DH_PVE_QUANTUM=install` и штатном
+`DH_PVE_CF_ACTION=apply` №10 обязан завершить публикацию Quantum через
+**существующий выделенный туннель PVE**. Локальная проверка порта `8090`
+сама по себе не означает готовность задачи.
+
+- HTTPS URL: `https://dh-<site_id>-pve-filebrowser.digitalhouses.vip/`.
+- Публичный вход защищает существующее self-hosted Cloudflare Access
+  приложение `*.digitalhouses.vip` либо точное правило на этот hostname.
+  До публикации №10 проверяет ограниченную allow-политику (email),
+  отсутствие bypass/everyone; если защита не подтверждена, останавливается.
+- Один маршрут добавляется в собственный PVE Tunnel: `hostname` →
+  `http://127.0.0.1:8090`. Origin доступен только `cloudflared`, потому что
+  сервис Quantum продолжает слушать исключительно loopback PVE.
+- Создаётся **только отсутствующий** proxied DNS CNAME на собственный Tunnel.
+  Чужие DNS-записи и маршруты запрещено изменять.
+- Проверяются status Quantum (`/health=200`, `/api/users=401|403`),
+  фактическая конфигурация ingress и Cloudflare Access challenge (302).
+  Повторный запуск идемпотентен; никаких дополнительных ручных команд.
+
+При PVE `audit` значение Cloudflare `apply` автоматически становится `audit`:
+аудит никогда не изменяет облачные ресурсы.
+
+Если `DH_PVE_CF_ACTION=skip`, внешний сервис сознательно не публикуется;
+такой запуск не следует выдавать за полностью введённый в эксплуатацию Quantum.
+Первоначальное создание **самого PVE Tunnel** для нового объекта ещё не
+покрыто этим сценарием и требует отдельного расширения №10.
