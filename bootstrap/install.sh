@@ -172,6 +172,20 @@ pct exec "$CTID" -- runuser -u semaphore -- ssh -n \
     echo 'BLOCKED: Semaphore-to-PVE pinned root SSH verification failed' >&2; exit 2;
   }
 
+# Fresh bootstrap uses the same native Ansible playbook as task 08.
+# Do not add any other Semaphore task during bootstrap; no task is autorun.
+if [[ $CTID == 1231 ]] && [[ $(pct status 1254 2>/dev/null) == 'status: running' ]]; then
+  echo '=== DEV enrollment through Ansible task 08 playbook ==='
+  pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    /opt/ansible/venv/bin/ansible-playbook -i /opt/ansible-3/inventory/bootstrap.yml \
+    /opt/ansible-3/playbooks/configure-dev-semaphore.yml || {
+      echo 'BLOCKED: native DEV enrollment failed' >&2
+      exit 2
+    }
+else
+  echo 'DEV enrollment skipped: no running local DEV CT1254 for Runner CT1231.'
+fi
+
 echo '=== 5/5 Ready ==='
 echo "BOOTSTRAP_FRESH_DONE=PASS commit=$CODE_RELEASE"
 echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"

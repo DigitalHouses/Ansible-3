@@ -1,0 +1,222 @@
+---
+# Shared by fresh bootstrap and existing-runner enrollment. Never run a template.
+- name: Manage dedicated DEV access
+  no_log: true
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ semaphore_ca }}"
+      validate_certs: true
+      use_proxy: false
+      headers:
+        Authorization: "Bearer {{ dev_admin_token }}"
+  block:
+    - name: Read Semaphore users
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/users"
+      register: dev_users
+
+    - name: Select dedicated user
+      ansible.builtin.set_fact:
+        dev_matches: "{{ dev_users.json | selectattr('username', 'equalto', 'dev-automation') | list }}"
+
+    - name: Inspect managed password
+      ansible.builtin.stat:
+        path: /etc/semaphore/dev-automation-password
+      register: dev_password_file
+
+    - name: Refuse unmanaged or privileged existing user
+      ansible.builtin.assert:
+        that:
+          - dev_matches | length <= 1
+          - not dev_password_file.stat.exists or (dev_password_file.stat.isreg and dev_password_file.stat.uid == 0 and dev_password_file.stat.mode == '0600')
+          - dev_matches | length == 0 or (dev_password_file.stat.exists and not dev_matches[0].admin and not (dev_matches[0].external | default(false)))
+        fail_msg: Unmanaged dev-automation user; manual review required
+
+    - name: Generate independent password when absent
+      ansible.builtin.command: openssl rand -hex 32
+      register: dev_random_password
+      changed_when: true
+      when: not dev_password_file.stat.exists
+
+    - name: Persist password before creating user for safe retry
+      ansible.builtin.copy:
+        dest: /etc/semaphore/dev-automation-password
+        content: "{{ dev_random_password.stdout }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+      when: not dev_password_file.stat.exists
+
+    - name: Protect managed password
+      ansible.builtin.file:
+        path: /etc/semaphore/dev-automation-password
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Read dedicated password
+      ansible.builtin.slurp:
+        src: /etc/semaphore/dev-automation-password
+      register: dev_password
+
+    - name: Create independent nonadmin user
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/users"
+        method: POST
+        body_format: json
+        body:
+          username: dev-automation
+          name: DEV automation
+          email: dev-automation@localhost
+          password: "{{ dev_password.content | b64decode | trim }}"
+          admin: false
+          external: false
+          alert: false
+        status_code: 201
+      when: dev_matches | length == 0
+      changed_when: true
+
+    - name: Authenticate as dedicated user
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/auth/login"
+        method: POST
+        headers: {}
+        body_format: json
+        body:
+          auth: dev-automation
+          password: "{{ dev_password.content | b64decode | trim }}"
+        status_code: [200, 204]
+      register: dev_login
+
+    - name: Identify authenticated user
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/user/"
+        headers:
+          Cookie: "{{ dev_login.cookies_string }}"
+      register: dev_identity
+
+    - name: Confirm independent nonadmin identity
+      ansible.builtin.assert:
+        that:
+          - dev_identity.json.username == 'dev-automation'
+          - not dev_identity.json.admin
+          - not (dev_identity.json.external | default(false))
+
+    - name: Read dedicated user's projects
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/projects"
+        headers:
+          Cookie: "{{ dev_login.cookies_string }}"
+      register: dev_projects
+
+    - name: Reject memberships outside this site
+      ansible.builtin.assert:
+        that:
+          - dev_projects.json | map(attribute='id') | map('int') | difference([dev_project_id | int]) | length == 0
+
+    - name: Link dedicated user only to site as owner
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ dev_project_id }}/users"
+        method: POST
+        body_format: json
+        body:
+          user_id: "{{ dev_identity.json.id }}"
+          role: owner
+        status_code: 204
+      when: dev_projects.json | length == 0
+      changed_when: true
+
+    - name: Read site role
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ dev_project_id }}/role"
+        headers:
+          Cookie: "{{ dev_login.cookies_string }}"
+      register: dev_role
+
+    - name: Require exactly site owner role
+      ansible.builtin.assert:
+        that:
+          - dev_role.json.role == 'owner'
+          - dev_role.json.roles | default(['owner']) == ['owner']
+
+    - name: Inspect locally managed API token
+      ansible.builtin.stat:
+        path: /etc/semaphore/dev-automation-token
+      register: dev_token_file
+
+    - name: Refuse unsafe existing API token
+      ansible.builtin.assert:
+        that:
+          - not dev_token_file.stat.exists or (dev_token_file.stat.isreg and dev_token_file.stat.uid == 0 and dev_token_file.stat.mode == '0600')
+
+    - name: Read managed API token when present
+      ansible.builtin.slurp:
+        src: /etc/semaphore/dev-automation-token
+      register: dev_existing_token
+      when: dev_token_file.stat.exists
+
+    - name: Create token as dedicated user, never admin
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/user/tokens"
+        method: POST
+        headers:
+          Cookie: "{{ dev_login.cookies_string }}"
+        body_format: json
+        body:
+          name: ansible-3-local-dev
+        status_code: 201
+      register: dev_new_token
+      when: not dev_token_file.stat.exists
+      changed_when: true
+
+    - name: Select API credential
+      ansible.builtin.set_fact:
+        dev_api_token: "{{ (dev_existing_token.content | b64decode | trim) if dev_token_file.stat.exists else dev_new_token.json.id }}"
+
+    - name: Verify token's identity
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/user/"
+        headers:
+          Authorization: "Bearer {{ dev_api_token }}"
+      register: dev_token_identity
+
+    - name: Require dedicated token identity
+      ansible.builtin.assert:
+        that:
+          - dev_token_identity.json.id == dev_identity.json.id
+          - not dev_token_identity.json.admin
+          - dev_api_token is match('^[A-Za-z0-9_=+/-]+$')
+
+    - name: Save root-only API secret
+      ansible.builtin.copy:
+        dest: /etc/semaphore/dev-automation-token
+        content: "{{ dev_api_token }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Save protected curl config for local DEV transfer
+      ansible.builtin.copy:
+        dest: /etc/semaphore/dev-automation.curl
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          # Site {{ site_id }}; project {{ dev_project_id }}
+          header = "Authorization: Bearer {{ dev_api_token }}"
+          header = "Content-Type: application/json"
+          cacert = "/home/dev/.config/ansible-3/{{ site_id }}.crt"
+          proto = "=https"
+          fail
+          silent
+          show-error
+          connect-timeout = 10
+          max-time = 60
+
+    - name: Close dedicated user login session
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/auth/logout"
+        method: POST
+        headers:
+          Cookie: "{{ dev_login.cookies_string }}"
+        status_code: 204

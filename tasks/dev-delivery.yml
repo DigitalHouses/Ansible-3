@@ -1,0 +1,234 @@
+---
+# Used only by task 08 and fresh bootstrap on a PVE that hosts central CT1254.
+# Never transfer catalog/admin credentials; never execute a Semaphore template.
+- name: Confirm the trusted PVE node before accessing LXC
+  ansible.builtin.command:
+    argv: [/usr/bin/hostname, -s]
+  register: dev_pve_hostname
+  changed_when: false
+
+- name: Require the expected PVE node
+  ansible.builtin.assert:
+    that: dev_pve_hostname.stdout == expected_pve_node
+    fail_msg: Task 08 is not connected to the configured Proxmox host
+
+- name: Inspect central DEV LXC state
+  ansible.builtin.command:
+    argv: [pct, status, "{{ dev_ctid }}"]
+  register: dev_lxc_status
+  changed_when: false
+
+- name: Require an already running central DEV
+  ansible.builtin.assert:
+    that: "dev_lxc_status.stdout == 'status: running'"
+    fail_msg: Central DEV CT1254 is not running; nothing was transferred
+
+- name: Read DEV LXC configuration
+  ansible.builtin.command:
+    argv: [pct, config, "{{ dev_ctid }}"]
+  register: dev_lxc_config
+  changed_when: false
+
+- name: Require expected DEV management address
+  ansible.builtin.assert:
+    that: "'ip=' ~ dev_ip_cidr in dev_lxc_config.stdout"
+    fail_msg: CT1254 does not have the expected DEV IP
+
+- name: Verify DEV guest's real IPv4
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, ip, -4, -o, addr, show, dev, eth0]
+  register: dev_real_ip
+  changed_when: false
+
+- name: Refuse an unexpected guest address
+  ansible.builtin.assert:
+    that: "'inet ' ~ dev_ip_cidr ~ ' ' in dev_real_ip.stdout"
+    fail_msg: Central DEV runtime address does not match its configuration
+
+- name: Verify DEV Linux user
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/id, -un, dev]
+  register: dev_linux_user
+  changed_when: false
+
+- name: Require the existing DEV user
+  ansible.builtin.assert:
+    that: dev_linux_user.stdout == 'dev'
+
+- name: Require the existing central DEV installation
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/test, -d, /home/dev/work/dev-infra/.git]
+  changed_when: false
+
+- name: Reject symlinks in the destination path
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/test, '!', -L, "{{ item }}"]
+  loop:
+    - /home
+    - /home/dev
+    - /home/dev/.config
+    - "{{ dev_dir }}"
+    - "{{ dev_curl_path }}"
+    - "{{ dev_cert_path }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+
+- name: Ensure protected DEV configuration directory exists
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/install, -d, -m, '0700', -o, dev, -g, dev, "{{ dev_dir }}"]
+  changed_when: false
+
+- name: Read DEV API config digest without opening the token
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/sha256sum, "{{ dev_curl_path }}"]
+  register: dev_existing_config_digest
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Read DEV TLS trust digest
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/sha256sum, "{{ dev_cert_path }}"]
+  register: dev_existing_cert_digest
+  changed_when: false
+  failed_when: false
+
+- name: Inspect DEV API config ownership and permissions
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/stat, -c, '%a:%U:%G', "{{ dev_curl_path }}"]
+  register: dev_existing_config_mode
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Inspect DEV certificate ownership and permissions
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/stat, -c, '%a:%U:%G', "{{ dev_cert_path }}"]
+  register: dev_existing_cert_mode
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether enrollment files require a refresh
+  ansible.builtin.set_fact:
+    dev_config_needs_copy: >-
+      {{ dev_existing_config_digest.rc != 0 or
+         dev_existing_config_digest.stdout.split(' ') | first !=
+         (hostvars['runner'].dev_transfer_config.content | b64decode | hash('sha256')) or
+         dev_existing_config_mode.stdout != '600:dev:dev' }}
+    dev_cert_needs_copy: >-
+      {{ dev_existing_cert_digest.rc != 0 or
+         dev_existing_cert_digest.stdout.split(' ') | first !=
+         (hostvars['runner'].dev_transfer_cert.content | b64decode | hash('sha256')) or
+         dev_existing_cert_mode.stdout != '600:dev:dev' }}
+  no_log: true
+
+- name: Transfer only changed site access files through protected PVE staging
+  when: dev_config_needs_copy | bool or dev_cert_needs_copy | bool
+  block:
+    - name: Allocate root-only temporary staging directory on PVE
+      ansible.builtin.tempfile:
+        state: directory
+        path: /run
+        prefix: ansible-3-dev-
+      register: dev_stage
+      no_log: true
+
+    - name: Stage dedicated DEV token config (never the admin token)
+      ansible.builtin.copy:
+        dest: "{{ dev_stage.path }}/access.curl"
+        content: "{{ hostvars['runner'].dev_transfer_config.content | b64decode }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when: dev_config_needs_copy | bool
+      no_log: true
+
+    - name: Stage public Semaphore TLS certificate
+      ansible.builtin.copy:
+        dest: "{{ dev_stage.path }}/semaphore.crt"
+        content: "{{ hostvars['runner'].dev_transfer_cert.content | b64decode }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when: dev_cert_needs_copy | bool
+
+    - name: Install public TLS certificate into DEV
+      ansible.builtin.command:
+        argv: [pct, push, "{{ dev_ctid }}", "{{ dev_stage.path }}/semaphore.crt", "{{ dev_cert_path }}", --user, dev, --group, dev, --perms, '0600']
+      when: dev_cert_needs_copy | bool
+      changed_when: true
+
+    - name: Install dedicated DEV API config into DEV
+      ansible.builtin.command:
+        argv: [pct, push, "{{ dev_ctid }}", "{{ dev_stage.path }}/access.curl", "{{ dev_curl_path }}", --user, dev, --group, dev, --perms, '0600']
+      when: dev_config_needs_copy | bool
+      changed_when: true
+      no_log: true
+  always:
+    - name: Remove protected temporary staging files from PVE
+      ansible.builtin.file:
+        path: "{{ dev_stage.path }}"
+        state: absent
+      when: dev_stage is defined and dev_stage.path is defined
+      no_log: true
+
+- name: Verify dedicated DEV authentication through native HTTPS API
+  ansible.builtin.command:
+    argv:
+      - pct
+      - exec
+      - "{{ dev_ctid }}"
+      - --
+      - runuser
+      - -u
+      - dev
+      - --
+      - /usr/bin/curl
+      - -q
+      - --config
+      - "{{ dev_curl_path }}"
+      - "{{ dev_api_url }}/user/"
+  register: dev_api_identity
+  changed_when: false
+  no_log: true
+
+- name: Require the expected nonadmin DEV identity
+  ansible.builtin.assert:
+    that:
+      - (dev_api_identity.stdout | from_json).username == 'dev-automation'
+      - not (dev_api_identity.stdout | from_json).admin
+    fail_msg: Central DEV does not authenticate as the dedicated nonadmin user
+  no_log: true
+
+- name: Verify project-scoped access from DEV
+  ansible.builtin.command:
+    argv:
+      - pct
+      - exec
+      - "{{ dev_ctid }}"
+      - --
+      - runuser
+      - -u
+      - dev
+      - --
+      - /usr/bin/curl
+      - -q
+      - --config
+      - "{{ dev_curl_path }}"
+      - "{{ dev_api_url }}/projects"
+  register: dev_projects_readback
+  changed_when: false
+  no_log: true
+
+- name: Require only the expected site project
+  ansible.builtin.assert:
+    that:
+      - (dev_projects_readback.stdout | from_json) | length == 1
+      - (dev_projects_readback.stdout | from_json)[0].name == dev_site_id
+    fail_msg: Central DEV does not have exactly one site project
+  no_log: true
+
+- name: Report successful site enrollment (no secret output)
+  ansible.builtin.debug:
+    msg: "DEV_ACCESS=PASS site={{ dev_site_id }} dev=CT{{ dev_ctid }} endpoint={{ dev_api_url }} user=dev-automation"

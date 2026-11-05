@@ -490,6 +490,12 @@
         mode: '0640'
       no_log: true
 
+    - name: Enroll dedicated DEV API access
+      ansible.builtin.import_tasks: tasks/dev-access.yml
+      vars:
+        dev_admin_token: "{{ sem_catalog_token.json.id }}"
+        dev_project_id: "{{ sem_project.json.id }}"
+
     - name: Read the initial task templates
       ansible.builtin.uri:
         url: "{{ semaphore_api }}/project/{{ sem_project.json.id }}/templates"

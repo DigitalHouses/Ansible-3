@@ -17,6 +17,9 @@ tasks:
       - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+  - name: "08-Настроить доступ DEV к Semaphore"
+    playbook: playbooks/configure-dev-semaphore.yml
+    description: "Повторяемое подключение DEV через отдельный Semaphore API-токен"
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
     description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, безопасная миграция IP"
