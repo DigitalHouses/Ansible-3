@@ -74,7 +74,7 @@ tasks:
         values:
           - {name: "Не менять Cloudflare", value: skip}
           - {name: "Проверить туннель и Access", value: audit}
-          - {name: "Обновить PVE origin на текущий IP", value: apply}
+          - {name: "Обновить PVE и опубликовать File Browser", value: apply}
       - name: DH_PVE_QUANTUM
         title: "FileBrowser Quantum"
         type: enum
