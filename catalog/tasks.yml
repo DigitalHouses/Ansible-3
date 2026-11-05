@@ -24,6 +24,19 @@ tasks:
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
     description: "Повторяемое подключение DEV через отдельный Semaphore API-токен"
+  - name: "40-Cloudflare: PVE"
+    playbook: playbooks/cloudflare-pve.yml
+    description: "Проверить или обновить origin уже существующего Cloudflare Tunnel для PVE"
+    survey_vars:
+      - name: DH_CF_PVE_MODE
+        title: "Cloudflare PVE — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Аудит — без изменений", value: audit}
+          - {name: "Обновить origin на текущий IP PVE", value: apply}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
     description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, безопасная миграция IP"
