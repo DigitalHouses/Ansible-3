@@ -33,7 +33,7 @@ pct exec 1254 -- test -d /home/dev/work/dev-infra/.git
 
 # Existing Runner is pinned to an older Git commit. Stage only two approved
 # Ansible files; never update /opt/ansible-3 or execute guest code as PVE root.
-TMP=$(mktemp -d /tmp/ansible-3-dev.XXXXXXXX)
+TMP=$(mktemp -d /run/ansible-3-dev.XXXXXXXX)
 trap 'rm -f -- "$TMP/enroll-dev.yml" "$TMP/dev-access.yml" "$TMP/access.curl" "$TMP/semaphore.crt"; rmdir -- "$TMP"' EXIT
 REPO=https://raw.githubusercontent.com/DigitalHouses/Ansible-3
 curl --fail --silent --show-error --location --proto '=https' \
