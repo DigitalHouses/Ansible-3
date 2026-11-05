@@ -218,21 +218,82 @@
     fail_msg: "Cloudflare readback differs from approved Quantum-only addition"
   when: requested_mode == 'apply'
 
-- name: Check that the public Quantum address requires Cloudflare Access login
+- name: Confirm the public Quantum DNS record exists after provisioning
   ansible.builtin.uri:
-    url: "https://{{ quantum_public_hostname }}/"
-    method: GET
-    validate_certs: true
-    follow_redirects: none
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ quantum_public_hostname }}&per_page=100"
+    headers: "{{ cf_headers }}"
     use_proxy: false
-    status_code: 302
-    timeout: 12
+    status_code: 200
+    timeout: 20
+  register: quantum_dns_readback
+  changed_when: false
+  no_log: true
+  when: requested_mode == 'apply'
+
+- name: Require the final Quantum record to point only at the owned tunnel
+  ansible.builtin.assert:
+    that:
+      - quantum_dns_readback.json.success | bool
+      - quantum_dns_readback.json.result | length == 1
+      - quantum_dns_readback.json.result[0].type == 'CNAME'
+      - quantum_dns_readback.json.result[0].proxied | bool
+      - >-
+        quantum_dns_readback.json.result[0].content | lower ==
+        ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower)
+    fail_msg: "Quantum DNS readback did not confirm the expected Cloudflare Tunnel"
+  when: requested_mode == 'apply'
+
+# The site's router may cache NXDOMAIN for the just-created hostname.
+# Use the existing PVE's already-working Cloudflare edge IP with curl --resolve:
+# URL, Host, SNI and certificate verification still use the Quantum hostname.
+# This avoids a false first-install failure without disabling any security.
+- name: Resolve the existing PVE Cloudflare edge without hardcoded IPs
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - ahostsv4
+      - "{{ public_hostname }}"
+  register: cf_existing_edge
+  changed_when: false
+  when: requested_mode == 'apply'
+
+- name: Derive the Cloudflare edge address from the working PVE hostname
+  ansible.builtin.set_fact:
+    cf_edge_ipv4: >-
+      {{ cf_existing_edge.stdout_lines[0].split()[0] }}
+  when: requested_mode == 'apply'
+
+- name: Require a valid Cloudflare IPv4 address for TLS public entrypoint test
+  ansible.builtin.assert:
+    that: cf_edge_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+    fail_msg: "Cannot resolve the existing PVE Cloudflare edge"
+  when: requested_mode == 'apply'
+
+- name: Verify public Quantum Access login through Cloudflare with strict TLS
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/curl
+      - --silent
+      - --show-error
+      - --noproxy
+      - '*'
+      - --connect-timeout
+      - '5'
+      - --max-time
+      - '15'
+      - --resolve
+      - "{{ quantum_public_hostname }}:443:{{ cf_edge_ipv4 }}"
+      - --output
+      - /dev/null
+      - --write-out
+      - '%{http_code} %{redirect_url}'
+      - "https://{{ quantum_public_hostname }}/"
   register: quantum_access_challenge
   changed_when: false
   until: >-
-    quantum_access_challenge.status | default(0) == 302 and
-    (quantum_access_challenge.location | default('')) is
-    match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
+    quantum_access_challenge.rc == 0 and
+    quantum_access_challenge.stdout is
+    match('^302 https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
   retries: 6
   delay: 3
   no_log: true
@@ -243,4 +304,5 @@
     msg:
       - "QUANTUM_PUBLIC=READY https://{{ quantum_public_hostname }}/"
       - "QUANTUM_ACCESS=RESTRICTED; LOCAL_ORIGIN=127.0.0.1:8090"
+      - "QUANTUM_DNS=PROXIED; CLOUDFLARE_TLS=VERIFIED"
   when: requested_mode == 'apply'

@@ -159,7 +159,7 @@ HAOS/Mosquitto deployment, NUT shutdown commissioning —
 Управление выделенным туннелем `<site_id>-pve` включено в №10, отдельной
 задачи для PVE Cloudflare больше нет. В Survey `DH_PVE_CF_ACTION`:
 
-- `skip` (по умолчанию) — ничего не читать/не менять в Cloudflare, предыдущие
+- `skip` (по явному выбору) — ничего не читать/не менять в Cloudflare, предыдущие
   сценарии настройки PVE остаются прежними.
 - `audit` — read-only проверка существующих dedicated Tunnel, DNS CNAME,
   Access challenge и HTTPS origin с закреплённым PVE CA.
@@ -211,3 +211,9 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
 такой запуск не следует выдавать за полностью введённый в эксплуатацию Quantum.
 Первоначальное создание **самого PVE Tunnel** для нового объекта ещё не
 покрыто этим сценарием и требует отдельного расширения №10.
+
+**DNS при первом запуске:** после создания proxied CNAME домашний роутер
+может временно кэшировать NXDOMAIN. Ansible проверяет Cloudflare DNS
+readback и внешний Access через уже доступный Cloudflare edge PVE, используя
+`curl --resolve`, но без `-k`, изменения SNI или отключения TLS-проверок.
+Локальный DNS клиента получит новый адрес после истечения отрицательного TTL.
