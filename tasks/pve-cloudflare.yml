@@ -36,25 +36,6 @@
       - (pve_origin_check.stdout | from_json).data is sequence
     fail_msg: "PVE origin did not return its expected unauthenticated API structure"
 
-- name: Require pre-existing Cloudflare Access challenge on this public name
-  ansible.builtin.uri:
-    url: "https://{{ public_hostname }}/"
-    method: GET
-    use_proxy: false
-    follow_redirects: none
-    validate_certs: true
-    status_code: 302
-    timeout: 20
-  register: cf_access_before
-  changed_when: false
-  no_log: true
-
-- name: Refuse a publicly exposed or unprotected PVE hostname
-  ansible.builtin.assert:
-    that:
-      - (cf_access_before.location | default('')) is match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
-    fail_msg: "Cloudflare Access login is not protecting the existing PVE hostname"
-
 - name: Read canonical Cloudflare DNS zone
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones?name={{ cf_zone_name }}&per_page=50"
@@ -145,18 +126,43 @@
   ansible.builtin.set_fact:
     current_cf_config: "{{ current_tunnel_configuration.json.result.config }}"
 
+- name: Require pre-existing Cloudflare Access challenge on this public name
+  ansible.builtin.uri:
+    url: "https://{{ current_cf_config.ingress[0].hostname }}/"
+    method: GET
+    use_proxy: false
+    follow_redirects: none
+    validate_certs: true
+    status_code: 302
+    timeout: 20
+  register: cf_access_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse a publicly exposed or unprotected PVE hostname
+  ansible.builtin.assert:
+    that:
+      - (cf_access_before.location | default('')) is match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
+    fail_msg: "Cloudflare Access login is not protecting the existing PVE hostname"
+
+- name: Migrate existing prefixed PVE and Quantum hostnames under strict Access
+  ansible.builtin.include_tasks: pve-cloudflare-hostname-cutover.yml
+
 - name: Refuse foreign ingress, changed TLS trust or missing fallback
   ansible.builtin.assert:
     that:
       - current_tunnel_configuration.json.success | bool
       - current_cf_config.ingress | length in [2, 3]
-      - current_cf_config.ingress[0].hostname == public_hostname
+      - current_cf_config.ingress[0].hostname in [public_hostname, 'dh-' ~ site_id ~ '-pve.' ~ cf_zone_name]
       - current_cf_config.ingress[0].service is match('^https://[0-9.]+:8006$')
       - current_cf_config.ingress[0].originRequest.caPool == expected_ca_pool
       - current_cf_config.ingress[0].originRequest.noTLSVerify is sameas false
       - current_cf_config.ingress[-1].service == 'http_status:404'
       - current_cf_config.ingress[-1].hostname is not defined
-      - current_cf_config.ingress | length != 3 or current_cf_config.ingress[1].hostname == quantum_public_hostname
+      - >-
+        current_cf_config.ingress | length != 3 or
+        current_cf_config.ingress[1].hostname in [quantum_public_hostname,
+        'dh-' ~ site_id ~ '-pve-filebrowser.' ~ cf_zone_name]
       - >-
         current_cf_config.ingress | length != 3 or
         current_cf_config.ingress[1].service in ['http://127.0.0.1:8090',
@@ -165,7 +171,7 @@
 
 - name: Ensure DNS still routes public name to this dedicated tunnel
   ansible.builtin.uri:
-    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?type=CNAME&name={{ public_hostname }}&per_page=50"
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?type=CNAME&name={{ current_cf_config.ingress[0].hostname }}&per_page=50"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
@@ -187,7 +193,8 @@
   ansible.builtin.debug:
     msg:
       - "TUNNEL={{ pve_tunnel_name }}"
-      - "PUBLIC_HOST={{ public_hostname }}"
+      - "PUBLIC_HOST={{ current_cf_config.ingress[0].hostname }}"
+      - "DESIRED_HOST={{ public_hostname }}"
       - "MODE={{ requested_mode }}"
       - "ORIGIN_CURRENT={{ current_cf_config.ingress[0].service }}"
       - "ORIGIN_DESIRED={{ desired_origin }}"
@@ -251,14 +258,18 @@
   register: cf_access_after
   changed_when: false
   no_log: true
-  when: requested_mode == 'apply'
+  when:
+    - requested_mode == 'apply'
+    - cloudflare_hostname_state == 'new'
 
 - name: Confirm Access is still protecting this PVE hostname
   ansible.builtin.assert:
     that:
       - (cf_access_after.location | default('')) is match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
     fail_msg: "Cloudflare Access challenge missing after origin update"
-  when: requested_mode == 'apply'
+  when:
+    - requested_mode == 'apply'
+    - cloudflare_hostname_state == 'new'
 
 - name: Report safe completion
   ansible.builtin.debug:
