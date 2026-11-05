@@ -405,3 +405,8 @@
         name: jellyfin.service
         daemon_reload: true
         state: restarted
+
+    - name: Apply vetted Sambee LAN binding
+      ansible.builtin.command:
+        argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, up, -d]
+      changed_when: true

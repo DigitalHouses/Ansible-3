@@ -11,6 +11,9 @@
     media_arr: {slug: radarr, name: Radarr, port: 7878}
     media_arr_new_api_key:
       stdout: abcdef1234567890abcdef1234567890abcdef12
+    media_filestash_secret:
+      stdout: abcdef1234567890
+    media_sambee_bind: 127.0.0.1
     media_spec:
       name: mediaserver-serzhan
       vmid: 2232
@@ -58,8 +61,18 @@
             - {name: media-arr.service.j2, slug: radarr, port: 7878}
             - {name: media-qbittorrent-firstboot.conf.j2, slug: qbittorrent, port: 8080}
             - {name: media-qbittorrent.service.j2, slug: qbittorrent, port: 8080}
+            - {name: media-filestash-firstboot.json.j2, slug: filestash, port: 8334}
+            - {name: media-filestash.service.j2, slug: filestash, port: 8334}
+            - {name: media-sambee-compose.yml.j2, slug: sambee, port: 8000}
+            - {name: media-sambee-config.toml.j2, slug: sambee, port: 8000}
             - {name: media-portal.html.j2, slug: portal, port: 80}
             - {name: media-smb.conf.j2, slug: samba, port: 445}
+
+        - name: Inspect rendered native Filestash firstboot JSON
+          ansible.builtin.set_fact:
+            media_filestash_fixture: >-
+              {{ lookup('ansible.builtin.file',
+                 media_test_dir.path ~ '/media-filestash-firstboot.json.j2') | from_json }}
 
         - name: Require loopback-only firstboot and expected media links
           ansible.builtin.assert:
@@ -70,6 +83,21 @@
               - "'[DigitalHouses]' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-smb.conf.j2')"
               - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - "'127.0.0.1:8000:8000' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-compose.yml.j2')"
+              - "'username = \"serzhan\"' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-config.toml.j2')"
+              - media_filestash_fixture.general.secret_key == 'abcdef1234567890'
+              - >-
+                media_filestash_fixture.connections
+                == [{'label': 'DigitalHouses SMB', 'type': 'samba'}]
+              - >-
+                (media_filestash_fixture.middleware.identity_provider.params | from_json)
+                == {'strategy': 'username_and_password'}
+              - >-
+                (media_filestash_fixture.middleware.attribute_mapping.params | from_json)
+                ['DigitalHouses SMB'].host == '127.0.0.1'
+              - >-
+                (media_filestash_fixture.middleware.attribute_mapping.params | from_json)
+                ['DigitalHouses SMB'].username == '{' ~ '{ .user }}'
       always:
         - name: Remove disposable test files
           ansible.builtin.file:

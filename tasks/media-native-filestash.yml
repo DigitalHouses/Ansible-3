@@ -1,0 +1,268 @@
+---
+# Filestash 8334. Shared client login is delegated to native SMB.
+# On first boot both admin password and backend are declared before startup.
+- name: Install Filestash bcrypt utility
+  ansible.builtin.apt:
+    name: apache2-utils
+    state: present
+
+- name: Create native Filestash service identity
+  ansible.builtin.user:
+    name: filestash
+    system: true
+    home: /var/lib/filestash
+    create_home: true
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Create root-owned Filestash executable location
+  ansible.builtin.file:
+    path: /opt/dh-filestash
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create persistent Filestash state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: filestash
+    group: filestash
+    mode: '0750'
+  loop:
+    - /opt/dh-filestash/data
+    - /opt/dh-filestash/data/state
+    - /opt/dh-filestash/data/state/config
+    - /opt/dh-filestash/data/state/log
+    - /opt/dh-filestash/data/state/db
+    - /opt/dh-filestash/data/state/certs
+    - /opt/dh-filestash/data/state/plugins
+    - /opt/dh-filestash/data/state/search
+
+- name: Prepare root-only local Filestash environment folder
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Inspect Filestash admin password file before commissioning
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/filestash.env
+    follow: false
+  register: media_filestash_env_stat
+
+- name: Protect preexisting Filestash administrator secret
+  ansible.builtin.assert:
+    that:
+      - not media_filestash_env_stat.stat.exists or media_filestash_env_stat.stat.isreg
+      - not (media_filestash_env_stat.stat.islnk | default(false))
+      - not media_filestash_env_stat.stat.exists or media_filestash_env_stat.stat.pw_name == 'root'
+      - not media_filestash_env_stat.stat.exists or media_filestash_env_stat.stat.mode == '0600'
+    fail_msg: MEDIA80_FILESTASH_ADMIN_ENV_UNSAFE
+  no_log: true
+
+- name: Generate native bcrypt hash for first Filestash admin login
+  ansible.builtin.command:
+    argv: [htpasswd, -niB, -C, '12', '']
+    stdin: "{{ media_owner_password }}\n"
+  register: media_filestash_new_bcrypt
+  changed_when: false
+  when: not media_filestash_env_stat.stat.exists
+  no_log: true
+
+- name: Require valid firstboot Filestash bcrypt hash
+  ansible.builtin.assert:
+    that:
+      - media_filestash_new_bcrypt.stdout is match('^:[$]2[aby][$][0-9]{2}[$][./A-Za-z0-9]{53}$')
+    fail_msg: MEDIA80_FILESTASH_BCRYPT_FAILED
+  when: not media_filestash_env_stat.stat.exists
+  no_log: true
+
+- name: Preserve shared-owner Filestash admin hash only on firstboot
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/filestash.env
+    content: "ADMIN_PASSWORD={{ media_filestash_new_bcrypt.stdout.split(':', 1)[1] }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  register: media_filestash_env_created
+  when: not media_filestash_env_stat.stat.exists
+  no_log: true
+
+- name: Read effective Filestash administrator hash without logging it
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/filestash.env
+  register: media_filestash_admin_env
+  no_log: true
+
+- name: Reject an empty or incompatible existing Filestash admin hash
+  ansible.builtin.assert:
+    that:
+      - (media_filestash_admin_env.content | b64decode | trim) is match('^ADMIN_PASSWORD=[$]2[aby][$][0-9]{2}[$][./A-Za-z0-9]{53}$')
+    fail_msg: MEDIA80_FILESTASH_ADMIN_ENV_INVALID
+  no_log: true
+
+- name: Inspect native Filestash stored configuration
+  ansible.builtin.stat:
+    path: /opt/dh-filestash/data/state/config/config.json
+    follow: false
+  register: media_filestash_config_stat
+
+- name: Refuse foreign Filestash state-file ownership
+  ansible.builtin.assert:
+    that:
+      - not media_filestash_config_stat.stat.exists or media_filestash_config_stat.stat.isreg
+      - not (media_filestash_config_stat.stat.islnk | default(false))
+      - not media_filestash_config_stat.stat.exists or media_filestash_config_stat.stat.pw_name == 'filestash'
+    fail_msg: MEDIA80_FILESTASH_CONFIG_UNSAFE
+
+- name: Generate native Filestash secret key for a firstboot instance
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '8']
+  register: media_filestash_secret
+  changed_when: false
+  when: not media_filestash_config_stat.stat.exists
+  no_log: true
+
+- name: Seed passthrough-to-SMB before Filestash first startup
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-filestash-firstboot.json.j2"
+    dest: /opt/dh-filestash/data/state/config/config.json
+    owner: filestash
+    group: filestash
+    mode: '0600'
+    force: false
+  register: media_filestash_config_created
+  when: not media_filestash_config_stat.stat.exists
+  no_log: true
+
+- name: Read Filestash existing connections without modifying them
+  ansible.builtin.slurp:
+    src: /opt/dh-filestash/data/state/config/config.json
+  register: media_filestash_config_raw
+  no_log: true
+
+- name: Refuse reconfiguring a foreign Filestash storage backend
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_filestash_config_raw.content | b64decode | from_json).connections
+        == [{'label': 'DigitalHouses SMB', 'type': 'samba'}]
+    fail_msg: MEDIA80_FILESTASH_FOREIGN_BACKEND
+  no_log: true
+
+- name: Download native upstream Filestash executable if missing
+  ansible.builtin.get_url:
+    url: https://downloads.filestash.app/latest/filestash_linux_x86_64.bin
+    dest: /opt/dh-filestash/filestash
+    owner: root
+    group: root
+    mode: '0755'
+    timeout: 180
+    force: false
+  register: media_filestash_binary
+
+- name: Install native Filestash systemd service
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-filestash.service.j2"
+    dest: /etc/systemd/system/filestash.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_filestash_unit
+
+- name: Start Filestash with protected admin password already in place
+  ansible.builtin.systemd_service:
+    name: filestash.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted' if media_filestash_binary.changed
+         or media_filestash_unit.changed
+         or media_filestash_env_created.changed | default(false)
+         else 'started' }}
+
+- name: Authenticate Filestash configuration administrator through native API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8334/admin/api/session
+    method: POST
+    body_format: json
+    body:
+      password: "{{ media_owner_password }}"
+    headers:
+      Accept: application/json
+      X-Requested-With: XmlHttpRequest
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_filestash_admin_login
+  retries: 20
+  delay: 3
+  until: >-
+    media_filestash_admin_login.status == 200 and
+    media_filestash_admin_login.json.status | default('') == 'ok'
+  changed_when: false
+  no_log: true
+
+- name: Require genuine Filestash admin access token
+  ansible.builtin.assert:
+    that:
+      - media_filestash_admin_login.json.result.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_FILESTASH_ADMIN_LOGIN_FAILED
+  no_log: true
+
+- name: Read effective decrypted Filestash middleware from admin API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8334/admin/api/config
+    headers:
+      Accept: application/json
+      X-Requested-With: XmlHttpRequest
+      Authorization: "Bearer {{ media_filestash_admin_login.json.result.access_token }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_filestash_admin_config
+  changed_when: false
+  no_log: true
+
+- name: Require actual native SMB username/password passthrough
+  ansible.builtin.assert:
+    that:
+      - media_filestash_admin_config.json.result.middleware.identity_provider.type.value == 'passthrough'
+      - >-
+        (media_filestash_admin_config.json.result.middleware.identity_provider.params.value
+         | from_json) == {'strategy': 'username_and_password'}
+      - media_filestash_admin_config.json.result.middleware.attribute_mapping.related_backend.value == 'DigitalHouses SMB'
+      - >-
+        (media_filestash_admin_config.json.result.middleware.attribute_mapping.params.value
+         | from_json) == {'DigitalHouses SMB': {
+           'type': 'samba', 'host': '127.0.0.1',
+           'username': '{' ~ '{ .user }}',
+           'password': '{' ~ '{ .password }}'
+         }}
+    fail_msg: MEDIA80_FILESTASH_SMB_PASSTHROUGH_DRIFT
+  no_log: true
+
+- name: Check actual Filestash SMB username/password entrypoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8334/api/session/auth/?action=redirect&label=DigitalHouses%20SMB
+    follow_redirects: none
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_filestash_smb_form
+  retries: 5
+  delay: 2
+  until: media_filestash_smb_form.status == 200
+  changed_when: false
+
+- name: Refuse Filestash login without a working SMB password form
+  ansible.builtin.assert:
+    that:
+      - "'name=\"user\"' in media_filestash_smb_form.content"
+      - "'name=\"password\"' in media_filestash_smb_form.content"
+    fail_msg: MEDIA80_FILESTASH_SMB_LOGIN_BROKEN

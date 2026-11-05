@@ -1,0 +1,24 @@
+{# Ansible template creates a new Filestash config only if absent.
+   No new custom generator. Raw Go-template values are escaped as plain text. #}
+{% set go_user = '{' ~ '{ .user }}' %}
+{% set go_password = '{' ~ '{ .password }}' %}
+{% set target = {
+  'general': {'secret_key': media_filestash_secret.stdout},
+  'connections': [{'label': 'DigitalHouses SMB', 'type': 'samba'}],
+  'middleware': {
+    'identity_provider': {
+      'type': 'passthrough',
+      'params': {'strategy': 'username_and_password'} | to_json
+    },
+    'attribute_mapping': {
+      'related_backend': 'DigitalHouses SMB',
+      'params': {'DigitalHouses SMB': {
+        'type': 'samba',
+        'host': '127.0.0.1',
+        'username': go_user,
+        'password': go_password
+      }} | to_json
+    }
+  }
+} %}
+{{ target | to_nice_json }}

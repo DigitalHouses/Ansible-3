@@ -1,0 +1,305 @@
+---
+# Sambee: official Docker Compose + native authentication/password API.
+# Never rewrite SQLite or expose an unclaimed firstboot listener to the LAN.
+- name: Inspect existing Sambee compose definition
+  ansible.builtin.stat:
+    path: /opt/dh-sambee/docker-compose.yml
+    follow: false
+  register: media_sambee_compose_stat
+
+- name: Inspect persisted Sambee state before creating any directories
+  ansible.builtin.stat:
+    path: /opt/dh-sambee/data
+    follow: false
+  register: media_sambee_data_stat
+
+- name: Block unmanaged Sambee state lacking its original compose definition
+  ansible.builtin.assert:
+    that:
+      - media_sambee_compose_stat.stat.exists or not media_sambee_data_stat.stat.exists
+      - not media_sambee_compose_stat.stat.exists or media_sambee_data_stat.stat.isdir | default(false)
+      - not (media_sambee_compose_stat.stat.islnk | default(false))
+      - not (media_sambee_data_stat.stat.islnk | default(false))
+    fail_msg: MEDIA80_SAMBEE_FOREIGN_OR_UNMANAGED_STATE
+
+- name: Install native Docker Engine and Debian Compose v2 plugin
+  ansible.builtin.apt:
+    name: [docker.io, docker-compose]
+    state: present
+
+- name: Start native Docker Engine for Sambee
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: started
+
+- name: Prepare dedicated Sambee deployment directory
+  ansible.builtin.file:
+    path: /opt/dh-sambee
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create Sambee persistent container data directory
+  ansible.builtin.file:
+    path: /opt/dh-sambee/data
+    state: directory
+    owner: '1000'
+    group: '1000'
+    mode: '0750'
+
+- name: Write initial Sambee owner name, without any password
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-sambee-config.toml.j2"
+    dest: /opt/dh-sambee/config.toml
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+
+- name: Read existing Compose port binding before service startup
+  ansible.builtin.slurp:
+    src: /opt/dh-sambee/docker-compose.yml
+  register: media_sambee_existing_compose
+  when: media_sambee_compose_stat.stat.exists
+  no_log: true
+
+- name: Reject unknown or foreign existing Sambee container definition
+  ansible.builtin.assert:
+    that:
+      - >-
+        not media_sambee_compose_stat.stat.exists
+        or 'ghcr.io/helgeklein/sambee:stable'
+        in (media_sambee_existing_compose.content | b64decode)
+      - >-
+        not media_sambee_compose_stat.stat.exists
+        or './data:/app/data'
+        in (media_sambee_existing_compose.content | b64decode)
+      - >-
+        not media_sambee_compose_stat.stat.exists
+        or '8000:8000'
+        in (media_sambee_existing_compose.content | b64decode)
+    fail_msg: MEDIA80_SAMBEE_EXISTING_COMPOSE_FOREIGN
+
+- name: Seed firstboot Sambee with a loopback-only listener
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-sambee-compose.yml.j2"
+    dest: /opt/dh-sambee/docker-compose.yml
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  vars:
+    media_sambee_bind: 127.0.0.1
+  when: not media_sambee_compose_stat.stat.exists
+
+- name: Read actual Compose configuration after firstboot staging
+  ansible.builtin.slurp:
+    src: /opt/dh-sambee/docker-compose.yml
+  register: media_sambee_effective_compose
+
+- name: Define whether this instance is safe for bootstrap password rotation
+  ansible.builtin.set_fact:
+    media_sambee_loopback_staged: >-
+      {{ '127.0.0.1:8000:8000' in
+         (media_sambee_effective_compose.content | b64decode) }}
+
+- name: Refuse restarting a LAN-exposed Sambee without preexisting owner login
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_sambee_existing_lan_login
+  when: not media_sambee_loopback_staged | bool
+  changed_when: false
+  no_log: true
+
+- name: Require a real owner token before touching existing LAN Sambee
+  ansible.builtin.assert:
+    that: media_sambee_existing_lan_login.json.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_SAMBEE_EXISTING_OWNER_NOT_VERIFIED
+  when: not media_sambee_loopback_staged | bool
+  no_log: true
+
+- name: Check syntax of effective upstream Compose definition
+  ansible.builtin.command:
+    argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, config, --quiet]
+  changed_when: false
+
+- name: Start the declared Sambee container
+  ansible.builtin.command:
+    argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, up, -d]
+  register: media_sambee_compose_up
+  changed_when: >-
+    'Started' in media_sambee_compose_up.stderr or
+    'Created' in media_sambee_compose_up.stderr or
+    'Recreated' in media_sambee_compose_up.stderr
+
+- name: Wait for Sambee API listener on the guest loopback
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8000
+    timeout: 150
+
+- name: Test existing Sambee owner login before changing any credentials
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    status_code: [200, 401]
+    return_content: true
+    use_proxy: false
+  register: media_sambee_owner_initial_login
+  retries: 8
+  delay: 3
+  until: media_sambee_owner_initial_login.status in [200, 401]
+  changed_when: false
+  no_log: true
+
+- name: Refuse password reset of a preexisting LAN-exposed Sambee
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_sambee_owner_initial_login.status == 200
+        or media_sambee_loopback_staged | bool
+    fail_msg: MEDIA80_SAMBEE_FOREIGN_OWNER_CREDENTIALS
+  no_log: true
+
+- name: Read initial Sambee credentials only from protected container logs
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - /opt/dh-sambee/docker-compose.yml
+      - logs
+      - --no-color
+      - --tail
+      - '300'
+      - sambee
+  register: media_sambee_initial_logs
+  changed_when: false
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Parse a single upstream firstboot credential block in Ansible memory
+  ansible.builtin.set_fact:
+    media_sambee_first_user: >-
+      {{ (media_sambee_initial_logs.stdout | regex_findall('Username:\\s*([A-Za-z0-9_]+)')) }}
+    media_sambee_first_passwords: >-
+      {{ (media_sambee_initial_logs.stdout | regex_findall('Password:\\s*(\\S+)')) }}
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Require unique vendor-generated firstboot credentials for this owner
+  ansible.builtin.assert:
+    that:
+      - media_sambee_first_user | length == 1
+      - media_sambee_first_passwords | length == 1
+      - media_sambee_first_user[0] == media_site.owner_slug
+      - media_sambee_first_passwords[0] | length > 0
+    fail_msg: MEDIA80_SAMBEE_FIRSTBOOT_CREDENTIALS_UNAVAILABLE
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Authenticate actual firstboot Sambee owner through the native API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_sambee_first_passwords[0] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_sambee_first_login
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Require a valid native Sambee firstboot token
+  ansible.builtin.assert:
+    that:
+      - media_sambee_first_login.json.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_SAMBEE_FIRSTBOOT_TOKEN_NOT_VERIFIED
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Replace firstboot password once using Sambee change-password API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/change-password
+    method: POST
+    headers:
+      Authorization: "Bearer {{ media_sambee_first_login.json.access_token }}"
+    body_format: json
+    body:
+      current_password: "{{ media_sambee_first_passwords[0] }}"
+      new_password: "{{ media_owner_password }}"
+    status_code: [200, 204]
+    use_proxy: false
+  when: media_sambee_owner_initial_login.status != 200
+  no_log: true
+
+- name: Prove native Sambee login works with the shared owner password
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_sambee_owner_final_login
+  retries: 10
+  delay: 2
+  until: >-
+    media_sambee_owner_final_login.status == 200 and
+    media_sambee_owner_final_login.json.access_token | default('') | length >= 16
+  changed_when: false
+  no_log: true
+
+- name: Enable Sambee LAN listener only after real owner authentication
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-sambee-compose.yml.j2"
+    dest: /opt/dh-sambee/docker-compose.yml
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    media_sambee_bind: 0.0.0.0
+  notify: Apply vetted Sambee LAN binding
+  when: media_sambee_loopback_staged | bool
+
+- name: Apply vetted Sambee LAN binding before acceptance
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify Sambee UI responds after owner commissioning
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/
+    status_code: [200, 302, 307, 401]
+    return_content: false
+    use_proxy: false
+  register: media_sambee_http
+  retries: 15
+  delay: 3
+  until: media_sambee_http.status in [200, 302, 307, 401]
+  changed_when: false
+
+- name: Refuse Sambee without a verified shared owner login
+  ansible.builtin.assert:
+    that:
+      - media_sambee_owner_final_login.json.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_SAMBEE_OWNER_NOT_VERIFIED
+  no_log: true

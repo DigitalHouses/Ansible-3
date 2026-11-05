@@ -77,11 +77,19 @@
   ansible.builtin.include_tasks: media-native-jellyfin.yml
   when: media_spec.applications.jellyfin | bool
 
-# Ansible-only Filestash/Sambee/Plex-agent lifecycle and full integrations
-# remain unresolved. Fail closed even if the top-level apply gate is removed.
+- name: Install Filestash with native SMB passthrough authentication
+  ansible.builtin.include_tasks: media-native-filestash.yml
+  when: media_spec.applications.filestash | bool
+
+- name: Install Sambee with upstream owner API and a closed firstboot listener
+  ansible.builtin.include_tasks: media-native-sambee.yml
+  when: media_spec.applications.sambee | bool
+
+# Plex Agent, media library commissioning and integrations remain unresolved.
+# Fail closed even if the top-level apply gate is removed.
 - name: Refuse incomplete media applications and integration acceptance
   ansible.builtin.fail:
     msg: >-
-      MEDIA80_APPLICATIONS_NOT_COMPLETE: Filestash, Sambee,
-      Plex Agent, Plex library provisioning and Arr integration
+      MEDIA80_APPLICATIONS_NOT_COMPLETE: Plex Agent, Plex library
+      provisioning, media integration and native password rotation
       are not yet implemented and accepted in Ansible-3.
