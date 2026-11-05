@@ -56,6 +56,52 @@
   changed_when: false
   no_log: true
 
+- name: Identify any existing DNS target distinct from the dedicated PVE tunnel
+  ansible.builtin.set_fact:
+    cf_target_candidate: >-
+      {{ (hostname_dns_preflight.results[0].json.result | first | default({})).content
+         | default('') | regex_replace('\\.cfargotunnel\\.com$', '') }}
+
+- name: Read the existing target tunnel metadata before considering DNS replacement
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_target_candidate }}"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: [200, 403, 404]
+    timeout: 20
+  register: cf_target_tunnel_metadata
+  changed_when: false
+  no_log: true
+  when:
+    - cf_target_candidate is match('^[a-f0-9-]{36}$')
+    - cf_target_candidate != matching_tunnels[0].id
+
+- name: Read the exact existing foreign tunnel ingress for ownership audit
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_target_candidate }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: [200, 403, 404]
+    timeout: 20
+  register: cf_target_tunnel_config
+  changed_when: false
+  no_log: true
+  when:
+    - cf_target_tunnel_metadata.status | default(0) == 200
+
+- name: Report collision owner metadata without Cloudflare credentials
+  ansible.builtin.debug:
+    msg:
+      - "CANONICAL_DNS_TARGET={{ cf_target_candidate | default('none') }}"
+      - "DEDICATED_PVE_TUNNEL={{ matching_tunnels[0].name }}"
+      - "TARGET_METADATA_HTTP={{ cf_target_tunnel_metadata.status | default('not_requested') }}"
+      - "TARGET_NAME={{ cf_target_tunnel_metadata.json.result.name | default('unknown') }}"
+      - "TARGET_STATUS={{ cf_target_tunnel_metadata.json.result.status | default('unknown') }}"
+      - >-
+        TARGET_INGRESS={{ cf_target_tunnel_config.json.result.config.ingress | default([])
+        | selectattr('hostname', 'defined') | map(attribute='hostname') | list }}
+  when: cf_target_candidate | default('') != matching_tunnels[0].id
+
 - name: Require exactly owned DNS records and no target collisions
   ansible.builtin.assert:
     that:
@@ -71,6 +117,7 @@
       - cloudflare_hostname_state == 'new' or item_index < 2 or item.json.result | length == 1
       - cloudflare_hostname_state != 'new' or item_index >= 2 or item.json.result | length == 1
     fail_msg: "Missing/foreign DNS record in PVE hostname rename preflight"
+  no_log: true
   loop: "{{ hostname_dns_preflight.results }}"
   loop_control:
     index_var: item_index
