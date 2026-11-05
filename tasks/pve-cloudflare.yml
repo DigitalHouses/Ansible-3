@@ -298,3 +298,6 @@
       - "PVE_ACCESS_POLICY_COUNT={{ pve_access_policies.json.result | default([]) | length }}"
       - "PVE_ACCESS_POLICY_DECISIONS={{ pve_access_policies.json.result | default([]) | map(attribute='decision') | list }}"
       - "PVE_ACCESS_POLICY_IDS={{ pve_access_policies.json.result | default([]) | map(attribute='id') | list }}"
+      - "ACCESS_APP_DOMAINS={{ quantum_access_apps.json.result | selectattr('domain', 'defined') | map(attribute='domain') | list }}"
+      - "ACCESS_APP_TYPES={{ quantum_access_apps.json.result | map(attribute='type') | list }}"
+      - "ACCESS_APP_COUNT={{ quantum_access_apps.json.result | length }}"
