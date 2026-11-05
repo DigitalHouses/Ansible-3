@@ -138,7 +138,10 @@
       - current_cf_config.ingress[-1].service == 'http_status:404'
       - current_cf_config.ingress[-1].hostname is not defined
       - current_cf_config.ingress | length != 3 or current_cf_config.ingress[1].hostname == quantum_public_hostname
-      - current_cf_config.ingress | length != 3 or current_cf_config.ingress[1].service == 'http://127.0.0.1:8090'
+      - >-
+        current_cf_config.ingress | length != 3 or
+        current_cf_config.ingress[1].service in ['http://127.0.0.1:8090',
+        'http://' ~ pve.ipv4 ~ ':8090']
     fail_msg: "Dedicated tunnel drift detected: refusing to overwrite any foreign route or TLS policy"
 
 - name: Ensure DNS still routes public name to this dedicated tunnel

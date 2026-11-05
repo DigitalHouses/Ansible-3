@@ -1,0 +1,83 @@
+---
+# FileBrowser has root-level filesystem access. Before enabling its LAN listener,
+# restrict the port independently of the node-wide PVE firewall state.
+# The isolated nftables table never changes Proxmox or other guest rules.
+- name: Require the exact /24 PVE management IP on vmbr0
+  ansible.builtin.command:
+    argv: [/usr/sbin/ip, -4, -o, addr, show, dev, vmbr0]
+  register: quantum_mgmt_address
+  changed_when: false
+
+- name: Reject absent or unexpected PVE Quantum management IP
+  ansible.builtin.assert:
+    that:
+      - quantum_bind_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+      - quantum_bind_ipv4 ~ '/24' in quantum_mgmt_address.stdout
+    fail_msg: "Quantum cannot bind to a verified /24 PVE management address"
+
+- name: Install isolated FileBrowser LAN firewall rules
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/filebrowser-lan.nft
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      table inet dh_quantum {
+        chain input {
+          type filter hook input priority -20; policy accept;
+          ip daddr {{ quantum_bind_ipv4 }} tcp dport 8090 iifname "lo" accept
+          ip daddr {{ quantum_bind_ipv4 }} tcp dport 8090 iifname "vmbr0" ip saddr {{ quantum_bind_ipv4.split('.')[:3] | join('.') }}.0/24 accept
+          tcp dport 8090 drop
+        }
+      }
+  register: quantum_firewall_rules
+
+- name: Validate nftables rules before loading them
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, -c, -f, /etc/digitalhouses/filebrowser-lan.nft]
+  changed_when: false
+
+- name: Install dedicated persistent FileBrowser firewall unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses-filebrowser-firewall.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses FileBrowser LAN-only firewall
+      After=network.target
+      Before=digitalhouses-filebrowser.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStartPre=-/usr/sbin/nft delete table inet dh_quantum
+      ExecStart=/usr/sbin/nft -f /etc/digitalhouses/filebrowser-lan.nft
+
+      [Install]
+      WantedBy=multi-user.target
+  register: quantum_firewall_unit
+
+- name: Load and enable FileBrowser firewall before changing the HTTP listener
+  ansible.builtin.systemd_service:
+    name: digitalhouses-filebrowser-firewall.service
+    daemon_reload: "{{ quantum_firewall_unit.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if quantum_firewall_rules.changed or quantum_firewall_unit.changed else 'started' }}"
+
+- name: Read back the installed LAN firewall table
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, list, table, inet, dh_quantum]
+  register: quantum_active_firewall
+  changed_when: false
+
+- name: Require the whitelist, localhost exception and default port drop
+  ansible.builtin.assert:
+    that:
+      - quantum_active_firewall.stdout is search('ip daddr ' ~ quantum_bind_ipv4)
+      - quantum_active_firewall.stdout is search('ip saddr ' ~ (quantum_bind_ipv4.split('.')[:3] | join('.')) ~ '.0/24')
+      - quantum_active_firewall.stdout is search('iifname "lo" accept')
+      - quantum_active_firewall.stdout is search('iifname "vmbr0"')
+      - quantum_active_firewall.stdout is search('tcp dport 8090 drop')
+    fail_msg: "The LAN-only nftables guard for Quantum is not active"

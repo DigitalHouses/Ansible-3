@@ -350,17 +350,19 @@
     - name: Install or verify the pinned DigitalHouses PVE agent
       ansible.builtin.include_tasks: ../tasks/pve-agent.yml
       when: requested_mode == 'apply'
-    - name: Install FileBrowser Quantum with administrative root source
-      ansible.builtin.include_tasks: ../tasks/pve-quantum.yml
-      when:
-        - requested_mode == 'apply'
-        - requested_quantum_action == 'install'
     - name: Migrate PVE management IP with timed rollback and runner verification
       ansible.builtin.include_tasks: ../tasks/pve-network.yml
       when:
         - requested_mode == 'apply'
         - requested_ip_action == 'migrate'
         - requested_new_ipv4 != original_pve_ipv4
+    - name: Install FileBrowser Quantum with LAN firewall after any PVE IP migration
+      ansible.builtin.include_tasks: ../tasks/pve-quantum.yml
+      vars:
+        quantum_bind_ipv4: "{{ requested_new_ipv4 if requested_ip_action == 'migrate' else original_pve_ipv4 }}"
+      when:
+        - requested_mode == 'apply'
+        - requested_quantum_action == 'install'
     - name: Report intentionally separate steps
       ansible.builtin.debug:
         msg:
@@ -391,7 +393,7 @@
     quantum_public_hostname: "{{ 'dh-' ~ site_id ~ '-pve-filebrowser.' ~ cf_zone_name }}"
     desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
     expected_ca_pool: /etc/cloudflared/dh-pve-ca.pem
-    quantum_requested: "{{ (DH_PVE_QUANTUM | default('install', true)) == 'install' }}"
+    quantum_requested: "{{ (DH_PVE_QUANTUM | default('install', true)) == 'install' and (DH_PVE_MODE | default('audit', true)) == 'apply' }}"
     cf_headers:
       Authorization: "Bearer {{ cf_token }}"
       Accept: application/json
