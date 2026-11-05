@@ -386,6 +386,7 @@
     cf_zone_name: digitalhouses.vip
     pve_tunnel_name: "{{ site_id }}-pve"
     public_hostname: "{{ 'dh-' ~ site_id ~ '-pve.' ~ cf_zone_name }}"
+    quantum_public_hostname: "{{ 'dh-' ~ site_id ~ '-pve-filebrowser.' ~ cf_zone_name }}"
     desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
     expected_ca_pool: /etc/cloudflared/dh-pve-ca.pem
     cf_headers:
