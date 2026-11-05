@@ -206,6 +206,7 @@
         status_code: 200
         timeout: 30
       register: updated_tunnel_configuration
+      changed_when: true
       no_log: true
       when:
         - requested_mode == 'apply'
