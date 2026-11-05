@@ -1,0 +1,124 @@
+---
+# Task 08: maintain the site-scoped Semaphore API access on the central DEV.
+# Also called once by fresh bootstrap after Runner -> PVE SSH enrollment.
+- name: 08 - Ensure dedicated Semaphore API access on Runner
+  hosts: runner
+  connection: local
+  become: true
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    semaphore_api: https://127.0.0.1:3000/api
+    semaphore_ca: /etc/semaphore/tls.crt
+  tasks:
+    - name: Read this Runner's site identity
+      ansible.builtin.slurp:
+        src: /etc/digitalhouses/site-id
+      register: dev_site_file
+
+    - name: Validate site and trusted PVE target
+      ansible.builtin.assert:
+        that:
+          - (dev_site_file.content | b64decode | trim) is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - pve.ipv4 is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+          - pve.node is match('^[a-zA-Z0-9][a-zA-Z0-9-]*$')
+        fail_msg: Invalid site identity or PVE inventory; task 08 stopped
+
+    - name: Keep site identity for DEV enrollment
+      ansible.builtin.set_fact:
+        dev_site_id: "{{ dev_site_file.content | b64decode | trim }}"
+
+    - name: Read the existing catalog credential on Runner only
+      ansible.builtin.slurp:
+        src: /etc/semaphore/catalog-token
+      register: dev_catalog_secret
+      no_log: true
+
+    - name: Keep administrative credential only in Runner memory
+      ansible.builtin.set_fact:
+        dev_admin_token: "{{ dev_catalog_secret.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Identify this site's Semaphore project
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/projects"
+        headers:
+          Authorization: "Bearer {{ dev_admin_token }}"
+        ca_path: "{{ semaphore_ca }}"
+        validate_certs: true
+        use_proxy: false
+      register: dev_site_projects
+      no_log: true
+
+    - name: Refuse ambiguous site project
+      ansible.builtin.assert:
+        that:
+          - dev_site_projects.json | selectattr('name', 'equalto', dev_site_id) | list | length == 1
+        fail_msg: Expected exactly one matching Semaphore site project
+
+    - name: Reuse the bootstrap implementation for dedicated DEV access
+      ansible.builtin.import_tasks: ../bootstrap/tasks/dev-access.yml
+      vars:
+        site_id: "{{ dev_site_id }}"
+        dev_project_id: "{{ (dev_site_projects.json | selectattr('name', 'equalto', dev_site_id) | first).id }}"
+
+    - name: Read protected transfer configuration
+      ansible.builtin.slurp:
+        src: /etc/semaphore/dev-automation.curl
+      register: dev_transfer_config
+      no_log: true
+
+    - name: Read Semaphore public TLS certificate
+      ansible.builtin.slurp:
+        src: /etc/semaphore/tls.crt
+      register: dev_transfer_cert
+
+    - name: Read the configured HTTPS endpoint without exposing configuration secrets
+      ansible.builtin.slurp:
+        src: /etc/semaphore/config.json
+      register: dev_server_config
+      no_log: true
+
+    - name: Validate the site Runner URL for DEV
+      ansible.builtin.assert:
+        that:
+          - (dev_server_config.content | b64decode | from_json).web_host is match('^https://([0-9]{1,3}\\.){3}[0-9]{1,3}:3000$')
+        fail_msg: Semaphore HTTPS address is not a literal site Runner IPv4
+      no_log: true
+
+    - name: Keep only the site Runner's IPv4 for the remote smoke check
+      ansible.builtin.set_fact:
+        dev_runner_ip: "{{ (dev_server_config.content | b64decode | from_json).web_host | regex_replace('^https://|:3000$', '') }}"
+
+    - name: Register the existing pinned PVE SSH connection
+      ansible.builtin.add_host:
+        name: dev_delivery_pve
+        groups: dev_delivery_hosts
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o StrictHostKeyChecking=yes -o ConnectTimeout=10
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        ansible_python_interpreter: /usr/bin/python3
+        expected_pve_node: "{{ pve.node }}"
+      changed_when: false
+
+- name: 08 - Deliver and verify dedicated API access in central DEV
+  hosts: dev_delivery_hosts
+  gather_facts: false
+  become: false
+  vars:
+    dev_ctid: '1254'
+    dev_ip_cidr: 192.168.11.254/24
+    dev_dir: /home/dev/.config/ansible-3
+    dev_site_id: "{{ hostvars['runner'].dev_site_id }}"
+    dev_runner_ip: "{{ hostvars['runner'].dev_runner_ip }}"
+    dev_api_url: "https://{{ dev_runner_ip }}:3000/api"
+    dev_curl_path: "{{ dev_dir }}/{{ dev_site_id }}.curl"
+    dev_cert_path: "{{ dev_dir }}/{{ dev_site_id }}.crt"
+  tasks:
+    - name: Use the shared transport without introducing another service
+      ansible.builtin.include_tasks: ../tasks/dev-delivery.yml

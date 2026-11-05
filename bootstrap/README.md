@@ -64,81 +64,54 @@ PVE storage, VM, media, HA, PBS, Cloudflare или диски.
 CT, Semaphore HTTPS, project/source/inventory, строго один №00,
 отсутствие autorun, неизменность других гостей.
 
-## Native Semaphore API access from DEV
+## Штатный доступ центрального DEV к Semaphore (№08)
 
-Fresh bootstrap also creates the independent **nonadmin** Semaphore user
-`dev-automation`, linked only to the site project with role `owner`. This role
-can administer that project; it is not a template allowlist. No task is run.
-The shared `tasks/dev-access.yml` uses the version-pinned upstream
-[API specification](https://github.com/semaphoreui/semaphore/blob/v2.20.16-beta9/api-docs.yml):
-`POST /api/users`, login as the dedicated user with `POST /api/auth/login`,
-link via `POST /api/project/{id}/users`, then `POST /api/user/tokens`.
-Reruns reuse the locally managed password and API token; they do not create another token. An existing username
-without its managed password, failed authentication, extra project membership,
-or unexpected privileges stops enrollment for manual review. Nothing is deleted.
+**Fresh bootstrap** создаёт пользователя `dev-automation` как non-admin Owner
+только проекта сайта, выпускает отдельный API-токен и хранит его на Runner
+root:root `0600` в `/etc/semaphore/dev-automation-token`.
+Глобальный администраторский и catalog токены в DEV не передаются.
 
-Runner secrets are root:root 0600 under `/etc/semaphore/`:
-`dev-automation-password`, `dev-automation-token`, `dev-automation.curl`.
-All credential tasks use `no_log`. The admin catalog token stays on the runner.
-Do not remove the managed password: it establishes ownership on reruns.
+После настройки доверенного SSH Runner → PVE bootstrap запускает **тот же**
+`playbooks/configure-dev-semaphore.yml`, который используется шаблоном
+`08-Настроить доступ DEV к Semaphore`. Это выполняется автоматически,
+если рядом уже работает центральный DEV CT1254. Отсутствующий DEV не блокирует
+установку сайта. Никакой шаблон Semaphore во время bootstrap не запускается,
+в каталоге остаётся только №00.
 
-For an existing runner, run on the **local PVE as root**, from a reviewed
-checkout (replace SITE and RUNNER_IP):
+**Действующий сайт:** после обновления кода из `main` запустить №00 для
+добавления №08, затем №08. Запуск №08 не требует вводить credentials объекта
+через №05, если доверенный SSH Runner → PVE уже настроен bootstrap.
+Секрет для №08 — локально управляемый выделенный доступ, а не пароль PVE.
+Временные файлы на PVE удаляются после передачи; в DEV передаются
+только защищённый curl config для `dev-automation` и публичный TLS certificate.
 
-```bash
-bash bootstrap/enroll-local-dev.sh SITE RUNNER_IP
-```
+**Идемпотентность:** общий `bootstrap/tasks/dev-access.yml` используется и
+fresh bootstrap, и №08. Существующий валидный токен не перевыпускается,
+при совпадении digest/mode файлы DEV не копируются повторно.
+Если identity неожиданно глобальный admin, у него есть другие проекты либо
+потерян управляемый пароль — fail closed, никаких удалений.
+№08 не создаёт/не запускает производственные шаблоны.
 
-The helper fetches **only** `bootstrap/enroll-dev.yml` and
-`bootstrap/tasks/dev-access.yml` over HTTPS from the published
-`DigitalHouses/Ansible-3` revision `DH_DEV_ACCESS_REF` (defaults to `main`),
-stages them temporarily inside the existing runner, and executes the native
-Ansible playbook. It **does not switch** the runner's pinned
-`/opt/ansible-3` checkout. Pin `DH_DEV_ACCESS_REF` to a reviewed commit for
-repeatable installation; for branch E2E use its explicitly reviewed test ref.
-
-The helper is deliberately restricted to runner CT1231 and the known local
-DEV CT1254 at `192.168.11.254/24`. It checks PVE configuration against guest
-hostnames and addresses, the runner's `ansible-SITE` name, and DEV's `dev`
-account/home and existing `dev-infra` checkout. It invokes only the local
-runner enrollment playbook, using the existing admin `catalog-token` to find
-exactly the requested site. It transfers only the protected curl config and
-public TLS certificate through `pct pull/push` with a root-only temporary
-directory. It does not change the dev-infra checkout or any remote host.
-Temporary transfer files are removed on exit. DEV receives site-specific files `<site>.curl` and `<site>.crt`, owned by
-`dev`, mode 0600, in `/home/dev/.config/ansible-3/` (directory 0700).
-Fresh `install.sh` calls it automatically only after these checks succeed;
-missing/unverified DEV is skipped with a note. Sites without DEV still work.
-Remote sites require separate secure enrollment and certificate verification;
-never copy admin credentials to DEV or use `curl -k` / TLS bypass.
-
-As `dev`, use the native API (set the verified site URL and IDs; do not print
-the config or token). `-q` disables implicit `.curlrc` loading:
+На центральном DEV (выполнить как `dev`):
 
 ```bash
-SITE=serzhan-home  # replace for a different site
-API=https://192.168.11.231:3000/api  # use the verified site runner address
-CONFIG=/home/dev/.config/ansible-3/$SITE.curl
+CONFIG=/home/dev/.config/ansible-3/serzhan-home.curl
+API=https://192.168.11.231:3000/api
 curl -q --config "$CONFIG" "$API/projects"
-# Set PROJECT_ID to the matching site's ID returned above.
-curl -q --config "$CONFIG" "$API/project/$PROJECT_ID/templates"
-curl -q --config "$CONFIG" "$API/project/$PROJECT_ID/tasks"
-curl -q --config "$CONFIG" "$API/project/$PROJECT_ID/tasks/$TASK_ID"
-curl -q --config "$CONFIG" "$API/project/$PROJECT_ID/tasks/$TASK_ID/output"
+curl -q --config "$CONFIG" "$API/project/1/templates"
+curl -q --config "$CONFIG" "$API/project/1/tasks"
+curl -q --config "$CONFIG" "$API/project/1/tasks/16/output"
 ```
 
-**POST requires explicit approval of the concrete template**, after checking
-its site, repository, playbook and inventory; retain any client's required
-approval. Native curl access must never bypass a rejected MCP/client approval.
-Only after that approval, set `APPROVED_TEMPLATE_ID` to that numeric ID:
+В каталоге DEV `/home/dev/.config/ansible-3` права `0700`,
+`<site>.curl` и `<site>.crt` — `0600`. Токен не публиковать в Git,
+логах или переписке. Не использовать `curl -k`.
 
-```bash
-curl -q --config "$CONFIG" --request POST \
-  --data "{\"template_id\":$APPROVED_TEMPLATE_ID}" \
-  "$API/project/$PROJECT_ID/tasks"
-```
+После согласования конкретного smoke-шаблона можно создать запуск
+штатным `POST /api/project/{id}/tasks`, затем получить статус и `PLAY RECAP`.
+Это **не** часть самой №08. Роль Owner даёт права на проект, а не технический
+allowlist запуска. Ограничения согласования ChatGPT/Codex должны сохраняться.
 
-Record the returned task ID, read status and output until completion, and
-report status and PLAY RECAP. Enrollment itself performs no POST to tasks,
-adds no other template, and enables no autorun. Syntax checks do not establish
-live API acceptance or idempotence; those require an authorized local test.
+Scope этой реализации — совместно размещённые Runner CT1231 и DEV CT1254
+(`192.168.11.254/24`). Для удалённых домов потребуется отдельно согласовать
+штатный защищённый транспорт; не расширять задачу №08 неявно.
