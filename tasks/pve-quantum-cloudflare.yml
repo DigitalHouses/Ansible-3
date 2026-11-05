@@ -278,13 +278,17 @@
       - "{{ public_hostname }}"
   register: cf_existing_edge
   changed_when: false
-  when: requested_mode == 'apply'
+  when:
+    - requested_mode == 'apply'
+    - cf_edge_ipv4 is not defined
 
 - name: Derive the Cloudflare edge address from the working PVE hostname
   ansible.builtin.set_fact:
     cf_edge_ipv4: >-
       {{ cf_existing_edge.stdout_lines[0].split()[0] }}
-  when: requested_mode == 'apply'
+  when:
+    - requested_mode == 'apply'
+    - cf_edge_ipv4 is not defined
 
 - name: Require a valid Cloudflare IPv4 address for TLS public entrypoint test
   ansible.builtin.assert:

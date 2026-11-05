@@ -167,7 +167,7 @@ HAOS/Mosquitto deployment, NUT shutdown commissioning —
 - `apply` — изменение **только** origin существующего dedicated Tunnel на
   фактический IP PVE из `/etc/digitalhouses/pve.yml` Runner, с проверками
   TLS, Access и повторным чтением Cloudflare API. Публичный адрес:
-  `dh-<site_id>-pve.digitalhouses.vip`.
+  `<site_id>-pve.digitalhouses.vip`.
 
 Этап Cloudflare выполняется **после** настройки PVE и возможной миграции
 management IP. Старый site Tunnel, DNS-записи, Access policies, система PVE,
@@ -192,7 +192,7 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
 сама по себе не означает готовность задачи: №10 также проверяет доступность
 по management IP от отдельного Runner LXC (не с самого PVE).
 
-- HTTPS URL: `https://dh-<site_id>-pve-filebrowser.digitalhouses.vip/`.
+- HTTPS URL: `https://<site_id>-pve-filebrowser.digitalhouses.vip/`.
 - Публичный вход защищает существующее self-hosted Cloudflare Access
   приложение `*.digitalhouses.vip` либо точное правило на этот hostname.
   До публикации №10 проверяет ограниченную allow-политику (email),
@@ -240,3 +240,20 @@ readback и внешний Access через уже доступный Cloudflar
   этот компромисс следует учитывать при выборе доверенной подсети.
 
 **Статус:** до подтверждения живым E2E обновлённой №10 не принят.
+
+### Стандарт публичных Cloudflare hostname (05.11.2026)
+
+Все **публичные DNS/ingress hostname** DigitalHouses формируются без `dh-`:
+`<site-id>-<service>.digitalhouses.vip`. Имена внутренних туннелей (например,
+`serzhan-home-pve`) и их UUID/токены не меняются. При обнаружении legacy
+`dh-` №10 проверяет принадлежность обоих DNS CNAME и строгую wildcard
+Access-политику, временно публикует **оба** hostname в том же Tunnel,
+проверяет новые HTTPS + Access, затем удаляет legacy ingress и
+**немедленно удаляет** оба устаревших DNS CNAME без redirect/alias.
+При ошибке до переключения старые адреса остаются, при повторном запуске
+идемпотентность и отсутствие `dh-` проверяются повторно.
+
+Аудит зоны `digitalhouses.vip`: всего 76 DNS, `dh-` — ровно две записи
+`dh-serzhan-home-pve` и `dh-serzhan-home-pve-filebrowser`; миграция
+остальных объектов сейчас не требуется. Любые будущие Cloudflare задачи
+используют тот же стандарт.
