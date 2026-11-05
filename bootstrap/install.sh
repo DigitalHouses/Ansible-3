@@ -172,6 +172,28 @@ pct exec "$CTID" -- runuser -u semaphore -- ssh -n \
     echo 'BLOCKED: Semaphore-to-PVE pinned root SSH verification failed' >&2; exit 2;
   }
 
+# Enroll only the known local DEV; other sites retain normal bootstrap.
+if [[ $CTID == 1231 ]] && pct config 1254 >/dev/null 2>&1; then
+  DEV_HELPER=$(mktemp /tmp/ansible-3-enroll-dev.XXXXXXXX)
+  # Never execute a script pulled from an LXC as PVE root.
+  curl --fail --silent --show-error --location \
+    "https://raw.githubusercontent.com/DigitalHouses/Ansible-3/$CODE_RELEASE/bootstrap/enroll-local-dev.sh" \
+    --output "$DEV_HELPER" || { rm -f -- "$DEV_HELPER"; exit 2; }
+  chmod 0700 "$DEV_HELPER"
+  if bash "$DEV_HELPER" "$SITE" "$RUNNER_IP" --check; then
+    if ! bash "$DEV_HELPER" "$SITE" "$RUNNER_IP"; then
+      rm -f -- "$DEV_HELPER"
+      echo 'BLOCKED: local DEV enrollment failed' >&2
+      exit 2
+    fi
+  else
+    echo 'DEV enrollment skipped: local CT1254 identity not verified.'
+  fi
+  rm -f -- "$DEV_HELPER"
+else
+  echo 'DEV enrollment skipped: no existing local DEV for Runner CT1231.'
+fi
+
 echo '=== 5/5 Ready ==='
 echo "BOOTSTRAP_FRESH_DONE=PASS commit=$CODE_RELEASE"
 echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
