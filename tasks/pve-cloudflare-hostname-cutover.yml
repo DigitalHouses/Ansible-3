@@ -97,10 +97,50 @@
       - "TARGET_METADATA_HTTP={{ cf_target_tunnel_metadata.status | default('not_requested') }}"
       - "TARGET_NAME={{ cf_target_tunnel_metadata.json.result.name | default('unknown') }}"
       - "TARGET_STATUS={{ cf_target_tunnel_metadata.json.result.status | default('unknown') }}"
+      - "TARGET_CONFIG_SOURCE={{ cf_target_tunnel_metadata.json.result.config_src | default('unknown') }}"
+      - >-
+        TARGET_PVE_ORIGIN={{ (cf_target_tunnel_config.json.result.config.ingress | default([])
+          | selectattr('hostname', 'defined') | selectattr('hostname', 'equalto', public_hostname)
+          | map(attribute='service') | list) }}
+      - >-
+        TARGET_QUANTUM_ORIGIN={{ (cf_target_tunnel_config.json.result.config.ingress | default([])
+          | selectattr('hostname', 'defined') | selectattr('hostname', 'equalto', quantum_public_hostname)
+          | map(attribute='service') | list) }}
       - >-
         TARGET_INGRESS={{ cf_target_tunnel_config.json.result.config.ingress | default([])
         | selectattr('hostname', 'defined') | map(attribute='hostname') | list }}
   when: cf_target_candidate | default('') != matching_tunnels[0].id
+
+- name: Inspect whether the canonical DNS belongs to a stale same-site shared tunnel
+  ansible.builtin.set_fact:
+    cf_owner_pve_ingress: >-
+      {{ cf_target_tunnel_config.json.result.config.ingress | default([])
+         | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', public_hostname) | list }}
+    cf_owner_quantum_ingress: >-
+      {{ cf_target_tunnel_config.json.result.config.ingress | default([])
+         | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', quantum_public_hostname) | list }}
+  when:
+    - cf_target_tunnel_metadata.status | default(0) == 200
+    - cf_target_tunnel_config.status | default(0) == 200
+
+- name: Allow DNS adoption only from a down same-owner legacy shared tunnel
+  ansible.builtin.assert:
+    that:
+      - cf_target_tunnel_metadata.status == 200
+      - cf_target_tunnel_config.status == 200
+      - cf_target_tunnel_metadata.json.result.status == 'down'
+      - cf_target_tunnel_metadata.json.result.config_src == 'cloudflare'
+      - canonical_site.site.owner_slug | lower in (cf_target_tunnel_metadata.json.result.name | lower)
+      - cf_owner_pve_ingress | length == 1
+      - cf_owner_quantum_ingress | length == 1
+      - cf_owner_pve_ingress[0].service is match('^https://[0-9.]+:8006$')
+      - cf_owner_quantum_ingress[0].service is match('^http://[0-9.]+:8090$')
+      - cf_target_candidate is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+    fail_msg: "Canonical names belong to a foreign/live tunnel, refusing reassignment"
+  when:
+    - cf_target_candidate | default('') not in ['', matching_tunnels[0].id]
 
 - name: Require exactly owned DNS records and no target collisions
   ansible.builtin.assert:
@@ -112,8 +152,12 @@
         item.json.result | length == 0 or
         (item.json.result[0].type == 'CNAME' and
          item.json.result[0].proxied | bool and
-         (item.json.result[0].content | lower) ==
-         ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
+         ((item.json.result[0].content | lower) ==
+          ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower) or
+          (item_index < 2 and cloudflare_hostname_state != 'new' and
+           (item.json.result[0].content | lower) ==
+           ((cf_target_candidate ~ '.cfargotunnel.com') | lower) and
+           (cf_target_tunnel_metadata.status | default(0)) == 200)))
       - cloudflare_hostname_state == 'new' or item_index < 2 or item.json.result | length == 1
       - cloudflare_hostname_state != 'new' or item_index >= 2 or item.json.result | length == 1
     fail_msg: "Missing/foreign DNS record in PVE hostname rename preflight"
@@ -267,6 +311,31 @@
   when:
     - requested_mode == 'apply'
     - cloudflare_hostname_state == 'legacy'
+
+- name: Repoint only the two canonical CNAMEs from stale shared to dedicated PVE tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records/{{ item.json.result[0].id }}"
+    method: PATCH
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      name: "{{ item.item }}"
+      content: "{{ matching_tunnels[0].id }}.cfargotunnel.com"
+      proxied: true
+    use_proxy: false
+    status_code: 200
+    timeout: 30
+  loop: "{{ hostname_dns_preflight.results[:2] }}"
+  changed_when: true
+  no_log: true
+  when:
+    - requested_mode == 'apply'
+    - cloudflare_hostname_state != 'new'
+    - item.json.result | length == 1
+    - >-
+      (item.json.result[0].content | lower) !=
+      ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower)
 
 - name: Resolve the active old PVE edge address for strict TLS checks
   ansible.builtin.command:
