@@ -9,6 +9,8 @@
   vars_files:
     - /etc/digitalhouses/pve.yml
   vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
     setup_mode: "{{ DH_PVE_MODE | default('audit', true) }}"
     repo_mode: "{{ DH_PVE_REPO_MODE | default('keep', true) }}"
     upgrade_mode: "{{ DH_PVE_UPGRADE | default('no', true) }}"
@@ -57,6 +59,51 @@
           - ups_mode != 'snmp_v3' or ups_snmp_version == 'v3'
           - ups_mode != 'snmp_v2c' or ups_snmp_version in ['v1', 'v2c']
         fail_msg: Invalid task 10 configuration
+    - name: Require an identified site and existing task 05 GitHub credential
+      ansible.builtin.assert:
+        that:
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - github_token | length > 0
+        fail_msg: >-
+          Task 10 requires the canonical private site manifest and
+          GitHub credential from task 05
+      no_log: true
+
+    - name: Read the canonical site manifest from its private repository
+      ansible.builtin.uri:
+        url: >-
+          https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}/site.yml?ref=main
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: site_manifest_response
+      changed_when: false
+      no_log: true
+
+    - name: Decode the site-owned identity
+      ansible.builtin.set_fact:
+        canonical_site: "{{ site_manifest_response.json.content | b64decode | from_yaml }}"
+      no_log: true
+
+    - name: Require the site owner to match the provisioned site identity
+      ansible.builtin.assert:
+        that:
+          - canonical_site is mapping
+          - canonical_site.site is mapping
+          - canonical_site.site.id == site_id
+          - canonical_site.site.owner_slug is match('^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
+          - ('pve-' ~ canonical_site.site.owner_slug) | length <= 63
+        fail_msg: Invalid or mismatched site.id/owner_slug in private site repository
+
+    - name: Derive PVE naming policy from the canonical site owner
+      ansible.builtin.set_fact:
+        expected_pve_hostname: "{{ 'pve-' ~ canonical_site.site.owner_slug }}"
+        expected_pve_fqdn: "{{ 'pve-' ~ canonical_site.site.owner_slug ~ '.home.arpa' }}"
+
     - name: Install standard password SSH transport for initial PVE enrollment
       ansible.builtin.apt:
         name: sshpass
@@ -211,6 +258,8 @@
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
         ansible_python_interpreter: /usr/bin/python3
         expected_node: "{{ pve.node }}"
+        expected_pve_hostname: "{{ expected_pve_hostname }}"
+        expected_pve_fqdn: "{{ expected_pve_fqdn }}"
         expected_runner_ipv4: "{{ runner_ipv4 }}"
         requested_mode: "{{ setup_mode }}"
         requested_repo_mode: "{{ repo_mode }}"
@@ -245,6 +294,10 @@
       ansible.builtin.command: hostname -s
       changed_when: false
       register: actual_node
+    - name: Read actual Proxmox FQDN without changing its node identity
+      ansible.builtin.command: hostname -f
+      changed_when: false
+      register: actual_fqdn
     - name: Read effective SSH identity
       ansible.builtin.command: id -u
       changed_when: false
@@ -255,6 +308,16 @@
           - actual_node.stdout == expected_node
           - effective_uid.stdout == '0'
         fail_msg: Connected host identity differs from the bootstrap PVE node
+    - name: Report canonical PVE name and warn about legacy installation names
+      ansible.builtin.debug:
+        msg:
+          - "PVE_EXPECTED_FQDN={{ expected_pve_fqdn }}"
+          - "PVE_ACTUAL_FQDN={{ actual_fqdn.stdout }}"
+          - >-
+            PVE_NAME={{ 'PASS' if actual_node.stdout == expected_pve_hostname
+            and actual_fqdn.stdout == expected_pve_fqdn else
+            'WARN_LEGACY_NAME (existing PVE node is not renamed)' }}
+          - "BONJOUR_NAME={{ expected_pve_hostname }}.local"
     - name: Enroll the Runner public key using native Ansible modules
       ansible.builtin.include_tasks: ../tasks/pve-ssh-enrollment.yml
       when: requested_mode == 'apply'

@@ -58,11 +58,21 @@
     line: publish-workstation=yes
   register: avahi_conf
 
+- name: Publish the site-owned Bonjour name without renaming the PVE node
+  ansible.builtin.lineinfile:
+    path: /etc/avahi/avahi-daemon.conf
+    regexp: '^#?\s*host-name='
+    insertafter: '^\[server\]$'
+    line: "host-name={{ expected_pve_hostname }}"
+  register: avahi_site_hostname
+
 - name: Run Bonjour after installation or configuration
   ansible.builtin.systemd_service:
     name: avahi-daemon.service
     enabled: true
-    state: "{{ 'restarted' if avahi_conf.changed or avahi_repair.changed else 'started' }}"
+    state: >-
+      {{ 'restarted' if avahi_conf.changed or avahi_repair.changed
+         or avahi_site_hostname.changed else 'started' }}
 
 - name: Optionally upgrade PVE packages without rebooting
   ansible.builtin.apt:
