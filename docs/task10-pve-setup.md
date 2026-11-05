@@ -1,16 +1,28 @@
 # №10 — Setup PVE: реализация и приёмка
 
-**Статус:** feature PR; код проверяется локально. Живой E2E на PVE не выполнен.
+**Статус:** PVE baseline/agent/Quantum E2E принят на PVE 8.4.21 (№26, №27); UPS и смена IP ещё не проверены на оборудовании.
 
 ## Что делает задача
 
 - `DH_PVE_MODE=audit` — только hostname, PVE version, vmbr0. Никаких storage/NFS-проб.
 - `apply` на PVE 8: APT postinstall, опциональный no-subscription канал
   и обновление без reboot, Bonjour/Avahi, пакеты NUT, PVE Agent.
-- NUT: нет UPS / локальный USB / сетевой SNMP; Auto выбирает
-  `usbhid-ups` или `snmp-ups`, есть ручной выбор драйвера и MIB.
-  10 производителей + Other. Пакеты NUT устанавливаются только когда выбран UPS;
-  доступ к устройству подтверждается через `upsc`.
+- NUT Survey №10: ровно **3 поля** — подключение (нет, USB, SNMP v2c,
+  SNMP v3), IP сетевого UPS и драйвер (Auto либо явный выбор).
+  Auto = `usbhid-ups` для USB, `snmp-ups` для сети; это не аппаратный
+  autodetect всех совместимых драйверов. MIB = `auto`, SNMP v3 = SHA/AES.
+  Для нестандартного устройства можно задать `DH_PVE_SNMP_MIB`,
+  `DH_PVE_SNMP_AUTH_PROTOCOL`, `DH_PVE_SNMP_PRIV_PROTOCOL` и, при
+  необходимости старого SNMP v1, `DH_PVE_SNMP_VERSION=v1` в
+  native Variable Group объекта. Дополнительных полей Survey нет.
+  Производителя и модель получает NUT с устройства, если оно их публикует.
+  **SNMP credentials вводятся только в №05**: v2c community; v3 имя
+  пользователя, Auth Password, Privacy Password. Пустой ввод сохраняет
+  прежнее значение. Секреты хранятся в native Semaphore Variable Group.
+  №10 не извлекает забытые секреты из `ups.conf`: при отсутствии нужных
+  credentials он останавливается с предложением заполнить №05.
+  Пакеты NUT устанавливаются только для выбранного UPS, успех требует
+  `upsc ups@127.0.0.1 ups.status`.
   NUT monitor/FSD и реальное отключение UPS **не включаются автоматически**.
 - `dh_pve_agent` устанавливается из проверенного canonical tag
   `digitalhouses_pve_agent-v0.5.72` (installer SHA256 проверяется),
@@ -104,8 +116,8 @@ sshd и не использует обходные пути.
 
 ## Критерии приёмки
 
-1. Коммит в `main`, новый шаблон №10 создан штатным №00 в
-   правильном Semaphore проекте и указывает на Ansible-3.
+1. Коммит в `main`, №00 создал/обновил Survey №05 и №10 в правильном
+   проекте Semaphore, не изменяя привязанные inventory/Variable Group/repo.
 2. №10 audit успешен, изменённых файлов на PVE нет.
 3. №10 apply (без IP cutover на первом тесте) прошёл: Avahi,
    Quantum `/health` и unauthenticated `/api/users=401`,
