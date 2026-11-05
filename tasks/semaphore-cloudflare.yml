@@ -312,19 +312,21 @@
     mode: '0644'
   when: sem_cf_action == 'apply'
 
-- name: Configure the vendor-signed cloudflared APT repository
-  ansible.builtin.apt_repository:
-    repo: deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main
-    filename: cloudflared
-    state: present
-    update_cache: true
+- name: Configure the signed cloudflared APT source on Debian 13
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/cloudflared.list
+    content: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
+    owner: root
+    group: root
+    mode: '0644'
+  register: sem_cf_apt_source
   when: sem_cf_action == 'apply'
 
 - name: Install cloudflared using the vendor-signed package
   ansible.builtin.apt:
     name: cloudflared
     state: present
-    update_cache: false
+    update_cache: "{{ sem_cf_apt_source.changed }}"
   when: sem_cf_action == 'apply'
 
 - name: Install restricted Cloudflare connector directory
