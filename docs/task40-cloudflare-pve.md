@@ -6,7 +6,8 @@
 `<site_id>-pve` после изменения IP адреса PVE. IP определяется по
 `/etc/digitalhouses/pve.yml` Runner, не вводится вручную в Survey.
 
-- `audit` (по умолчанию): проверяет CA-валидный PVE API, защиту
+- `audit` (по умолчанию): проверяет CA-валидный PVE API через
+  `curl --cacert` (Proxmox CA legacy Key Usage несовместим с Python SSL), защиту
   Cloudflare Access (анонимный 302 на login), zone/account, один healthy
   dedicated tunnel, DNS CNAME и строгий TLS; показывает старый и новый origin.
 - `apply`: меняет **только** `config.ingress[0].service` через официальный
