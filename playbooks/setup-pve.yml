@@ -379,7 +379,7 @@
   vars_files:
     - /etc/digitalhouses/pve.yml
   vars:
-    requested_mode: "{{ 'audit' if (DH_PVE_MODE | default('audit', true)) == 'audit' and
+    requested_mode: "{{ 'skip' if (DH_PVE_MODE | default('audit', true)) == 'audit' and
                     (DH_PVE_CF_ACTION | default('apply', true)) == 'apply'
                     else (DH_PVE_CF_ACTION | default('apply', true)) }}"
     site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
