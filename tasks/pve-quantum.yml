@@ -154,4 +154,4 @@
       - "QUANTUM=LOCAL_READY on 127.0.0.1:8090 (public Access commissioning follows)"
       - "Full / source with indexing DISABLED"
       - "Initial admin password: retrieve once from root-only systemd journal"
-      - "Cloudflare Access and reverse proxy are separate tasks"
+      - "Cloudflare Access is commissioned later in this same PVE task 10"
