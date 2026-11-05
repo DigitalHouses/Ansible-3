@@ -54,25 +54,7 @@
   ansible.builtin.lineinfile:
     path: /etc/avahi/avahi-daemon.conf
     regexp: '^#?publish-workstation='
-    insertafter: '^\[publish\]
-
-- name: Run Bonjour after installation or configuration
-  ansible.builtin.systemd_service:
-    name: avahi-daemon.service
-    enabled: true
-    state: "{{ 'restarted' if avahi_conf.changed or avahi_repair.changed else 'started' }}"
-
-- name: Optionally upgrade PVE packages without rebooting
-  ansible.builtin.apt:
-    upgrade: safe
-  when: requested_upgrade == 'yes'
-
-- name: Report post-install result
-  ansible.builtin.debug:
-    msg: >-
-      PVE 8 host packages and Bonjour configured;
-      NUT={{ requested_ups_mode }}, repo={{ requested_repo_mode }}, upgrade={{ requested_upgrade }}
-
+    insertafter: '^\[publish\]$'
     line: publish-workstation=yes
   register: avahi_conf
 
@@ -80,7 +62,7 @@
   ansible.builtin.systemd_service:
     name: avahi-daemon.service
     enabled: true
-    state: "{{ 'restarted' if avahi_conf.changed else 'started' }}"
+    state: "{{ 'restarted' if avahi_conf.changed or avahi_repair.changed else 'started' }}"
 
 - name: Optionally upgrade PVE packages without rebooting
   ansible.builtin.apt:
