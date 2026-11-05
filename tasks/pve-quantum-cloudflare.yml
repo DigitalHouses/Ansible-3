@@ -1,10 +1,10 @@
 ---
-# Task 10: FileBrowser Quantum runs only on PVE loopback. Publish it through
+# Task 10: FileBrowser Quantum binds to the PVE management IPv4. Publish it through
 # the existing dedicated PVE Tunnel, using the established wildcard Access
-# policy. Do not open PVE ports, create a new tunnel or loosen Cloudflare Access.
-- name: Verify Quantum is healthy on the actual PVE loopback interface
+# policy. Its LAN port is restricted by independent nftables; never loosen Access.
+- name: Verify Quantum is healthy on the actual PVE management IP
   ansible.builtin.uri:
-    url: http://127.0.0.1:8090/health
+    url: "http://{{ pve.ipv4 }}:8090/health"
     use_proxy: false
     status_code: 200
     timeout: 10
@@ -14,7 +14,7 @@
 
 - name: Verify Quantum does not allow anonymous administration
   ansible.builtin.uri:
-    url: http://127.0.0.1:8090/api/users
+    url: "http://{{ pve.ipv4 }}:8090/api/users"
     use_proxy: false
     status_code: [401, 403]
     timeout: 10
@@ -102,7 +102,7 @@
     quantum_original_config: "{{ quantum_current_tunnel.json.result.config }}"
     quantum_expected_route:
       hostname: "{{ quantum_public_hostname }}"
-      service: http://127.0.0.1:8090
+      service: "http://{{ pve.ipv4 }}:8090"
 
 - name: Reject any foreign route or unverified PVE origin in the dedicated tunnel
   ansible.builtin.assert:
@@ -115,7 +115,10 @@
       - quantum_original_config.ingress[0].originRequest.noTLSVerify is sameas false
       - quantum_original_config.ingress[-1].service == 'http_status:404'
       - quantum_original_config.ingress[-1].hostname is not defined
-      - quantum_original_config.ingress | length != 3 or quantum_original_config.ingress[1] == quantum_expected_route
+      - quantum_original_config.ingress | length != 3 or quantum_original_config.ingress[1].hostname == quantum_public_hostname
+      - >-
+        quantum_original_config.ingress | length != 3 or
+        quantum_original_config.ingress[1].service in ['http://127.0.0.1:8090', quantum_expected_route.service]
     fail_msg: "PVE Tunnel drift, foreign Quantum route or stale PVE origin: refusing route changes"
 
 - name: Fetch exact Quantum DNS name, including conflicting record types
@@ -173,6 +176,27 @@
     - requested_mode == 'apply'
     - quantum_original_config.ingress | length == 2
 
+- name: Update only the legacy Quantum route to the LAN management IP
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
+    method: PUT
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      config: >-
+        {{ quantum_original_config | combine({'ingress':
+           [quantum_original_config.ingress[0], quantum_expected_route,
+            quantum_original_config.ingress[-1]]}) }}
+    use_proxy: false
+    status_code: 200
+    timeout: 30
+  changed_when: true
+  no_log: true
+  when:
+    - requested_mode == 'apply'
+    - quantum_original_config.ingress | length == 3
+    - quantum_original_config.ingress[1].service != quantum_expected_route.service
+
 - name: Create only the missing protected Quantum DNS CNAME
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
@@ -212,9 +236,8 @@
       - >-
         quantum_final_tunnel.json.result.config ==
         (quantum_original_config | combine({'ingress':
-          quantum_original_config.ingress[:-1] +
-          ([quantum_expected_route] if quantum_original_config.ingress | length == 2 else []) +
-          [quantum_original_config.ingress[-1]]}))
+          [quantum_original_config.ingress[0], quantum_expected_route,
+           quantum_original_config.ingress[-1]]}))
     fail_msg: "Cloudflare readback differs from approved Quantum-only addition"
   when: requested_mode == 'apply'
 
@@ -303,6 +326,6 @@
   ansible.builtin.debug:
     msg:
       - "QUANTUM_PUBLIC=READY https://{{ quantum_public_hostname }}/"
-      - "QUANTUM_ACCESS=RESTRICTED; LOCAL_ORIGIN=127.0.0.1:8090"
+      - "QUANTUM_ACCESS=RESTRICTED; LAN_ORIGIN={{ pve.ipv4 }}:8090"
       - "QUANTUM_DNS=PROXIED; CLOUDFLARE_TLS=VERIFIED"
   when: requested_mode == 'apply'

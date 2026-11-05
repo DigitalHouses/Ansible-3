@@ -42,10 +42,11 @@
 - FileBrowser Quantum: стабильный upstream `v2.0.2-stable`,
   бинарник SHA256 `5710dc6f51d77f1db884eace44f6952286c49f2ce40b6a59af37e0dc7c4a8bbd`.
   Доступ ко всей ФС `/`, глобальное `viewable: true` **отключает индексирование**.
-  Работает от root **только** на `127.0.0.1:8090`; password auth и
+  Работает от root на management IPv4 PVE `http://<pve-ip>:8090` (для
+  serzhan-home `http://192.168.11.230:8090`); password auth и
   rate limit активны, публичный WebDAV отключён. Password создаёт
   сам Quantum при первом запуске (в журнале systemd), далее смена в UI.
-  Никакого публичного ingress без отдельной задачи Cloudflare Access.
+  Публичный ingress и его Access контролируются этим же №10.
   Upstream предупреждает против `/` как source: полномасштабный live
   тест доступа и воздействия на host обязателен перед приёмкой.
 - По отдельному выбору `DH_PVE_NETWORK_ACTION=migrate` и с явно
@@ -188,7 +189,8 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
 При `DH_PVE_MODE=apply`, `DH_PVE_QUANTUM=install` и штатном
 `DH_PVE_CF_ACTION=apply` №10 обязан завершить публикацию Quantum через
 **существующий выделенный туннель PVE**. Локальная проверка порта `8090`
-сама по себе не означает готовность задачи.
+сама по себе не означает готовность задачи: №10 также проверяет доступность
+по management IP от отдельного Runner LXC (не с самого PVE).
 
 - HTTPS URL: `https://dh-<site_id>-pve-filebrowser.digitalhouses.vip/`.
 - Публичный вход защищает существующее self-hosted Cloudflare Access
@@ -196,8 +198,11 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
   До публикации №10 проверяет ограниченную allow-политику (email),
   отсутствие bypass/everyone; если защита не подтверждена, останавливается.
 - Один маршрут добавляется в собственный PVE Tunnel: `hostname` →
-  `http://127.0.0.1:8090`. Origin доступен только `cloudflared`, потому что
-  сервис Quantum продолжает слушать исключительно loopback PVE.
+  `http://<pve-ip>:8090`. Сервис Quantum слушает только management IPv4
+  PVE, а независимая nftables-таблица `dh_quantum` защищает TCP 8090:
+  соединения разрешены с `vmbr0` от `192.168.11.0/24` и от самого PVE
+  через `lo`; все остальные источники блокируются. Правила загружаются
+  до запуска Quantum и восстанавливаются после перезагрузки.
 - Создаётся **только отсутствующий** proxied DNS CNAME на собственный Tunnel.
   Чужие DNS-записи и маршруты запрещено изменять.
 - Проверяются status Quantum (`/health=200`, `/api/users=401|403`),
@@ -217,3 +222,21 @@ management IP. Старый site Tunnel, DNS-записи, Access policies, си
 readback и внешний Access через уже доступный Cloudflare edge PVE, используя
 `curl --resolve`, но без `-k`, изменения SNI или отключения TLS-проверок.
 Локальный DNS клиента получит новый адрес после истечения отрицательного TTL.
+
+### Согласованная приёмка локального и удалённого доступа (05.11.2026)
+
+- PVE локально: `https://192.168.11.230:8006`.
+- File Browser локально: `http://192.168.11.230:8090` (именно IP PVE,
+  без SSH и без Cloudflare; для других объектов IP берётся из Runner).
+- PVE удалённо: защищённый Cloudflare Access HTTPS.
+- File Browser удалённо: защищённый Cloudflare Access HTTPS.
+- File Browser требует собственный логин и пароль в обоих случаях.
+- TCP 8090 должен быть доступен **только** из management LAN `/24` и самому
+  PVE. Это обеспечивает отдельная persistent nftables таблица, не требующая
+  включать или переписывать общесистемный Proxmox Firewall.
+- Сначала проверяются nftables и локальная HTTP-авторизация с Runner,
+  затем Cloudflare origin, DNS, Access и повторная идемпотентность.
+- Для целевого **HTTP**-доступа внутри LAN логин передаётся без TLS;
+  этот компромисс следует учитывать при выборе доверенной подсети.
+
+**Статус:** до подтверждения живым E2E обновлённой №10 не принят.

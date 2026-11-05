@@ -46,7 +46,10 @@
     - /etc/digitalhouses
     - /var/lib/digitalhouses/filebrowser-quantum
 
-- name: Configure local-only Quantum with indexing disabled for full root
+- name: Guard FileBrowser LAN port before opening the listener
+  ansible.builtin.include_tasks: pve-quantum-firewall.yml
+
+- name: Configure management-IP Quantum with indexing disabled for full root
   ansible.builtin.copy:
     dest: /etc/digitalhouses/filebrowser-quantum.yml
     owner: root
@@ -54,7 +57,7 @@
     mode: '0600'
     content: |
       http:
-        listen: "127.0.0.1"
+        listen: "{{ quantum_bind_ipv4 }}"
         port: 8090
         disableWebDAV: true
         trustProxyHeaders: false
@@ -89,7 +92,7 @@
     mode: '0755'
   register: quantum_binary
 
-- name: Install root-only localhost Quantum service
+- name: Install root-only LAN Quantum service
   ansible.builtin.copy:
     dest: /etc/systemd/system/digitalhouses-filebrowser.service
     owner: root
@@ -97,8 +100,10 @@
     mode: '0644'
     content: |
       [Unit]
-      Description=DigitalHouses FileBrowser Quantum (local admin)
+      Description=DigitalHouses FileBrowser Quantum (LAN admin)
       After=network.target
+      Requires=digitalhouses-filebrowser-firewall.service
+      After=digitalhouses-filebrowser-firewall.service
 
       [Service]
       Type=simple
@@ -124,16 +129,16 @@
     enabled: true
     state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or quantum_binary.changed else 'started' }}"
 
-- name: Verify the Quantum listener is available on loopback
+- name: Verify the Quantum listener is available on the management address
   ansible.builtin.wait_for:
-    host: 127.0.0.1
+    host: "{{ quantum_bind_ipv4 }}"
     port: 8090
     delay: 1
     timeout: 30
 
 - name: Verify authenticated API remains private
   ansible.builtin.uri:
-    url: http://127.0.0.1:8090/api/users
+    url: http://{{ quantum_bind_ipv4 }}:8090/api/users
     method: GET
     status_code: [401, 403]
     use_proxy: false
@@ -142,16 +147,36 @@
 
 - name: Verify Quantum HTTP health endpoint
   ansible.builtin.uri:
-    url: http://127.0.0.1:8090/health
+    url: http://{{ quantum_bind_ipv4 }}:8090/health
     method: GET
     status_code: 200
     use_proxy: false
   changed_when: false
 
-- name: Report local-only Quantum state
+- name: Verify direct Quantum LAN access from the separate Runner LXC
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/health"
+    method: GET
+    status_code: 200
+    use_proxy: false
+    timeout: 15
+  delegate_to: runner
+  changed_when: false
+
+- name: Verify anonymous Quantum administration is blocked from the LAN
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/api/users"
+    method: GET
+    status_code: [401, 403]
+    use_proxy: false
+    timeout: 15
+  delegate_to: runner
+  changed_when: false
+
+- name: Report direct-LAN Quantum readiness
   ansible.builtin.debug:
     msg:
-      - "QUANTUM=LOCAL_READY on 127.0.0.1:8090 (public Access commissioning follows)"
+      - "QUANTUM=LAN_READY http://{{ quantum_bind_ipv4 }}:8090 (Cloudflare Access commissioned afterwards)"
       - "Full / source with indexing DISABLED"
       - "Initial admin password: retrieve once from root-only systemd journal"
       - "Cloudflare Access is commissioned later in this same PVE task 10"
