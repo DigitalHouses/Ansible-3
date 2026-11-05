@@ -23,7 +23,18 @@ tasks:
       - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "UPS SNMP v3 — Privacy password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Повторяемое подключение DEV через отдельный Semaphore API-токен"
+    description: "Доступ DEV к Semaphore и защищённый Cloudflare Tunnel для веб-интерфейса"
+    survey_vars:
+      - name: DH_SEMAPHORE_CF_ACTION
+        title: "Cloudflare Tunnel для Semaphore"
+        type: enum
+        target: ""
+        required: true
+        default_value: apply
+        values:
+          - {name: "Настроить или проверить туннель", value: apply}
+          - {name: "Проверить без изменений", value: audit}
+          - {name: "Не менять Cloudflare", value: skip}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
     description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, сеть и Cloudflare Access PVE"

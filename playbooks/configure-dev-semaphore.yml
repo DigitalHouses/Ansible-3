@@ -11,6 +11,14 @@
   vars:
     semaphore_api: https://127.0.0.1:3000/api
     semaphore_ca: /etc/semaphore/tls.crt
+    sem_cf_action: "{{ DH_SEMAPHORE_CF_ACTION | default('skip', true) }}"
+    sem_cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
+    sem_cf_api: https://api.cloudflare.com/client/v4
+    sem_cf_tunnel_name: "{{ dev_site_id }}-semaphore"
+    sem_cf_hostname: "{{ dev_site_id }}-semaphore.digitalhouses.vip"
+    sem_cf_headers:
+      Authorization: "Bearer {{ sem_cf_token }}"
+      Accept: application/json
   tasks:
     - name: Read this Runner's site identity
       ansible.builtin.slurp:
@@ -90,6 +98,15 @@
     - name: Keep only the site Runner's IPv4 for the remote smoke check
       ansible.builtin.set_fact:
         dev_runner_ip: "{{ (dev_server_config.content | b64decode | from_json).web_host | regex_replace('^https://|:3000$', '') }}"
+
+    - name: Validate the requested Semaphore Cloudflare action
+      ansible.builtin.assert:
+        that: sem_cf_action in ['skip', 'audit', 'apply']
+        fail_msg: "Invalid task 08 Cloudflare action"
+
+    - name: Commission dedicated Cloudflare Tunnel for Semaphore if requested
+      ansible.builtin.include_tasks: ../tasks/semaphore-cloudflare.yml
+      when: sem_cf_action != 'skip'
 
     - name: Register the existing pinned PVE SSH connection
       ansible.builtin.add_host:
