@@ -83,6 +83,25 @@
     cf_account_id: "{{ exact_zones[0].account.id }}"
     cf_zone_id: "{{ exact_zones[0].id }}"
 
+- name: Audit all zone DNS names using the retired dh prefix
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?per_page=500"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 25
+  register: cf_legacy_dns_inventory
+  changed_when: false
+  no_log: true
+
+- name: Report all existing legacy public DNS names without secrets
+  ansible.builtin.debug:
+    msg:
+      - "DNS_TOTAL={{ cf_legacy_dns_inventory.json.result_info.total_count }}"
+      - "DNS_PAGES={{ cf_legacy_dns_inventory.json.result_info.total_pages }}"
+      - "DH_NAMES={{ cf_legacy_dns_inventory.json.result | map(attribute='name') | select('match', '^dh-') | list }}"
+      - "DH_COUNT={{ cf_legacy_dns_inventory.json.result | map(attribute='name') | select('match', '^dh-') | list | length }}"
+
 - name: Find the existing dedicated site PVE tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&per_page=50"
