@@ -17,17 +17,17 @@
     quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
     ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
-    ups_snmp_mib: "{{ DH_PVE_SNMP_MIB | default('auto', true) }}"
-    ups_brand: "{{ DH_PVE_UPS_BRAND | default('cyberpower', true) }}"
-    ups_model: "{{ DH_PVE_UPS_MODEL | default('', true) }}"
     ups_host: "{{ DH_PVE_UPS_IP | default('', true) }}"
-    ups_snmp_version: "{{ DH_PVE_SNMP_VERSION | default('v3', true) }}"
-    ups_snmp_user: "{{ DH_PVE_SNMP_USERNAME | default('', true) }}"
+    # Optional Variable Group overrides for uncommon SNMP hardware.
+    ups_snmp_version: "{{ DH_PVE_SNMP_VERSION | default('v3' if ups_mode == 'snmp_v3' else 'v2c', true) }}"
+    ups_snmp_mib: "{{ DH_PVE_SNMP_MIB | default('auto', true) }}"
     ups_snmp_auth_protocol: "{{ DH_PVE_SNMP_AUTH_PROTOCOL | default('SHA', true) }}"
     ups_snmp_priv_protocol: "{{ DH_PVE_SNMP_PRIV_PROTOCOL | default('AES', true) }}"
-    ups_community: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_COMMUNITY') }}"
-    ups_auth_pass: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_AUTH_PASSWORD') }}"
-    ups_priv_pass: "{{ lookup('ansible.builtin.env', 'DH_PVE_SNMP_PRIV_PASSWORD') }}"
+    # SNMP credentials are saved by task 05 in Semaphore's native Variable Group.
+    ups_snmp_user: "{{ DH_PVE_SNMP_USERNAME | default('', true) }}"
+    ups_community: "{{ DH_PVE_SNMP_COMMUNITY | default('', true) }}"
+    ups_auth_pass: "{{ DH_PVE_SNMP_AUTH_PASSWORD | default('', true) }}"
+    ups_priv_pass: "{{ DH_PVE_SNMP_PRIV_PASSWORD | default('', true) }}"
     pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
     mqtt_host: "{{ lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST') }}"
     mqtt_user: "{{ lookup('ansible.builtin.env', 'DH_MQTT_USERNAME') }}"
@@ -43,18 +43,19 @@
           - quantum_action in ['install', 'skip']
           - ip_action != 'migrate' or setup_mode == 'apply'
           - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
-          - ups_mode in ['none', 'usb', 'snmp']
+          - ups_mode in ['none', 'usb', 'snmp_v2c', 'snmp_v3']
           - ups_driver in ['auto', 'usbhid-ups', 'nutdrv_qx', 'blazer_usb', 'bcmxcp_usb', 'tripplite_usb', 'snmp-ups']
           - ups_mode != 'usb' or ups_driver != 'snmp-ups'
-          - ups_mode != 'snmp' or ups_driver in ['auto', 'snmp-ups']
+          - ups_mode not in ['snmp_v2c', 'snmp_v3'] or ups_driver in ['auto', 'snmp-ups']
           - ups_snmp_mib in ['auto', 'ietf', 'apcc', 'cyberpower', 'eaton_pw_nm2', 'netvision', 'tripplite']
-          - ups_brand in ['apc', 'cyberpower', 'eaton', 'vertiv', 'tripplite', 'powercom', 'powerwalker', 'ippon', 'delta', 'socomec', 'other']
           - ups_snmp_version in ['v1', 'v2c', 'v3']
           - ups_snmp_auth_protocol in ['SHA', 'SHA256', 'SHA384', 'SHA512']
           - ups_snmp_priv_protocol in ['AES', 'AES192', 'AES256']
           - pve.ipv4 is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
           - pve.node is match('^[a-zA-Z0-9][a-zA-Z0-9-]*$')
-          - ups_mode != 'snmp' or ups_host is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+          - ups_mode not in ['snmp_v2c', 'snmp_v3'] or ups_host is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+          - ups_mode != 'snmp_v3' or ups_snmp_version == 'v3'
+          - ups_mode != 'snmp_v2c' or ups_snmp_version in ['v1', 'v2c']
         fail_msg: Invalid task 10 configuration
     - name: Install standard password SSH transport for initial PVE enrollment
       ansible.builtin.apt:
@@ -222,8 +223,6 @@
         requested_ups_mode: "{{ ups_mode }}"
         requested_ups_driver: "{{ ups_driver }}"
         requested_snmp_mib: "{{ ups_snmp_mib }}"
-        requested_ups_brand: "{{ ups_brand }}"
-        requested_ups_model: "{{ ups_model }}"
         requested_ups_host: "{{ ups_host }}"
         requested_snmp_version: "{{ ups_snmp_version }}"
         requested_snmp_user: "{{ ups_snmp_user }}"
