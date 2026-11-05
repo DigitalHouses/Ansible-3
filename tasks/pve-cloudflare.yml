@@ -244,3 +244,57 @@
            else 'UPDATED') }};
       endpoint={{ desired_origin }};
       shared_tunnel_untouched=true; dns_unchanged=true; access_protected=true
+
+- name: Inspect existing Access apps for the Quantum site hostname
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_access_apps
+  changed_when: false
+  no_log: true
+
+- name: Select existing PVE Access app and Quantum Access app
+  ansible.builtin.set_fact:
+    pve_access_candidates: >-
+      {{ quantum_access_apps.json.result | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', public_hostname) | list }}
+    quantum_access_candidates: >-
+      {{ quantum_access_apps.json.result | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', quantum_public_hostname) | list }}
+
+- name: Inspect existing PVE Access policy as a safe authorization reference
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps/{{ pve_access_candidates[0].id }}/policies?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: pve_access_policies
+  changed_when: false
+  no_log: true
+  when: pve_access_candidates | length == 1
+
+- name: Inspect existing DNS name before advertising Quantum
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ quantum_public_hostname }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: quantum_dns_preflight
+  changed_when: false
+  no_log: true
+
+- name: Report Quantum entrypoint readiness without exposing Access identities
+  ansible.builtin.debug:
+    msg:
+      - "QUANTUM_HOST={{ quantum_public_hostname }}"
+      - "QUANTUM_ACCESS_EXISTING_COUNT={{ quantum_access_candidates | length }}"
+      - "QUANTUM_DNS_EXISTING_COUNT={{ quantum_dns_preflight.json.result | length }}"
+      - "PVE_ACCESS_APP_COUNT={{ pve_access_candidates | length }}"
+      - "PVE_ACCESS_POLICY_COUNT={{ pve_access_policies.json.result | default([]) | length }}"
+      - "PVE_ACCESS_POLICY_DECISIONS={{ pve_access_policies.json.result | default([]) | map(attribute='decision') | list }}"
+      - "PVE_ACCESS_POLICY_IDS={{ pve_access_policies.json.result | default([]) | map(attribute='id') | list }}"
