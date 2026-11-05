@@ -175,16 +175,19 @@
     mode: '0644'
   register: media_filestash_unit
 
+- name: Determine whether the existing Filestash service must be restarted
+  ansible.builtin.set_fact:
+    media_filestash_restart_needed: >-
+      {{ media_filestash_binary.changed or media_filestash_unit.changed
+         or (media_filestash_env_created.changed | default(false))
+         or (media_filestash_config_created.changed | default(false)) }}
+
 - name: Start Filestash with protected admin password already in place
   ansible.builtin.systemd_service:
     name: filestash.service
     enabled: true
     daemon_reload: true
-    state: >-
-      {{ 'restarted' if media_filestash_binary.changed
-         or media_filestash_unit.changed
-         or media_filestash_env_created.changed | default(false)
-         else 'started' }}
+    state: "{{ 'restarted' if media_filestash_restart_needed else 'started' }}"
 
 - name: Authenticate Filestash configuration administrator through native API
   ansible.builtin.uri:

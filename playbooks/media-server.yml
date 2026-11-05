@@ -301,6 +301,9 @@
               - not ((media_guest_qga_hostkey.stdout | from_json)['out-truncated'] | default(false) | bool)
             fail_msg: MEDIA80_QGA_GUEST_SSH_HOSTKEY_UNTRUSTED
 
+        - name: Verify Proxmox portion of built-in task 81 acceptance
+          ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
+
 - name: "80 | Pin the exact guest SSH identity (apply only)"
   hosts: runner
   connection: local
@@ -393,6 +396,16 @@
 
     - name: Publish local media homepage
       ansible.builtin.include_tasks: ../tasks/media-portal-apply.yml
+
+    - name: Run built-in task 81 read-only guest acceptance
+      ansible.builtin.include_tasks: ../tasks/media-accept-guest.yml
+
+    - name: Retain explicit production completion gate pending live acceptance
+      ansible.builtin.fail:
+        msg: >-
+          MEDIA80_APPLY_ACCEPTANCE_PENDING: native password rotation,
+          Plex owner claim and complete live E2E across all six VM/disk modes
+          still require acceptance. Task 80 remains development-only.
 
   handlers:
     - name: Rebuild media initramfs

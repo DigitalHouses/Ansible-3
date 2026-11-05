@@ -248,6 +248,9 @@
       {{ media_jellyfin_item | combine({'path': '/' ~ media_spec.storage.media_dataset
          ~ '/' ~ media_jellyfin_item.subdir}) }}
 
+- name: Verify Intel video decoding and configure only factory Jellyfin QSV defaults
+  ansible.builtin.include_tasks: media-jellyfin-qsv.yml
+
 - name: Remove firstboot Jellyfin LAN restriction after owner authentication
   ansible.builtin.file:
     path: /etc/systemd/system/jellyfin.service.d/90-dh-firstboot-local.conf

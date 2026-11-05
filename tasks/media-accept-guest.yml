@@ -1,0 +1,287 @@
+---
+# Built-in task 81: read-only acceptance after the native app phase.
+# No formatting, provisioning or storage lifecycle operations are permitted here.
+- name: Observe selected media ZFS pool health
+  ansible.builtin.command:
+    argv: [zpool, status, -x, "{{ media_spec.storage.pool_name }}"]
+  register: media80_accept_zpool
+  changed_when: false
+
+- name: Require exact selected ZFS pool to report healthy
+  ansible.builtin.assert:
+    that:
+      - media80_accept_zpool.rc == 0
+      - "'healthy' in media80_accept_zpool.stdout"
+    fail_msg: MEDIA80_ACCEPT_ZFS_POOL_UNHEALTHY
+
+- name: Read all actual ZFS datasets without changing their state
+  ansible.builtin.command:
+    argv: [zfs, list, -H, -o, name]
+  register: media80_accept_datasets
+  changed_when: false
+
+- name: Require every dataset declared in the site repository
+  ansible.builtin.assert:
+    that:
+      - (media_spec.storage.pool_name ~ '/' ~ item) in media80_accept_datasets.stdout_lines
+    fail_msg: MEDIA80_ACCEPT_ZFS_DATASET_MISSING
+  loop: "{{ media_spec.storage.layout.datasets }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Verify managed media root is really mounted from ZFS
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - FSTYPE
+      - -T
+      - "/{{ media_spec.storage.media_dataset }}"
+  register: media80_accept_media_mount
+  changed_when: false
+
+- name: Refuse media root outside the mounted ZFS pool
+  ansible.builtin.assert:
+    that: media80_accept_media_mount.stdout | trim == 'zfs'
+    fail_msg: MEDIA80_ACCEPT_MEDIA_NOT_ON_ZFS
+
+- name: Verify all expected systemd application services actually run
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  register: media80_accept_services
+  changed_when: false
+  failed_when: media80_accept_services.rc != 0 or media80_accept_services.stdout | trim != 'active'
+  loop:
+    - plexmediaserver.service
+    - jellyfin.service
+    - radarr.service
+    - sonarr.service
+    - prowlarr.service
+    - qbittorrent.service
+    - filestash.service
+    - smbd.service
+    - nmbd.service
+    - nginx.service
+    - digitalhouses_plex_agent.service
+    - digitalhouses_plex_agent_gpu_helper.service
+
+- name: Verify every published user-facing local TCP port
+  ansible.builtin.wait_for:
+    host: "{{ media_spec.network.ipv4.split('/')[0] }}"
+    port: "{{ item }}"
+    state: started
+    timeout: 15
+  loop: [80, 32400, 8096, 7878, 8989, 9696, 8080, 8334, 8000]
+  changed_when: false
+
+- name: Check actual local landing page body
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media80_accept_portal
+  changed_when: false
+
+- name: Require all declared client application links on the media homepage
+  ansible.builtin.assert:
+    that:
+      - item in media80_accept_portal.content
+    fail_msg: MEDIA80_ACCEPT_PORTAL_INCOMPLETE
+  loop: [Plex, Jellyfin, Radarr, Sonarr, Prowlarr, qBittorrent, Filestash, Sambee]
+
+- name: Reject unauthorized access to every published Servarr system API
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:{{ item.port }}/api/{{ item.version }}/system/status"
+    follow_redirects: none
+    use_proxy: false
+    status_code: [302, 401, 403]
+    return_content: false
+  loop: "{{ media_arr_releases }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  register: media80_accept_arr_anonymous
+  changed_when: false
+  no_log: true
+
+- name: Require every redirect from unauthenticated Servarr API to be a login
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.status in [401, 403]
+        or (item.status == 302 and 'login' in (item.location | default('') | lower))
+    fail_msg: MEDIA80_ACCEPT_SERVARR_ANONYMOUS_API_EXPOSED
+  loop: "{{ media80_accept_arr_anonymous.results }}"
+  loop_control:
+    label: "{{ item.item.slug }}"
+  no_log: true
+
+- name: Recheck local Jellyfin authentication using stored live API session
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Library/VirtualFolders
+    headers:
+      Authorization: "{{ media_jellyfin_authorization }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media80_accept_jellyfin_libraries
+  changed_when: false
+  no_log: true
+
+- name: Require exact declared Jellyfin libraries and paths
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media80_accept_jellyfin_libraries.json
+         | selectattr('Name', 'equalto', item.name)
+         | selectattr('Locations', 'equalto', [item.path])
+         | list | length) == 1
+    fail_msg: MEDIA80_ACCEPT_JELLYFIN_LIBRARY_MISSING
+  loop:
+    - {name: Movies, path: "/{{ media_spec.storage.media_dataset }}/movies"}
+    - {name: TV Shows, path: "/{{ media_spec.storage.media_dataset }}/tvshows"}
+    - {name: Music, path: "/{{ media_spec.storage.media_dataset }}/music"}
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Verify Plex Scanner's library roots using read-only SQLite CLI
+  ansible.builtin.command:
+    argv:
+      - sqlite3
+      - -readonly
+      - -separator
+      - '|'
+      - >-
+        /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db
+      - >-
+        SELECT sl.root_path,ls.section_type FROM section_locations sl
+        JOIN library_sections ls ON ls.id=sl.library_section_id;
+  become: true
+  become_user: plex
+  register: media80_accept_plex_roots
+  changed_when: false
+
+- name: Require one exact Plex library root of each declared type
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media80_accept_plex_roots.stdout_lines
+         | select('equalto', item.path ~ '|' ~ item.type)
+         | list | length) == 1
+    fail_msg: MEDIA80_ACCEPT_PLEX_LIBRARY_PATH_OR_TYPE_MISSING
+  loop:
+    - {path: "/{{ media_spec.storage.media_dataset }}/movies", type: '1'}
+    - {path: "/{{ media_spec.storage.media_dataset }}/tvshows", type: '2'}
+    - {path: "/{{ media_spec.storage.media_dataset }}/music", type: '8'}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Verify persistent native Plex scan policy and local account claim marker
+  ansible.builtin.slurp:
+    src: >-
+      /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml
+  register: media80_accept_plex_preferences
+  no_log: true
+
+- name: Refuse Plex without a persistent account token and scan policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media80_accept_plex_preferences.content | b64decode
+         | regex_findall('PlexOnlineToken="[^"]{16,}"') | length) == 1
+      - "'FSEventLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+      - "'FSEventLibraryPartialScanEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+      - "'ScheduledLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+      - "'ScheduledLibraryUpdateInterval=\"900\"' in (media80_accept_plex_preferences.content | b64decode)"
+    fail_msg: MEDIA80_ACCEPT_PLEX_ACCOUNT_CLAIM_OR_AUTO_SCAN_MISSING
+  no_log: true
+
+- name: Reject anonymous qBittorrent API access on the LAN IP
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/api/v2/app/preferences"
+    headers:
+      Origin: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080"
+      Referer: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/"
+    status_code: [401, 403]
+    use_proxy: false
+  changed_when: false
+  no_log: true
+
+- name: Reverify the actual owner can log in to LAN qBittorrent
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/api/v2/auth/login"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    headers:
+      Origin: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080"
+      Referer: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media80_accept_qbt_login
+  changed_when: false
+  no_log: true
+
+- name: Require explicit successful owner login, not only HTTP 200
+  ansible.builtin.assert:
+    that: media80_accept_qbt_login.content | trim == 'Ok.'
+    fail_msg: MEDIA80_ACCEPT_QBT_LOGIN_FAILED
+  no_log: true
+
+- name: Reverify Sambee shared owner credentials using the official API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/auth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media80_accept_sambee_login
+  changed_when: false
+  no_log: true
+
+- name: Require authenticated Sambee local owner API token
+  ansible.builtin.assert:
+    that: media80_accept_sambee_login.json.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_ACCEPT_SAMBEE_LOGIN_FAILED
+  no_log: true
+
+- name: Reverify protected Filestash admin session
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8334/admin/api/session
+    method: POST
+    body_format: json
+    body:
+      password: "{{ media_owner_password }}"
+    headers:
+      Accept: application/json
+      X-Requested-With: XmlHttpRequest
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media80_accept_filestash_login
+  changed_when: false
+  no_log: true
+
+- name: Require actual authenticated Filestash admin API session
+  ansible.builtin.assert:
+    that:
+      - media80_accept_filestash_login.json.status | default('') == 'ok'
+      - media80_accept_filestash_login.json.result.access_token | default('') | length >= 16
+    fail_msg: MEDIA80_ACCEPT_FILESTASH_LOGIN_FAILED
+  no_log: true
+
+- name: Prove real SMB owner and administrator access to all four shares
+  ansible.builtin.include_tasks: media-accept-smb.yml
+
+- name: Confirm built-in guest application and storage acceptance
+  ansible.builtin.debug:
+    msg: MEDIA80_ACCEPT_GUEST=PASS

@@ -28,6 +28,9 @@
             value: "{{ item.value }}"
             state: present
             pretty_print: false
+          environment:
+            PYTHONPATH: "{{ lookup('ansible.builtin.env', 'PYTHONPATH') }}"
+            LD_LIBRARY_PATH: "{{ lookup('ansible.builtin.env', 'LD_LIBRARY_PATH') }}"
           loop:
             - {key: FSEventLibraryUpdatesEnabled, value: '1'}
             - {key: FSEventLibraryPartialScanEnabled, value: '1'}

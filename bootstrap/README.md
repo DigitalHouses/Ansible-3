@@ -5,8 +5,11 @@
 Bootstrap выполняет только:
 1. Fresh Debian 13 LXC: CT1231 по умолчанию, hostname `ansible-<site>`,
    IP `<PVE-vmbr0-/24-network>.231`, `onboot=1`, `startup order=2`.
-2. Установку штатного `ansible-core==2.21.4` в LXC и clone
-   `DigitalHouses/Ansible-3` в `/opt/ansible-3`.
+2. Установку штатного `ansible-core==2.21.4` в LXC, clone
+   `DigitalHouses/Ansible-3` в `/opt/ansible-3` и установку
+   закреплённых нативных коллекций из `bootstrap/collections.yml`
+   (`community.general==11.2.1`) в общий каталог
+   `/usr/share/ansible/collections`, доступный Semaphore.
 3. Установку Semaphore `2.20.16-beta9` через Ansible; HTTPS, SQLite,
    отдельный пользователь сервиса.
 4. Передачу IP PVE, имени узла и его публичного CA-сертификата в runner

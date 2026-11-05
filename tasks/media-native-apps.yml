@@ -91,11 +91,5 @@
 - name: Install the existing release-pinned DigitalHouses Plex Agent product
   ansible.builtin.include_tasks: media-native-plex-agent.yml
 
-# Production remains blocked until all functional acceptance and account
-# lifecycle scenarios are verified on a live guest.
-- name: Refuse incomplete media acceptance and unverified firstboot integration
-  ansible.builtin.fail:
-    msg: >-
-      MEDIA80_APPLICATIONS_NOT_COMPLETE: native password rotation,
-      Plex account claim, Jellyfin QSV and complete live E2E acceptance
-      are not yet implemented and accepted in Ansible-3.
+# Keep unresolved acceptance and credential lifecycle blockers in the final
+# playbook gate, after the built-in read-only task 81 checks have run.

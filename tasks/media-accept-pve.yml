@@ -1,0 +1,56 @@
+---
+# Read-only PVE acceptance for exactly this site's VM after native lifecycle.
+- name: Confirm exact declared VM exists on Proxmox
+  ansible.builtin.stat:
+    path: "/etc/pve/qemu-server/{{ media_spec.vmid }}.conf"
+    follow: false
+  register: media80_accept_pve_vm
+
+- name: Refuse foreign or absent VM at PVE acceptance
+  ansible.builtin.assert:
+    that:
+      - media80_accept_pve_vm.stat.isreg | default(false)
+    fail_msg: MEDIA80_ACCEPT_PVE_VM_MISSING
+
+- name: Read current Proxmox VM settings without changing them
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_spec.vmid }}"]
+  register: media80_accept_pve_config
+  changed_when: false
+
+- name: Read VM run status without changing power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_spec.vmid }}"]
+  register: media80_accept_pve_status
+  changed_when: false
+
+- name: Verify VM site identity and two dedicated passthrough devices
+  ansible.builtin.assert:
+    that:
+      - "'name: ' ~ media_spec.name in media80_accept_pve_config.stdout_lines"
+      - "'cores: ' ~ (media_spec.resources.cores | string) in media80_accept_pve_config.stdout_lines"
+      - "'memory: ' ~ (media_spec.resources.memory_mb | string) in media80_accept_pve_config.stdout_lines"
+      - "'balloon: 0' in media80_accept_pve_config.stdout_lines"
+      - >-
+        (media80_accept_pve_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*' ~
+           (media_spec.pci.gpu | regex_escape)) | length) == 1
+      - >-
+        (media80_accept_pve_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*' ~
+           (media_spec.pci.sata_controller | regex_escape)) | length) == 1
+      - media80_accept_pve_status.stdout | trim == 'status: running'
+    fail_msg: MEDIA80_ACCEPT_PVE_VM_CONFIG_DRIFT
+
+- name: Confirm guest agent is responsive through the supported Proxmox CLI
+  ansible.builtin.command:
+    argv: [qm, agent, "{{ media_spec.vmid }}", ping]
+  register: media80_accept_qga_ping
+  changed_when: false
+  retries: 8
+  delay: 3
+  until: media80_accept_qga_ping.rc == 0
+
+- name: Confirm Proxmox phase of task 81 acceptance
+  ansible.builtin.debug:
+    msg: MEDIA80_ACCEPT_PVE=PASS
