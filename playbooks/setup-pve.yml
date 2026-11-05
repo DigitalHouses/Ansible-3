@@ -1,5 +1,6 @@
 ---
-# Task 10 is a host-only operation. It never changes existing VM/LXC, pools, or disks.
+# Task 10 configures only the Proxmox host and its own Cloudflare entrypoint.
+# It never changes existing VM/LXC, pools, or disks.
 # Local inventory is supplied by Semaphore. PVE connection is added dynamically
 # from the public bootstrap identity; SSH trust is pinned during fresh bootstrap.
 - name: 10 - Resolve the trusted Proxmox host
@@ -367,3 +368,34 @@
           - "Quantum: {{ requested_quantum_action }}"
           - "PBS storage and backup jobs: deferred until PBS deployment"
           - "NUT automated shutdown: not armed by task 10"
+
+# This play runs AFTER PVE management IP migration. Runner's pve.yml is
+# re-read here, so Cloudflare receives the new confirmed management address.
+# Existing PVE audit/apply behavior is unaffected when Cloudflare is skipped.
+- name: 10 - Manage the existing Cloudflare entrypoint for Proxmox if requested
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    requested_mode: "{{ DH_PVE_CF_ACTION | default('skip', true) }}"
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
+    cf_api: https://api.cloudflare.com/client/v4
+    cf_zone_name: digitalhouses.vip
+    pve_tunnel_name: "{{ site_id }}-pve"
+    public_hostname: "{{ 'dh-' ~ site_id ~ '-pve.' ~ cf_zone_name }}"
+    desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
+    expected_ca_pool: /etc/cloudflared/dh-pve-ca.pem
+    cf_headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Accept: application/json
+  tasks:
+    - name: Validate the PVE Cloudflare action
+      ansible.builtin.assert:
+        that: requested_mode in ['skip', 'audit', 'apply']
+        fail_msg: "Unknown PVE Cloudflare action"
+    - name: Audit or update existing PVE Cloudflare tunnel using native Ansible
+      ansible.builtin.include_tasks: ../tasks/pve-cloudflare.yml
+      when: requested_mode != 'skip'

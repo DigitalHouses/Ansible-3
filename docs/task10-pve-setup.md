@@ -153,3 +153,32 @@ PBS storage и 2 штатных PVE backup jobs (local/cloud) только
 после PBS развёртывания. Cloudflare Access для PVE/Quantum,
 HAOS/Mosquitto deployment, NUT shutdown commissioning —
 отдельные задачи, не должны запускаться побочно.
+
+## Cloudflare Access для PVE — часть №10
+
+Управление выделенным туннелем `<site_id>-pve` включено в №10, отдельной
+задачи для PVE Cloudflare больше нет. В Survey `DH_PVE_CF_ACTION`:
+
+- `skip` (по умолчанию) — ничего не читать/не менять в Cloudflare, предыдущие
+  сценарии настройки PVE остаются прежними.
+- `audit` — read-only проверка существующих dedicated Tunnel, DNS CNAME,
+  Access challenge и HTTPS origin с закреплённым PVE CA.
+- `apply` — изменение **только** origin существующего dedicated Tunnel на
+  фактический IP PVE из `/etc/digitalhouses/pve.yml` Runner, с проверками
+  TLS, Access и повторным чтением Cloudflare API. Публичный адрес:
+  `dh-<site_id>-pve.digitalhouses.vip`.
+
+Этап Cloudflare выполняется **после** настройки PVE и возможной миграции
+management IP. Старый site Tunnel, DNS-записи, Access policies, система PVE,
+гости и другие маршруты не меняются. Новый Tunnel здесь не создаётся:
+первоначальное provisioning — будущий сценарий №10, требующий согласования.
+№05 продолжает хранить токен Cloudflare в native Variable Group.
+
+Ранее отдельный шаблон Semaphore `40-Cloudflare: PVE` выведен из каталога.
+Его исторические запуски #40–#43 не заменяют живую проверку новой №10.
+
+Исторический шаблон Semaphore ID 7 не удалять автоматически:
+сохранение журналов задач #40–#43 важнее удаления записи из UI.
+Шаблон переименован в архивный, его старый playbook оставлен как
+безопасный `fail` с указанием №10; никаких Cloudflare-изменений он
+больше не выполняет. В новом каталоге №40 отсутствует.

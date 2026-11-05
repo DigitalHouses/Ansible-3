@@ -24,22 +24,9 @@ tasks:
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
     description: "Повторяемое подключение DEV через отдельный Semaphore API-токен"
-  - name: "40-Cloudflare: PVE"
-    playbook: playbooks/cloudflare-pve.yml
-    description: "Проверить или обновить origin уже существующего Cloudflare Tunnel для PVE"
-    survey_vars:
-      - name: DH_CF_PVE_MODE
-        title: "Cloudflare PVE — действие"
-        type: enum
-        target: ""
-        required: true
-        default_value: audit
-        values:
-          - {name: "Аудит — без изменений", value: audit}
-          - {name: "Обновить origin на текущий IP PVE", value: apply}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
-    description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, безопасная миграция IP"
+    description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, сеть и Cloudflare Access PVE"
     survey_vars:
       - name: DH_PVE_MODE
         title: "Режим №10"
@@ -78,6 +65,16 @@ tasks:
           - {name: "Оставить существующий IP", value: keep}
           - {name: "Сменить IP с автоматическим rollback", value: migrate}
       - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (для migrate, например 192.168.11.230)", type: "", target: "", required: false, values: []}
+      - name: DH_PVE_CF_ACTION
+        title: "Cloudflare Access к PVE"
+        type: enum
+        target: ""
+        required: true
+        default_value: skip
+        values:
+          - {name: "Не менять Cloudflare", value: skip}
+          - {name: "Проверить туннель и Access", value: audit}
+          - {name: "Обновить PVE origin на текущий IP", value: apply}
       - name: DH_PVE_QUANTUM
         title: "FileBrowser Quantum"
         type: enum
