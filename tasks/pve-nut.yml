@@ -1,5 +1,5 @@
 ---
-- name: Choose one NUT driver for the selected connection type
+- name: Choose the native NUT driver for the selected connection
   ansible.builtin.set_fact:
     nut_selected_driver: >-
       {{ ('usbhid-ups' if requested_ups_mode == 'usb' else 'snmp-ups')
@@ -11,54 +11,42 @@
   register: nut_previous
   no_log: true
 
-- name: Extract previously managed credentials for repeat application
-  ansible.builtin.set_fact:
-    nut_old: "{{ nut_previous.content | b64decode }}"
-  no_log: true
-
-- name: Refuse to overwrite a manually configured ups device
-  ansible.builtin.assert:
-    that: "'[ups]' not in nut_old or '# BEGIN ANSIBLE MANAGED BLOCK - DigitalHouses UPS' in nut_old"
-    fail_msg: "An unmanaged [ups] stanza exists; refusing to overwrite it"
-
-- name: Preserve submitted or previously configured SNMP secrets
-  ansible.builtin.set_fact:
-    nut_community: >-
-      {{ requested_ups_community if requested_ups_community | length else
-         (nut_old | regex_findall('(?m)^\\s*community\\s*=\\s*(.+)$') | first | default('')) }}
-    nut_auth: >-
-      {{ requested_ups_auth_pass if requested_ups_auth_pass | length else
-         (nut_old | regex_findall('(?m)^\\s*authPassword\\s*=\\s*(.+)$') | first | default('')) }}
-    nut_priv: >-
-      {{ requested_ups_priv_pass if requested_ups_priv_pass | length else
-         (nut_old | regex_findall('(?m)^\\s*privPassword\\s*=\\s*(.+)$') | first | default('')) }}
-  no_log: true
-
-- name: Validate NUT transport before changing any configuration
+- name: Refuse to overwrite a manually configured UPS device
   ansible.builtin.assert:
     that:
-      - requested_ups_model is not search('[\\r\\n]')
-      - requested_snmp_user is not search('[\\r\\n\\s]')
-      - requested_ups_mode != 'snmp' or requested_ups_host | length > 0
+      - "'[ups]' not in (nut_previous.content | b64decode) or '# BEGIN ANSIBLE MANAGED BLOCK - DigitalHouses UPS' in (nut_previous.content | b64decode)"
+    fail_msg: "An unmanaged [ups] stanza exists; refusing to overwrite it"
+
+- name: Require network UPS credentials from task 05 before writing configuration
+  ansible.builtin.assert:
+    that:
+      - requested_ups_mode != 'snmp_v2c' or requested_ups_community | length > 0
       - >-
-        requested_ups_mode != 'snmp' or requested_snmp_version == 'v3' or
-        (nut_community | length > 0 and nut_community is not search('[\\r\\n]'))
-      - >-
-        requested_ups_mode != 'snmp' or requested_snmp_version != 'v3' or
-        (requested_snmp_user | length > 0 and nut_auth | length >= 8 and nut_priv | length >= 8)
-      - nut_auth is not search('[\\r\\n]')
-      - nut_priv is not search('[\\r\\n]')
-    fail_msg: "SNMP credentials or UPS address missing; provide them in task 10 Survey"
+        requested_ups_mode != 'snmp_v3' or
+        (requested_snmp_user | length > 0 and
+         requested_ups_auth_pass | length >= 8 and
+         requested_ups_priv_pass | length >= 8)
+    fail_msg: "Missing SNMP credentials. Enter community (v2c) or username/Auth/Privacy (v3) in task 05 first."
+    quiet: true
+
+- name: Reject invalid SNMP credential characters
+  ansible.builtin.assert:
+    that:
+      - requested_snmp_user is not search('[\r\n\s]')
+      - requested_ups_community is not search('[\r\n]')
+      - requested_ups_auth_pass is not search('[\r\n]')
+      - requested_ups_priv_pass is not search('[\r\n]')
+    fail_msg: "SNMP credentials contain unsupported control characters"
   no_log: true
 
 - name: Configure NUT standalone mode
   ansible.builtin.lineinfile:
     path: /etc/nut/nut.conf
-    regexp: '^\\s*MODE\\s*='
+    regexp: '^\s*MODE\s*='
     line: MODE=standalone
   register: nut_mode_changed
 
-- name: Configure selected NUT driver and protocol
+- name: Configure NUT driver and protocol
   ansible.builtin.blockinfile:
     path: /etc/nut/ups.conf
     marker: '# {mark} ANSIBLE MANAGED BLOCK - DigitalHouses UPS'
@@ -66,19 +54,19 @@
       [ups]
           driver = {{ nut_selected_driver }}
           port = {{ 'auto' if requested_ups_mode == 'usb' else requested_ups_host }}
-          desc = DigitalHouses {{ requested_ups_brand }} {{ requested_ups_model }}
-      {% if requested_ups_mode == 'snmp' %}
+          desc = DigitalHouses UPS
+      {% if requested_ups_mode != 'usb' %}
           mibs = {{ requested_snmp_mib }}
           snmp_version = {{ requested_snmp_version }}
       {% if requested_snmp_version in ['v1', 'v2c'] %}
-          community = {{ nut_community }}
+          community = {{ requested_ups_community }}
       {% else %}
           secLevel = authPriv
           secName = {{ requested_snmp_user }}
           authProtocol = {{ requested_snmp_auth_protocol }}
           privProtocol = {{ requested_snmp_priv_protocol }}
-          authPassword = {{ nut_auth }}
-          privPassword = {{ nut_priv }}
+          authPassword = {{ requested_ups_auth_pass }}
+          privPassword = {{ requested_ups_priv_pass }}
       {% endif %}
       {% endif %}
     owner: root
@@ -103,8 +91,8 @@
   delay: 2
   until: nut_status.rc == 0
 
-- name: Report UPS driver readiness (no FSD or shutdown operation)
+- name: Report UPS readiness without enabling automated shutdown
   ansible.builtin.debug:
     msg: >-
-      NUT=PASS, transport={{ requested_ups_mode }}, driver={{ nut_selected_driver }},
-      manufacturer={{ requested_ups_brand }}, status={{ nut_status.stdout }}
+      NUT=PASS, connection={{ requested_ups_mode }}, driver={{ nut_selected_driver }},
+      status={{ nut_status.stdout }}
