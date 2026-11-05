@@ -31,24 +31,30 @@
         fail_msg: "Task 40 needs the existing site, PVE endpoint and Cloudflare token from task 05"
       no_log: true
 
-    - name: Prove the actual PVE HTTPS origin using its trusted CA
-      ansible.builtin.uri:
-        url: "{{ desired_origin }}/api2/json/access/domains"
-        method: GET
-        ca_path: "{{ pve.ca_file }}"
-        validate_certs: true
-        use_proxy: false
-        status_code: 200
-        return_content: true
-        timeout: 15
+    - name: Prove actual PVE HTTPS origin with the pinned CA using curl
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --silent
+          - --show-error
+          - --fail-with-body
+          - --noproxy
+          - "*"
+          - --cacert
+          - "{{ pve.ca_file }}"
+          - --connect-timeout
+          - "5"
+          - --max-time
+          - "15"
+          - "{{ desired_origin }}/api2/json/access/domains"
       register: pve_origin_check
       changed_when: false
 
     - name: Refuse unknown origin responses
       ansible.builtin.assert:
         that:
-          - pve_origin_check.json.data is defined
-          - pve_origin_check.json.data is sequence
+          - (pve_origin_check.stdout | from_json).data is defined
+          - (pve_origin_check.stdout | from_json).data is sequence
         fail_msg: "PVE origin did not return its expected unauthenticated API structure"
 
     - name: Require pre-existing Cloudflare Access challenge on this public name
