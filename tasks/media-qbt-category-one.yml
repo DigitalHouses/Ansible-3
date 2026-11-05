@@ -1,0 +1,64 @@
+---
+# Reconcile one qBittorrent category using its official local WebAPI.
+- name: Read current qBittorrent categories from loopback
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/torrents/categories
+    status_code: 200
+    return_content: true
+    use_proxy: false
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+  register: media_qbt_categories_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse changing an existing category's download destination
+  ansible.builtin.assert:
+    that:
+      - media_qbt_categories_before.json is mapping
+      - >-
+        media_qbt_category.name not in media_qbt_categories_before.json
+        or (media_qbt_categories_before.json[media_qbt_category.name].savePath | regex_replace('/+$', ''))
+        == media_qbt_category.path
+    fail_msg: MEDIA80_QBT_CATEGORY_EXISTING_PATH_CONFLICT
+  no_log: true
+
+- name: Create only absent qBittorrent category through native API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/torrents/createCategory
+    method: POST
+    body_format: form-urlencoded
+    body:
+      category: "{{ media_qbt_category.name }}"
+      savePath: "{{ media_qbt_category.path }}"
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    use_proxy: false
+  when: media_qbt_category.name not in media_qbt_categories_before.json
+  no_log: true
+
+- name: Confirm actual qBittorrent category path after native API call
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/torrents/categories
+    status_code: 200
+    return_content: true
+    use_proxy: false
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+  register: media_qbt_categories_after
+  changed_when: false
+  no_log: true
+
+- name: Require the qBittorrent category is mapped to the right ZFS folder
+  ansible.builtin.assert:
+    that:
+      - media_qbt_category.name in media_qbt_categories_after.json
+      - >-
+        (media_qbt_categories_after.json[media_qbt_category.name].savePath | regex_replace('/+$', ''))
+        == media_qbt_category.path
+    fail_msg: MEDIA80_QBT_CATEGORY_NOT_VERIFIED
+  no_log: true

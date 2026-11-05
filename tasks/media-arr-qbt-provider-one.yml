@@ -1,0 +1,178 @@
+---
+# Ensure one DigitalHouses qBittorrent download client in one native Arr app.
+- name: Set desired qBittorrent provider fields for this installed Servarr app
+  ansible.builtin.set_fact:
+    media_wire_qbt_fields_wanted: >-
+      {{ {
+        'host': '127.0.0.1', 'port': 8080, 'useSsl': false,
+        'username': '', 'password': ''
+      } | combine({
+        ('movieCategory' if media_wire_arr.slug == 'radarr'
+          else 'tvCategory' if media_wire_arr.slug == 'sonarr'
+          else 'category'):
+        ('radarr' if media_wire_arr.slug == 'radarr'
+          else 'tv-sonarr' if media_wire_arr.slug == 'sonarr'
+          else 'prowlarr')
+      }) }}
+  no_log: true
+
+- name: List installed native download clients before reconciliation
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/downloadclient"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_clients_before
+  changed_when: false
+  no_log: true
+
+- name: Select only this site's named qBittorrent download client
+  ansible.builtin.set_fact:
+    media_wire_managed_clients: >-
+      {{ media_wire_clients_before.json
+         | selectattr('name', 'equalto', 'DigitalHouses qBittorrent')
+         | list }}
+  no_log: true
+
+- name: Refuse duplicate or unexpected application download-client ownership
+  ansible.builtin.assert:
+    that:
+      - media_wire_clients_before.json is sequence
+      - media_wire_managed_clients | length <= 1
+      - >-
+        media_wire_managed_clients | length == 0
+        or media_wire_managed_clients[0].implementation == 'QBittorrent'
+    fail_msg: MEDIA80_ARR_QBT_CLIENT_CONFLICT
+  no_log: true
+
+- name: Extract existing managed qBittorrent settings for drift detection
+  ansible.builtin.set_fact:
+    media_wire_existing_qbt_fields: >-
+      {{ media_wire_managed_clients[0].fields
+         | items2dict(key_name='name', value_name='value') }}
+  when: media_wire_managed_clients | length == 1
+  no_log: true
+
+- name: Preserve existing qBittorrent provider without rewriting its credentials
+  ansible.builtin.assert:
+    that:
+      - item.key in media_wire_existing_qbt_fields
+      - media_wire_existing_qbt_fields[item.key] == item.value
+    fail_msg: MEDIA80_ARR_MANAGED_QBT_PROVIDER_DRIFT
+  loop: "{{ media_wire_qbt_fields_wanted | dict2items }}"
+  when: media_wire_managed_clients | length == 1
+  no_log: true
+
+- name: Fetch live native QBittorrent provider schema for a missing client
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/downloadclient/schema"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_client_schemas
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Find the exact upstream qBittorrent provider schema
+  ansible.builtin.set_fact:
+    media_wire_qbt_schemas: >-
+      {{ media_wire_client_schemas.json
+         | selectattr('implementation', 'equalto', 'QBittorrent')
+         | list }}
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Require exactly one supported native QBittorrent schema and all fields
+  ansible.builtin.assert:
+    that:
+      - media_wire_qbt_schemas | length == 1
+      - >-
+        (media_wire_qbt_fields_wanted.keys() | list |
+         difference(media_wire_qbt_schemas[0].fields
+         | map(attribute='name') | list) | length) == 0
+    fail_msg: MEDIA80_ARR_QBT_PROVIDER_SCHEMA_INCOMPATIBLE
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Reset native QBittorrent form fields for this application
+  ansible.builtin.set_fact:
+    media_wire_client_fields: []
+  when: media_wire_managed_clients | length == 0
+
+- name: Populate only known fields on native QBittorrent provider schema
+  ansible.builtin.set_fact:
+    media_wire_client_fields: >-
+      {{ media_wire_client_fields +
+         [item | combine({'value': media_wire_qbt_fields_wanted[item.name]})
+         if item.name in media_wire_qbt_fields_wanted else item] }}
+  loop: >-
+    {{ media_wire_qbt_schemas[0].fields
+       if media_wire_managed_clients | length == 0 else [] }}
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Prepare a native Arr download-client payload for only the absent provider
+  ansible.builtin.set_fact:
+    media_wire_qbt_payload: >-
+      {{ media_wire_qbt_schemas[0] | combine({
+        'name': 'DigitalHouses qBittorrent',
+        'enable': true,
+        'priority': 1,
+        'tags': [],
+        'fields': media_wire_client_fields
+      }) }}
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Test the native QBittorrent provider before creation
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/downloadclient/test"
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    body_format: json
+    body: "{{ media_wire_qbt_payload }}"
+    status_code: 200
+    use_proxy: false
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Create only the missing tested qBittorrent provider in native Arr
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/downloadclient"
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    body_format: json
+    body: "{{ media_wire_qbt_payload }}"
+    status_code: [200, 201]
+    use_proxy: false
+  when: media_wire_managed_clients | length == 0
+  no_log: true
+
+- name: Read back effective native Arr download clients
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/downloadclient"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_clients_after
+  changed_when: false
+  no_log: true
+
+- name: Require exactly one managed qBittorrent provider after installation
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_wire_clients_after.json
+         | selectattr('name', 'equalto', 'DigitalHouses qBittorrent')
+         | selectattr('implementation', 'equalto', 'QBittorrent')
+         | list | length) == 1
+    fail_msg: MEDIA80_ARR_QBT_PROVIDER_NOT_VERIFIED
+  no_log: true

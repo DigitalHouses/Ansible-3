@@ -58,3 +58,11 @@
   ansible.builtin.command:
     argv: [runuser, -u, plex, --, test, -r, "/{{ media_spec.storage.media_dataset }}/movies"]
   changed_when: false
+
+- name: Configure native Plex automatic scanning and declared libraries
+  ansible.builtin.include_tasks: media-plex-library-scan.yml
+  vars:
+    media_plex_prefs: >-
+      /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml
+    media_plex_db: >-
+      /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db

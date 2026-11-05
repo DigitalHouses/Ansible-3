@@ -1,0 +1,57 @@
+---
+- name: Test native Plex XML policy reconciliation without a Plex server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Make disposable Plex XML test directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: media80-plex-xml-
+      register: media_plex_fixture
+
+    - name: Apply safe XML attribute mutations and read back the result
+      block:
+        - name: Create a fake Plex preference XML containing an account token
+          ansible.builtin.copy:
+            dest: "{{ media_plex_fixture.path }}/Preferences.xml"
+            mode: '0600'
+            content: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <Preferences PlexOnlineToken="fixture-do-not-publish" FSEventLibraryUpdatesEnabled="0"/>
+
+        - name: Set only native Plex library scan attributes using Ansible XML
+          community.general.xml:
+            path: "{{ media_plex_fixture.path }}/Preferences.xml"
+            xpath: /Preferences
+            attribute: "{{ item.key }}"
+            value: "{{ item.value }}"
+            state: present
+            pretty_print: false
+          loop:
+            - {key: FSEventLibraryUpdatesEnabled, value: '1'}
+            - {key: FSEventLibraryPartialScanEnabled, value: '1'}
+            - {key: ScheduledLibraryUpdatesEnabled, value: '1'}
+            - {key: ScheduledLibraryUpdateInterval, value: '900'}
+          no_log: true
+
+        - name: Check no existing Plex identity was altered
+          ansible.builtin.slurp:
+            src: "{{ media_plex_fixture.path }}/Preferences.xml"
+          register: media_plex_fixture_result
+          no_log: true
+
+        - name: Require both scan policies and the existing token are retained
+          ansible.builtin.assert:
+            that:
+              - "'PlexOnlineToken=\"fixture-do-not-publish\"' in (media_plex_fixture_result.content | b64decode)"
+              - "'FSEventLibraryUpdatesEnabled=\"1\"' in (media_plex_fixture_result.content | b64decode)"
+              - "'FSEventLibraryPartialScanEnabled=\"1\"' in (media_plex_fixture_result.content | b64decode)"
+              - "'ScheduledLibraryUpdatesEnabled=\"1\"' in (media_plex_fixture_result.content | b64decode)"
+              - "'ScheduledLibraryUpdateInterval=\"900\"' in (media_plex_fixture_result.content | b64decode)"
+          no_log: true
+      always:
+        - name: Remove only the temporary Plex XML test directory
+          ansible.builtin.file:
+            path: "{{ media_plex_fixture.path }}"
+            state: absent

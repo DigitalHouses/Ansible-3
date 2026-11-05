@@ -1,0 +1,43 @@
+---
+# Read an application-generated API key from the existing Servarr native XML.
+- name: Inspect application's native Servarr config.xml
+  ansible.builtin.stat:
+    path: "/var/lib/{{ media_wire_arr.slug }}/config.xml"
+    follow: false
+  register: media_wire_arr_config_stat
+  no_log: true
+
+- name: Refuse foreign Servarr configuration while wiring apps
+  ansible.builtin.assert:
+    that:
+      - media_wire_arr_config_stat.stat.isreg | default(false)
+      - not media_wire_arr_config_stat.stat.islnk | default(false)
+      - media_wire_arr_config_stat.stat.pw_name == media_wire_arr.slug
+    fail_msg: MEDIA80_ARR_CONFIG_UNSAFE
+  no_log: true
+
+- name: Read existing native API key without printing the XML
+  ansible.builtin.slurp:
+    src: "/var/lib/{{ media_wire_arr.slug }}/config.xml"
+  register: media_wire_config_xml
+  no_log: true
+
+- name: Extract exactly one upstream API key for the installed Servarr app
+  ansible.builtin.set_fact:
+    media_wire_arr_key_matches: >-
+      {{ media_wire_config_xml.content | b64decode
+         | regex_findall('<ApiKey>([a-zA-Z0-9]{24,})</ApiKey>') }}
+  no_log: true
+
+- name: Reject missing or duplicate native Servarr API keys
+  ansible.builtin.assert:
+    that: media_wire_arr_key_matches | length == 1
+    fail_msg: MEDIA80_ARR_API_KEY_NOT_AVAILABLE
+  no_log: true
+
+- name: Hold the application-generated key only in protected Ansible memory
+  ansible.builtin.set_fact:
+    media_wire_arr_keys: >-
+      {{ media_wire_arr_keys | default({})
+         | combine({media_wire_arr.slug: media_wire_arr_key_matches[0]}) }}
+  no_log: true

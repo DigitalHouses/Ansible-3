@@ -1,0 +1,75 @@
+---
+# Future imports only. Do not rename any existing media files or folders.
+- name: Read native Arr naming settings for future imports
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/config/naming"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_naming_before
+  changed_when: false
+  no_log: true
+
+- name: Choose the application's native future-import name and switch field
+  ansible.builtin.set_fact:
+    media_wire_name_switch: "{{ 'renameMovies' if media_wire_arr.slug == 'radarr' else 'renameEpisodes' }}"
+    media_wire_name_format: "{{ 'standardMovieFormat' if media_wire_arr.slug == 'radarr' else 'standardEpisodeFormat' }}"
+
+- name: Refuse missing or foreign future-import naming templates
+  ansible.builtin.assert:
+    that:
+      - media_wire_naming_before.json.id | int > 0
+      - media_wire_naming_before.json[media_wire_name_switch] is boolean
+      - media_wire_naming_before.json[media_wire_name_format] | length > 0
+      - >-
+        (media_wire_arr.slug == 'radarr'
+         and ('{Movie Title}' in media_wire_naming_before.json[media_wire_name_format]
+         or '{Movie CleanTitle}' in media_wire_naming_before.json[media_wire_name_format])
+         and '{Release Year}' in media_wire_naming_before.json[media_wire_name_format])
+        or
+        (media_wire_arr.slug == 'sonarr'
+         and '{season:00}' in media_wire_naming_before.json[media_wire_name_format]
+         and '{episode:00}' in media_wire_naming_before.json[media_wire_name_format])
+    fail_msg: MEDIA80_ARR_FUTURE_IMPORT_NAMING_DRIFT
+  no_log: true
+
+- name: Enable approved Plex-compatible naming for future Arr imports only
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/config/naming/{{ media_wire_naming_before.json.id }}
+    method: PUT
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    body_format: json
+    body: >-
+      {{ media_wire_naming_before.json
+         | combine({media_wire_name_switch: true}) }}
+    status_code: 200
+    use_proxy: false
+  when: not media_wire_naming_before.json[media_wire_name_switch] | bool
+  no_log: true
+
+- name: Read back future-import naming policy without changing existing files
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/config/naming"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_naming_after
+  changed_when: false
+  no_log: true
+
+- name: Require only the switch changed, not the user's naming template
+  ansible.builtin.assert:
+    that:
+      - media_wire_naming_after.json.id == media_wire_naming_before.json.id
+      - media_wire_naming_after.json[media_wire_name_switch] | bool
+      - >-
+        media_wire_naming_after.json[media_wire_name_format]
+        == media_wire_naming_before.json[media_wire_name_format]
+    fail_msg: MEDIA80_ARR_FUTURE_NAMING_NOT_VERIFIED
+  no_log: true

@@ -20,6 +20,8 @@
       network: {ipv4: 192.168.11.232/24}
       storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
       downloads: {path: /serzhan-pool/media/downloads}
+      plex_agent:
+        mqtt: {host: 127.0.0.1, port: 1883, username: fixture, password: fake-fixture-only}
       discovery: {workgroup: WORKGROUP, netbios_name: MEDIA-SERZHAN}
       file_access:
         accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
@@ -67,6 +69,7 @@
             - {name: media-sambee-config.toml.j2, slug: sambee, port: 8000}
             - {name: media-portal.html.j2, slug: portal, port: 80}
             - {name: media-smb.conf.j2, slug: samba, port: 445}
+            - {name: digitalhouses-plex-agent.conf.j2, slug: plex-agent, port: 1883}
 
         - name: Inspect rendered native Filestash firstboot JSON
           ansible.builtin.set_fact:
@@ -83,6 +86,10 @@
               - "'[DigitalHouses]' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-smb.conf.j2')"
               - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - >-
+                'topic_prefix = DigitalHouses/Global/digitalhouses_plex_agent'
+                in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
               - "'127.0.0.1:8000:8000' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-compose.yml.j2')"
               - "'username = \"serzhan\"' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-config.toml.j2')"
               - media_filestash_fixture.general.secret_key == 'abcdef1234567890'

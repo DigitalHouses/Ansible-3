@@ -85,11 +85,17 @@
   ansible.builtin.include_tasks: media-native-sambee.yml
   when: media_spec.applications.sambee | bool
 
-# Plex Agent, media library commissioning and integrations remain unresolved.
-# Fail closed even if the top-level apply gate is removed.
-- name: Refuse incomplete media applications and integration acceptance
+- name: Reconcile native Arr and qBittorrent API integration
+  ansible.builtin.include_tasks: media-arr-wire.yml
+
+- name: Install the existing release-pinned DigitalHouses Plex Agent product
+  ansible.builtin.include_tasks: media-native-plex-agent.yml
+
+# Production remains blocked until all functional acceptance and account
+# lifecycle scenarios are verified on a live guest.
+- name: Refuse incomplete media acceptance and unverified firstboot integration
   ansible.builtin.fail:
     msg: >-
-      MEDIA80_APPLICATIONS_NOT_COMPLETE: Plex Agent, Plex library
-      provisioning, media integration and native password rotation
+      MEDIA80_APPLICATIONS_NOT_COMPLETE: native password rotation,
+      Plex account claim, Jellyfin QSV and complete live E2E acceptance
       are not yet implemented and accepted in Ansible-3.
