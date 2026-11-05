@@ -60,7 +60,7 @@
   ansible.builtin.set_fact:
     cf_target_candidate: >-
       {{ (hostname_dns_preflight.results[0].json.result | first | default({})).content
-         | default('') | regex_replace('\\.cfargotunnel\\.com$', '') }}
+         | default('') | split('.cfargotunnel.com') | first }}
 
 - name: Read the existing target tunnel metadata before considering DNS replacement
   ansible.builtin.uri:
