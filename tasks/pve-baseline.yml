@@ -43,11 +43,18 @@
     state: present
   when: requested_ups_mode != 'none'
 
+- name: Remove invalid Bonjour setting left in the rlimits section by older task 10
+  ansible.builtin.replace:
+    path: /etc/avahi/avahi-daemon.conf
+    regexp: '(?m)(^\[rlimits\]\n(?:(?!^\[)[^\n]*\n)*?)^publish-workstation=yes(?:\n|$)'
+    replace: '\1'
+  register: avahi_repair
+
 - name: Advertise the Proxmox workstation via Bonjour
   ansible.builtin.lineinfile:
     path: /etc/avahi/avahi-daemon.conf
-    regexp: '^\\s*#?\\s*publish-workstation\\s*='
-    insertafter: '^\\[publish\\]$'
+    regexp: '^#?publish-workstation='
+    insertafter: '^\[publish\]$'
     line: publish-workstation=yes
   register: avahi_conf
 
@@ -55,7 +62,7 @@
   ansible.builtin.systemd_service:
     name: avahi-daemon.service
     enabled: true
-    state: "{{ 'restarted' if avahi_conf.changed else 'started' }}"
+    state: "{{ 'restarted' if avahi_conf.changed or avahi_repair.changed else 'started' }}"
 
 - name: Optionally upgrade PVE packages without rebooting
   ansible.builtin.apt:
