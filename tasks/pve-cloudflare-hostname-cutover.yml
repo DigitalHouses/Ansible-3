@@ -135,8 +135,8 @@
       - canonical_site.site.owner_slug | lower in (cf_target_tunnel_metadata.json.result.name | lower)
       - cf_owner_pve_ingress | length == 1
       - cf_owner_quantum_ingress | length == 1
-      - cf_owner_pve_ingress[0].service is match('^https://[0-9.]+:8006$')
-      - cf_owner_quantum_ingress[0].service is match('^http://[0-9.]+:8090$')
+      - cf_owner_pve_ingress[0].service == 'https://192.168.11.30:8006'
+      - cf_owner_quantum_ingress[0].service == 'http://192.168.11.30:8080'
       - cf_target_candidate is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
     fail_msg: "Canonical names belong to a foreign/live tunnel, refusing reassignment"
   when:
