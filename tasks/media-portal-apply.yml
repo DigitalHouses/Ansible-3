@@ -1,0 +1,58 @@
+---
+- name: Prepare local media portal document root
+  ansible.builtin.file:
+    path: /var/www/dh-media-portal
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Publish owner-facing media service directory
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
+    dest: /var/www/dh-media-portal/index.html
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install minimal LAN-only nginx virtual host
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-portal-nginx.conf.j2"
+    dest: /etc/nginx/sites-available/default
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_portal_nginx
+
+- name: Verify nginx syntax before reloading
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false
+
+- name: Enable media homepage on port 80
+  ansible.builtin.systemd_service:
+    name: nginx.service
+    enabled: true
+    state: "{{ 'restarted' if media_portal_nginx.changed else 'started' }}"
+
+- name: Verify portal responds with a successful HTML page
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    return_content: true
+    status_code: 200
+  register: media_portal_response
+  changed_when: false
+
+- name: Verify portal lists every configured application
+  ansible.builtin.assert:
+    that:
+      - "'DigitalHouses' in media_portal_response.content"
+      - "'Plex' in media_portal_response.content"
+      - not media_spec.applications.jellyfin | default(false) or 'Jellyfin' in media_portal_response.content
+      - not media_spec.applications.radarr | default(false) or 'Radarr' in media_portal_response.content
+      - not media_spec.applications.sonarr | default(false) or 'Sonarr' in media_portal_response.content
+      - not media_spec.applications.prowlarr | default(false) or 'Prowlarr' in media_portal_response.content
+      - not media_spec.applications.qbittorrent | default(false) or 'qBittorrent' in media_portal_response.content
+      - not media_spec.applications.filestash | default(false) or 'Filestash' in media_portal_response.content
+      - not media_spec.applications.sambee | default(false) or 'Sambee' in media_portal_response.content
+    fail_msg: MEDIA80_PORTAL_MISSING_SERVICE_LINKS

@@ -34,7 +34,13 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 
 ## Реализовано в ветке
 
-playbooks/media-server.yml в режиме audit: читает оба приватных manifest через токен №05, сверяет site/name/VMID/PCI, подключается к PVE по закреплённому SSH №10, читает VM configuration/status, наличие GPU/SATA и чужую привязку SATA. Возвращает MEDIA80_AUDIT_ONLY. Apply жёстко остановлен **до PVE**. Каталог Semaphore пока не меняется.
+- Режим audit: читает оба приватных manifest через токен №05, сверяет site/name/VMID/PCI, подключается к PVE по закреплённому SSH №10, читает VM configuration/status, наличие GPU/SATA и чужую привязку SATA. Возвращает MEDIA80_AUDIT_ONLY.
+- Подготовленный apply-контур (пока недостижим): нативный qm lifecycle для keep/create/recreate, первичный cloud-init/QGA, сверка ED25519 через QGA и SSH, SATA vendor/device/class, native ZFS import/erase, datasets, native ZFS boot, QGA/GPU/ARC/swap. Отказ при чужой VM, controller или неверном ZFS. В отличие от старой версии, qm destroy не включает purge backup jobs.
+- Гостевая часть (пока недостижима): два POSIX/Samba пользователя из site-repo, пароль на ZFS (генерируется только при отсутствии, сохраняется при повторах), четыре закрытых SMB share, Bonjour, базовая локальная страница на 80 без ложной функции смены пароля.
+- Нового собственного Python или Bash-оркестратора нет. Вся orchestration-логика — Ansible; системные qm/zpool/zfs/openssl/smbpasswd вызываются нативными задачами.
+- Apply жёстко остановлен **до PVE**, не подтверждён ни одним live E2E. Каталог Semaphore не меняется. Это stage implementation, не готовая установка.
+
+**Не готово:** установка и авторизация Plex/Jellyfin/Arr/qBittorrent/Filestash/Sambee/Plex Agent, общая интеграция приложений, сканирование библиотек и GPU/Plex приёмка, native password rotation, полная приёмка №81. Живые сценарии keep/import и destructive E2E ещё не проведены.
 
 ## Критерии для релиза
 

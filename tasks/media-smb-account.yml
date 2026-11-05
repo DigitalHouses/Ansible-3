@@ -1,0 +1,76 @@
+---
+# Called once per explicit approved account; no Python credential manager.
+- name: Inspect protected Samba credential file
+  ansible.builtin.stat:
+    path: "{{ media_credential_path }}"
+    follow: false
+  register: media_account_record_stat
+  no_log: true
+
+- name: Protect existing media account record from unsafe ownership
+  ansible.builtin.assert:
+    that:
+      - not media_account_record_stat.stat.exists or media_account_record_stat.stat.isreg
+      - not (media_account_record_stat.stat.islnk | default(false))
+      - not media_account_record_stat.stat.exists or media_account_record_stat.stat.pw_name == 'root'
+      - not media_account_record_stat.stat.exists or media_account_record_stat.stat.mode in ['0600', '0640']
+    fail_msg: MEDIA80_CREDENTIAL_FILE_UNSAFE
+  no_log: true
+
+- name: Generate the first account password only when absent
+  ansible.builtin.command:
+    argv: [openssl, rand, -base64, '18']
+  register: media_new_password
+  when: not media_account_record_stat.stat.exists
+  changed_when: false
+  no_log: true
+
+- name: Require a valid generated password
+  ansible.builtin.assert:
+    that:
+      - (media_new_password.stdout | regex_replace('[^A-Za-z0-9]', ''))[:8] is match('^[A-Za-z0-9]{8}$')
+    fail_msg: MEDIA80_CREDENTIAL_GENERATION_FAILED
+  when: not media_account_record_stat.stat.exists
+  no_log: true
+
+- name: Persist newly generated account identity on ZFS only once
+  ansible.builtin.copy:
+    dest: "{{ media_credential_path }}"
+    content: "username={{ media_account.name }}\npassword={{ (media_new_password.stdout | regex_replace('[^A-Za-z0-9]', ''))[:8] }}\n"
+    owner: root
+    group: admin_group
+    mode: '0640'
+    force: false
+  when: not media_account_record_stat.stat.exists
+  no_log: true
+
+- name: Read existing or newly created credential file
+  ansible.builtin.slurp:
+    src: "{{ media_credential_path }}"
+  register: media_account_record
+  no_log: true
+
+- name: Verify record schema and account name without displaying secret
+  ansible.builtin.assert:
+    that:
+      - (media_account_record.content | b64decode).splitlines() | length == 2
+      - (media_account_record.content | b64decode).splitlines()[0] == 'username=' ~ media_account.name
+      - (media_account_record.content | b64decode).splitlines()[1] is match('^password=[A-Za-z0-9]{6,8}$')
+    fail_msg: MEDIA80_CREDENTIAL_FILE_INVALID
+  no_log: true
+
+- name: Test whether this Samba identity is already commissioned
+  ansible.builtin.command:
+    argv: [pdbedit, -L, -u, "{{ media_account.name }}"]
+  register: media_account_pdbedit
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Initialize Samba password only if account is new or missing
+  ansible.builtin.command:
+    argv: [smbpasswd, -s, -a, "{{ media_account.name }}"]
+    stdin: "{{ (media_account_record.content | b64decode).splitlines()[1][9:] }}\n{{ (media_account_record.content | b64decode).splitlines()[1][9:] }}\n"
+  when: media_account_pdbedit.rc != 0 or not media_account_record_stat.stat.exists
+  changed_when: true
+  no_log: true

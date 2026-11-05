@@ -1,0 +1,120 @@
+---
+# Managed guest Samba resources and one-time account creation.
+- name: Require exact owner and administrator entries
+  ansible.builtin.assert:
+    that:
+      - media_spec.file_access.accounts | length == 2
+      - (media_spec.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+      - (media_spec.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first) == media_site.owner_slug
+      - (media_spec.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first) == media_site.owner_slug ~ '_admin'
+    fail_msg: MEDIA80_SAMBA_ACCOUNTS_MISMATCH
+
+- name: Create access-control groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: [media_group, doc_group, backup_group, download_group, admin_group]
+
+- name: Create only declared POSIX users without shell login
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    group: "{{ 'admin_group' if item.role == 'administrator' else 'media_group' }}"
+    groups: "{{ media_admin_groups if item.role == 'administrator' else media_owner_groups }}"
+    append: false
+    home: /nonexistent
+    create_home: false
+    shell: /usr/sbin/nologin
+    password_lock: true
+    state: present
+  loop: "{{ media_spec.file_access.accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    media_admin_groups: media_group,doc_group,backup_group,download_group,admin_group
+    media_owner_groups: media_group,doc_group
+
+- name: Restrict ZFS share roots to approved groups
+  ansible.builtin.file:
+    path: "/{{ media_spec.storage.pool_name }}/{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: '2770'
+  loop:
+    - {path: media, group: media_group}
+    - {path: doc, group: doc_group}
+    - {path: digitalhouses, group: admin_group}
+    - {path: backups, group: backup_group}
+
+- name: Protect admin-only credential directory
+  ansible.builtin.file:
+    path: "/{{ media_spec.storage.pool_name }}/digitalhouses/credentials"
+    state: directory
+    owner: root
+    group: admin_group
+    mode: '0750'
+
+- name: Create or reuse account records and sync missing Samba accounts
+  ansible.builtin.include_tasks: media-smb-account.yml
+  loop: "{{ media_spec.file_access.accounts }}"
+  loop_control:
+    loop_var: media_account
+    label: "{{ media_account.name }}"
+  vars:
+    media_credential_path: "/{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_account.name }}.txt"
+
+- name: Install managed Samba share configuration
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-smb.conf.j2"
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'testparm -s %s'
+  vars:
+    media_vm: "{{ media_spec }}"
+  register: media_smb_config
+
+- name: Enable authenticated Samba and Windows discovery
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if media_smb_config.changed else 'started' }}"
+  loop:
+    - smbd.service
+    - nmbd.service
+    - wsdd2.service
+
+- name: Ensure no anonymous access to Media share
+  ansible.builtin.command:
+    argv: [smbclient, -N, //127.0.0.1/Media, -c, ls]
+  register: media_smb_guest_test
+  changed_when: false
+  failed_when: false
+
+- name: Require SMB anonymous access to fail
+  ansible.builtin.assert:
+    that: media_smb_guest_test.rc != 0
+    fail_msg: MEDIA80_SMB_GUEST_ACCESS_ALLOWED
+
+- name: Create Avahi service directory
+  ansible.builtin.file:
+    path: /etc/avahi/services
+    state: directory
+    mode: '0755'
+
+- name: Publish local Samba and portal service announcements
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-smb-avahi.service.j2"
+    dest: /etc/avahi/services/media-services.service
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    media_vm: "{{ media_spec }}"
+
+- name: Enable LAN Bonjour for media guest
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    enabled: true
+    state: started
