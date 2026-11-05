@@ -388,6 +388,9 @@
     - name: Reconcile authenticated SMB shares and accounts
       ansible.builtin.include_tasks: ../tasks/media-smb-apply.yml
 
+    - name: Commission native media applications with protected firstboot
+      ansible.builtin.include_tasks: ../tasks/media-native-apps.yml
+
     - name: Publish local media homepage
       ansible.builtin.include_tasks: ../tasks/media-portal-apply.yml
 
@@ -396,3 +399,9 @@
       ansible.builtin.command:
         argv: [update-initramfs, -u]
       changed_when: true
+
+    - name: Restart Jellyfin after onboarding
+      ansible.builtin.systemd_service:
+        name: jellyfin.service
+        daemon_reload: true
+        state: restarted

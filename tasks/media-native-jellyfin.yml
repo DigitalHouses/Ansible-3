@@ -1,0 +1,258 @@
+---
+# Native Jellyfin installation and official startup endpoints.
+# New firstboot wizard is restricted to loopback before package postinst starts.
+- name: Inspect existing Jellyfin setup before firstboot
+  ansible.builtin.stat:
+    path: /etc/jellyfin/system.xml
+    follow: false
+  register: media_jellyfin_previous_system
+
+- name: Create firstboot Jellyfin service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/jellyfin.service.d
+    state: directory
+    mode: '0755'
+  when: not media_jellyfin_previous_system.stat.exists
+
+- name: Restrict firstboot Jellyfin to loopback before installing the package
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/jellyfin.service.d/90-dh-firstboot-local.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      IPAddressDeny=any
+      IPAddressAllow=localhost
+  when: not media_jellyfin_previous_system.stat.exists
+
+- name: Load temporary Jellyfin firstboot LAN protection
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not media_jellyfin_previous_system.stat.exists
+
+- name: Prepare official Jellyfin signing-key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download official Jellyfin APT signing key
+  ansible.builtin.get_url:
+    url: https://repo.jellyfin.org/jellyfin_team.gpg.key
+    dest: /etc/apt/keyrings/jellyfin.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Declare native Jellyfin Debian 13 repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/jellyfin.sources
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: https://repo.jellyfin.org/debian
+      Suites: trixie
+      Components: main
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/jellyfin.asc
+
+- name: Install native Jellyfin package
+  ansible.builtin.apt:
+    name: jellyfin
+    state: present
+    update_cache: true
+
+- name: Grant Jellyfin access to media datasets and Intel render group
+  ansible.builtin.user:
+    name: jellyfin
+    groups: [media_group, render, video]
+    append: true
+  register: media_jellyfin_groups
+
+- name: Start Jellyfin with firstboot network guard when needed
+  ansible.builtin.systemd_service:
+    name: jellyfin.service
+    enabled: true
+    state: "{{ 'restarted' if media_jellyfin_groups.changed else 'started' }}"
+
+- name: Read public Jellyfin startup status
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/System/Info/Public
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_public
+  retries: 20
+  delay: 3
+  until: media_jellyfin_public.status == 200
+  changed_when: false
+
+- name: Require wizard to be protected if not already complete
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_jellyfin_public.json.StartupWizardCompleted | bool
+        or not media_jellyfin_previous_system.stat.exists
+    fail_msg: MEDIA80_JELLYFIN_EXISTING_WIZARD_NOT_LAN_SAFE
+
+- name: Read the official Jellyfin wizard locale and initial options
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/Configuration
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_startup_config
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  changed_when: false
+  no_log: true
+
+- name: Configure Jellyfin startup locale without inventing defaults
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/Configuration
+    method: POST
+    body_format: json
+    body: "{{ media_jellyfin_startup_config.json }}"
+    status_code: [200, 204]
+    use_proxy: false
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  no_log: true
+
+- name: Initialize Jellyfin first user through official startup endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/User
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_first_user
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  changed_when: false
+  no_log: true
+
+- name: Refuse unclaimed Jellyfin first-user drift
+  ansible.builtin.assert:
+    that:
+      - media_jellyfin_first_user.json is mapping
+      - media_jellyfin_first_user.json.Name | default('') | length > 0
+    fail_msg: MEDIA80_JELLYFIN_FIRST_USER_NOT_INITIALIZED
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  no_log: true
+
+- name: Configure shared owner Jellyfin login via official startup API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/User
+    method: POST
+    body_format: json
+    body:
+      Name: "{{ media_site.owner_slug }}"
+      Password: "{{ media_owner_password }}"
+    status_code: [200, 204]
+    use_proxy: false
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  no_log: true
+
+- name: Set native Jellyfin firstboot remote-access policy
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/RemoteAccess
+    method: POST
+    body_format: json
+    body:
+      EnableRemoteAccess: false
+      EnableAutomaticPortMapping: false
+    status_code: [200, 204]
+    use_proxy: false
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  no_log: true
+
+- name: Complete Jellyfin startup wizard through official API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Startup/Complete
+    method: POST
+    status_code: [200, 204]
+    use_proxy: false
+  when: not media_jellyfin_public.json.StartupWizardCompleted | bool
+  no_log: true
+
+- name: Check Jellyfin wizard completion
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/System/Info/Public
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_ready
+  changed_when: false
+  no_log: true
+
+- name: Require Jellyfin startup wizard completed
+  ansible.builtin.assert:
+    that: media_jellyfin_ready.json.StartupWizardCompleted | bool
+    fail_msg: MEDIA80_JELLYFIN_WIZARD_NOT_COMPLETED
+  no_log: true
+
+- name: Authenticate the real owner against Jellyfin native API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Users/AuthenticateByName
+    method: POST
+    headers:
+      Authorization: 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'
+    body_format: json
+    body:
+      Username: "{{ media_site.owner_slug }}"
+      Pw: "{{ media_owner_password }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_login
+  no_log: true
+
+- name: Require verified Jellyfin owner token
+  ansible.builtin.assert:
+    that:
+      - media_jellyfin_login.json.AccessToken | default('') | length >= 16
+    fail_msg: MEDIA80_JELLYFIN_OWNER_LOGIN_FAILED
+  no_log: true
+
+- name: Hold authenticated Jellyfin API header only in Ansible memory
+  ansible.builtin.set_fact:
+    media_jellyfin_authorization: >-
+      MediaBrowser Client="DigitalHouses", Device="MediaServer",
+      DeviceId="dh-mediaserver", Version="1.0",
+      Token="{{ media_jellyfin_login.json.AccessToken }}"
+  no_log: true
+
+- name: Read current Jellyfin media libraries
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Library/VirtualFolders
+    headers:
+      Authorization: "{{ media_jellyfin_authorization }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_folders
+  changed_when: false
+  no_log: true
+
+- name: Reconcile only the three declared media libraries
+  ansible.builtin.include_tasks: media-jellyfin-library-one.yml
+  loop:
+    - {name: Movies, type: movies, subdir: movies}
+    - {name: TV Shows, type: tvshows, subdir: tvshows}
+    - {name: Music, type: music, subdir: music}
+  loop_control:
+    loop_var: media_jellyfin_item
+    label: "{{ media_jellyfin_item.name }}"
+  vars:
+    media_jellyfin_library: >-
+      {{ media_jellyfin_item | combine({'path': '/' ~ media_spec.storage.media_dataset
+         ~ '/' ~ media_jellyfin_item.subdir}) }}
+
+- name: Remove firstboot Jellyfin LAN restriction after owner authentication
+  ansible.builtin.file:
+    path: /etc/systemd/system/jellyfin.service.d/90-dh-firstboot-local.conf
+    state: absent
+  notify: Restart Jellyfin after onboarding
+
+- name: Apply completed Jellyfin onboarding before continuing
+  ansible.builtin.meta: flush_handlers

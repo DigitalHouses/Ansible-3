@@ -1,0 +1,18 @@
+[Unit]
+Description=DigitalHouses qBittorrent headless download client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qbittorrent
+Group=media_group
+UMask=0002
+Environment=HOME=/var/lib/qbittorrent
+WorkingDirectory={{ media_vm.downloads.path }}
+ExecStart=/usr/bin/qbittorrent-nox --webui-port=8080 --confirm-legal-notice
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

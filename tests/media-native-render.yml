@@ -1,0 +1,77 @@
+---
+# Read-only Ansible fixture. All rendered output stays in an isolated /tmp directory.
+- name: Media 80 native app templates, offline acceptance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vars/media-arr-releases.yml
+  vars:
+    media_site: {owner_slug: serzhan}
+    media_arr: {slug: radarr, name: Radarr, port: 7878}
+    media_arr_new_api_key:
+      stdout: abcdef1234567890abcdef1234567890abcdef12
+    media_spec:
+      name: mediaserver-serzhan
+      vmid: 2232
+      network: {ipv4: 192.168.11.232/24}
+      storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
+      downloads: {path: /serzhan-pool/media/downloads}
+      discovery: {workgroup: WORKGROUP, netbios_name: MEDIA-SERZHAN}
+      file_access:
+        accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
+      applications:
+        jellyfin: true
+        radarr: true
+        sonarr: true
+        prowlarr: true
+        qbittorrent: true
+        filestash: true
+        sambee: true
+      portal: {show_admin_links: false, admin_links: []}
+    media_vm: "{{ media_spec }}"
+  tasks:
+    - name: Verify native release checksum shapes
+      ansible.builtin.assert:
+        that:
+          - item.source is match('^https://github[.]com/')
+          - item.sha256 is match('^[0-9a-f]{64}$')
+      loop: "{{ media_arr_releases }}"
+      loop_control:
+        label: "{{ item.slug }}"
+
+    - name: Create disposable render directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: media80-render-
+      register: media_test_dir
+
+    - name: Verify templates without provisioning any real service
+      block:
+        - name: Render firstboot and service templates
+          ansible.builtin.template:
+            src: "{{ playbook_dir | dirname }}/templates/{{ item.name }}"
+            dest: "{{ media_test_dir.path }}/{{ item.name }}"
+            mode: '0600'
+          loop:
+            - {name: media-arr-firstboot.xml.j2, slug: radarr, port: 7878}
+            - {name: media-arr.service.j2, slug: radarr, port: 7878}
+            - {name: media-qbittorrent-firstboot.conf.j2, slug: qbittorrent, port: 8080}
+            - {name: media-qbittorrent.service.j2, slug: qbittorrent, port: 8080}
+            - {name: media-portal.html.j2, slug: portal, port: 80}
+            - {name: media-smb.conf.j2, slug: samba, port: 445}
+
+        - name: Require loopback-only firstboot and expected media links
+          ansible.builtin.assert:
+            that:
+              - "'<BindAddress>127.0.0.1</BindAddress>' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-arr-firstboot.xml.j2')"
+              - "'WebUI' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
+              - "'127.0.0.1' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
+              - "'[DigitalHouses]' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-smb.conf.j2')"
+              - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+      always:
+        - name: Remove disposable test files
+          ansible.builtin.file:
+            path: "{{ media_test_dir.path }}"
+            state: absent

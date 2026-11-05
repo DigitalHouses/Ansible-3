@@ -1,0 +1,16 @@
+# Initial qBittorrent profile: LAN is deliberately unreachable before commissioning.
+# Ansible will use the documented local WebAPI to set the owner password first.
+[BitTorrent]
+Session\\DefaultSavePath={{ media_spec.downloads.path }}/
+Session\\TempPath={{ media_spec.downloads.path }}/incomplete/
+Session\\TempPathEnabled=true
+
+[Preferences]
+Downloads\\SavePath={{ media_spec.downloads.path }}/
+WebUI\\Address=127.0.0.1
+WebUI\\Port=8080
+WebUI\\LocalHostAuth=false
+WebUI\\AuthSubnetWhitelistEnabled=false
+WebUI\\AuthSubnetWhitelist=
+WebUI\\CSRFProtection=true
+WebUI\\HostHeaderValidation=true

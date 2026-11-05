@@ -1,6 +1,6 @@
 # №80 — Медиасервер (Ansible-3)
 
-**Статус:** в разработке. Реализован только read-only аудит; применение преднамеренно блокируется. Задача не зарегистрирована в каталоге Semaphore.
+**Статус:** в разработке. Подготовлены read-only аудит, инфраструктурные apply-блоки и черновой native app-onboarding. Всё применение преднамеренно заблокировано до PVE. Задача не зарегистрирована в каталоге Semaphore.
 
 ## Цель и границы
 
@@ -37,10 +37,15 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 - Режим audit: читает оба приватных manifest через токен №05, сверяет site/name/VMID/PCI, подключается к PVE по закреплённому SSH №10, читает VM configuration/status, наличие GPU/SATA и чужую привязку SATA. Возвращает MEDIA80_AUDIT_ONLY.
 - Подготовленный apply-контур (пока недостижим): нативный qm lifecycle для keep/create/recreate, первичный cloud-init/QGA, сверка ED25519 через QGA и SSH, SATA vendor/device/class, native ZFS import/erase, datasets, native ZFS boot, QGA/GPU/ARC/swap. Отказ при чужой VM, controller или неверном ZFS. В отличие от старой версии, qm destroy не включает purge backup jobs.
 - Гостевая часть (пока недостижима): два POSIX/Samba пользователя из site-repo, пароль на ZFS (генерируется только при отсутствии, сохраняется при повторах), четыре закрытых SMB share, Bonjour, базовая локальная страница на 80 без ложной функции смены пароля.
+- Native Plex: официальный signed APT источник, системный сервис, Intel render/media group, проверка HTTP identity и доступа к media dataset. Claim Plex-аккаунта и подтверждение библиотек пока не реализованы.
+- Native Radarr, Sonarr, Prowlarr: checksum-pinned архивы из прежнего media-контракта, сервисы и официальные host-config API. Для fresh install — сначала только loopback, затем Forms+owner credentials и проверка authenticationRequired перед включением LAN. Настроенный чужой пользователь не перезаписывается. **Реальную авторизацию пользователя и совместимость pinned API обязательно проверить live.**
+- Native qBittorrent: Debian package, ZFS paths, loopback-only firstboot, password владельца через штатный WebAPI, контроль выключенного LAN bypass, проверка анонимного отказа и входа владельца по LAN. Существующий пароль не сбрасывать при повторном запуске.
+- Native Jellyfin: официальный Debian repository, первый запуск с временным systemd loopback policy, штатные Startup/User/Complete API, проверка входа с общим паролем, три библиотеки Movies/TV Shows/Music, запрет перенастройки чужого администратора. Первичный IPAddressDeny и реальные Jellyfin API надо проверить live до разрешения apply.
+- Офлайн тест `tests/media-native-render.yml` рендерит и проверяет firstboot-шаблоны/контракты без контакта с PVE; это не functional E2E.
 - Нового собственного Python или Bash-оркестратора нет. Вся orchestration-логика — Ansible; системные qm/zpool/zfs/openssl/smbpasswd вызываются нативными задачами.
 - Apply жёстко остановлен **до PVE**, не подтверждён ни одним live E2E. Каталог Semaphore не меняется. Это stage implementation, не готовая установка.
 
-**Не готово:** установка и авторизация Plex/Jellyfin/Arr/qBittorrent/Filestash/Sambee/Plex Agent, общая интеграция приложений, сканирование библиотек и GPU/Plex приёмка, native password rotation, полная приёмка №81. Живые сценарии keep/import и destructive E2E ещё не проведены.
+**Не готово:** Filestash, Sambee, DigitalHouses Plex Agent, Plex account claim/библиотеки/автосканирование, интеграция Prowlarr→Radarr/Sonarr→qBittorrent, QSV Jellyfin, проверка паролей Arr фактическим логином, native password rotation и полная приёмка №81. Native app-контур **принудительно заканчивается `MEDIA80_APPLICATIONS_NOT_COMPLETE`**, даже если будущий разработчик случайно откроет главный gate. Живые сценарии keep/import и destructive E2E не проведены; нельзя заявлять успешность функциональности на основании lint.
 
 ## Критерии для релиза
 

@@ -1,0 +1,20 @@
+[Unit]
+Description=DigitalHouses {{ item.name }} media management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ item.slug }}
+Group=media_group
+UMask=0002
+Type=simple
+WorkingDirectory=/opt/{{ item.name }}
+ExecStart=/opt/{{ item.name }}/{{ item.name }} -nobrowser -data=/var/lib/{{ item.slug }}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+# Allow the native Arr updater to finish its child process on restart.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
