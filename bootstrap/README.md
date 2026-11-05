@@ -82,12 +82,20 @@ Runner secrets are root:root 0600 under `/etc/semaphore/`:
 All credential tasks use `no_log`. The admin catalog token stays on the runner.
 Do not remove the managed password: it establishes ownership on reruns.
 
-For an existing runner, run on the **local PVE as root**, from the reviewed
+For an existing runner, run on the **local PVE as root**, from a reviewed
 checkout (replace SITE and RUNNER_IP):
 
 ```bash
 bash bootstrap/enroll-local-dev.sh SITE RUNNER_IP
 ```
+
+The helper fetches **only** `bootstrap/enroll-dev.yml` and
+`bootstrap/tasks/dev-access.yml` over HTTPS from the published
+`DigitalHouses/Ansible-3` revision `DH_DEV_ACCESS_REF` (defaults to `main`),
+stages them temporarily inside the existing runner, and executes the native
+Ansible playbook. It **does not switch** the runner's pinned
+`/opt/ansible-3` checkout. Pin `DH_DEV_ACCESS_REF` to a reviewed commit for
+repeatable installation; for branch E2E use its explicitly reviewed test ref.
 
 The helper is deliberately restricted to runner CT1231 and the known local
 DEV CT1254 at `192.168.11.254/24`. It checks PVE configuration against guest

@@ -181,7 +181,7 @@ if [[ $CTID == 1231 ]] && pct config 1254 >/dev/null 2>&1; then
     --output "$DEV_HELPER" || { rm -f -- "$DEV_HELPER"; exit 2; }
   chmod 0700 "$DEV_HELPER"
   if bash "$DEV_HELPER" "$SITE" "$RUNNER_IP" --check; then
-    if ! bash "$DEV_HELPER" "$SITE" "$RUNNER_IP"; then
+    if ! DH_DEV_ACCESS_REF="$CODE_RELEASE" bash "$DEV_HELPER" "$SITE" "$RUNNER_IP"; then
       rm -f -- "$DEV_HELPER"
       echo 'BLOCKED: local DEV enrollment failed' >&2
       exit 2
