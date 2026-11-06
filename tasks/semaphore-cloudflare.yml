@@ -259,6 +259,18 @@
   no_log: true
   when: sem_cf_action == 'apply'
 
+- name: Refresh Semaphore DNS state after any hostname migration
+  ansible.builtin.uri:
+    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
+    headers: "{{ sem_cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: sem_cf_dns
+  changed_when: false
+  no_log: true
+  when: sem_cf_action == 'apply'
+
 - name: Refuse pre-existing non-Semaphore routes or weakened TLS policy
   ansible.builtin.assert:
     that:
