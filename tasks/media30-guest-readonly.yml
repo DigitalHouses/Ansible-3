@@ -1,0 +1,79 @@
+---
+# Task 30 guest inspection uses only read-only QEMU Guest Agent commands.
+# No SSH trust changes, VM reboots, service restarts, disk writes or shell scripts.
+- name: Check QEMU Guest Agent responsiveness without changing the VM
+  ansible.builtin.command:
+    argv: [qm, agent, "{{ media_spec.vmid }}", ping]
+  register: media30_qga_ping
+  changed_when: false
+  failed_when: false
+
+- name: Observe existing ZFS pool through authenticated read-only QGA
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - status
+      - -x
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_qga_zpool
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Read current guest ZFS datasets without touching mounts
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zfs
+      - list
+      - -H
+      - -o
+      - name,mounted,mountpoint
+      - -r
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_qga_datasets
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Read active media services through guest systemd
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/systemctl
+      - is-active
+      - plexmediaserver.service
+      - jellyfin.service
+      - radarr.service
+      - sonarr.service
+      - prowlarr.service
+      - qbittorrent.service
+      - filestash.service
+      - smbd.service
+      - nginx.service
+  register: media30_qga_services
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Show read-only guest diagnostic availability
+  ansible.builtin.debug:
+    msg:
+      qga_reachable: "{{ media30_qga_ping.rc == 0 }}"
+      zpool_query_ok: "{{ media30_qga_zpool.rc | default(1) == 0 }}"
+      dataset_query_ok: "{{ media30_qga_datasets.rc | default(1) == 0 }}"
+      services_query_ok: "{{ media30_qga_services.rc | default(1) == 0 }}"
+      guest_changes_applied: false
