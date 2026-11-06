@@ -58,6 +58,9 @@
         media_spec: "{{ (media_vm_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
+    - name: Resolve optional task 30 CPU percentages without changing resources
+      ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
+
     - name: Reject mismatched site, VM or PCI declaration
       ansible.builtin.assert:
         that:
@@ -98,6 +101,8 @@
           -o ConnectTimeout=10
         media_site: "{{ media_site }}"
         media_spec: "{{ media_spec }}"
+        media30_vm_cpu_percent: "{{ media30_vm_cpu_percent }}"
+        media30_transcode_cpu_percent: "{{ media30_transcode_cpu_percent }}"
         media_site_blob: "{{ media_vm_file.json.sha }}"
       changed_when: false
       no_log: true
@@ -203,4 +208,7 @@
           intended_guest_ipv4: "{{ media_spec.network.ipv4 }}"
           manifest_blob: "{{ media_site_blob }}"
           not_yet_verified: "guest ZFS, apps, SMB, media login, GPU transcoding"
+          vm_cpu_limit_percent_selected: "{{ media30_vm_cpu_percent }}"
+          plex_jellyfin_shared_cpu_percent_selected: "{{ media30_transcode_cpu_percent }}"
+          cpu_policy: PREVIEW_ONLY_NOT_APPLIED
           changes_applied: false
