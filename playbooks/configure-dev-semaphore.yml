@@ -89,16 +89,23 @@
       register: dev_server_config
       no_log: true
 
-    - name: Validate the site Runner URL for DEV
+    - name: Read Runner management address independently of Semaphore browser URL
+      ansible.builtin.command:
+        argv: [/usr/sbin/ip, -4, -o, addr, show, dev, eth0]
+      register: dev_runner_management
+      changed_when: false
+
+    - name: Require a valid and unique Runner management IPv4
       ansible.builtin.assert:
         that:
-          - (dev_server_config.content | b64decode | from_json).web_host is match('^https://([0-9]{1,3}\\.){3}[0-9]{1,3}:3000$')
-        fail_msg: Semaphore HTTPS address is not a literal site Runner IPv4
-      no_log: true
+          - dev_runner_management.stdout_lines | length == 1
+          - "'inet ' in dev_runner_management.stdout"
+          - dev_runner_management.stdout.split('inet ')[1].split('/')[0] is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+        fail_msg: "Cannot identify trusted Runner management IPv4 on eth0"
 
-    - name: Keep only the site Runner's IPv4 for the remote smoke check
+    - name: Keep the actual site Runner IPv4 for DEV API smoke tests
       ansible.builtin.set_fact:
-        dev_runner_ip: "{{ (dev_server_config.content | b64decode | from_json).web_host | regex_replace('^https://|:3000$', '') }}"
+        dev_runner_ip: "{{ dev_runner_management.stdout.split('inet ')[1].split('/')[0] }}"
 
     - name: Validate the requested Semaphore Cloudflare action
       ansible.builtin.assert:
@@ -108,6 +115,43 @@
     - name: Commission dedicated Cloudflare Tunnel for Semaphore if requested
       ansible.builtin.include_tasks: ../tasks/semaphore-cloudflare.yml
       when: sem_cf_action != 'skip'
+
+    - name: Configure public Semaphore HTML base URL after verified Cloudflare Apply
+      ansible.builtin.copy:
+        dest: /etc/semaphore/config.json
+        owner: root
+        group: semaphore
+        mode: '0640'
+        content: |
+          {{ ((dev_server_config.content | b64decode | from_json)
+             | combine({'web_host': 'https://' ~ sem_cf_hostname})) | to_nice_json }}
+      register: sem_public_web_host_config
+      no_log: true
+      when: sem_cf_action == 'apply'
+
+    - name: Read current Semaphore HTML after a prior Cloudflare deployment
+      ansible.builtin.uri:
+        url: https://127.0.0.1:3000/
+        ca_path: "{{ semaphore_ca }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: 200
+        return_content: true
+        timeout: 15
+      register: sem_public_html
+      changed_when: false
+      when:
+        - sem_cf_action == 'apply'
+        - not sem_public_web_host_config.changed
+
+    - name: Require the browser base URL to use the actual Cloudflare hostname
+      ansible.builtin.assert:
+        that:
+          - sem_public_html.content.find('<base href="https://' ~ sem_cf_hostname ~ '/">') >= 0
+        fail_msg: "Semaphore HTML still uses an incorrect browser base URL"
+      when:
+        - sem_cf_action == 'apply'
+        - not sem_public_web_host_config.changed
 
     - name: Register the existing pinned PVE SSH connection
       ansible.builtin.add_host:
@@ -140,3 +184,30 @@
   tasks:
     - name: Use the shared transport without introducing another service
       ansible.builtin.include_tasks: ../tasks/dev-delivery.yml
+
+# The Semaphore service owns the job's systemd cgroup. Restarting it while this
+# playbook is running terminates the job; schedule the restart at the very end.
+- name: 08 - Activate the new public browser base URL after the job exits
+  hosts: runner
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Notify a delayed restart only after a real public URL change
+      ansible.builtin.debug:
+        msg: "Semaphore public base URL will activate after this job exits"
+      changed_when: hostvars['runner'].sem_public_web_host_config.changed | default(false)
+      notify: Queue the Semaphore restart after the running job exits
+
+  handlers:
+    - name: Queue the Semaphore restart after the running job exits
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/systemd-run
+          - --collect
+          - --unit=digitalhouses-semaphore-webhost-refresh
+          - --on-active=20s
+          - /usr/bin/systemctl
+          - restart
+          - digitalhouses-semaphore.service
+      changed_when: true

@@ -26,3 +26,16 @@
 Cloudflare Access с корректными SNI/TLS, затем удаляет старый маршрут и
 DNS без перенаправления. UUID, имя и token туннеля не меняются. При
 повторном применении все проверки выполняются без изменений.
+
+## Network Error: `web_host` после Cloudflare Access
+
+В HTTP-странице Semaphore значение `web_host` попадает в `<base href>`.
+Если там `https://<runner-ip>:3000/`, внешний браузер пытается получить JS/API
+по локальному IP, поэтому видит `Network Error`. №08 применяет
+`web_host=https://<site-id>-pve-semaphore.digitalhouses.vip` только после
+проверенной публикации Cloudflare. Остальные параметры `config.json`,
+включая cookie keys, остаются неизменными. Для штатного DEV API и других
+внутренних задач используется исходный IPv4 `eth0` Runner, независимо от
+`web_host`. Поскольку task08 исполняет сам Semaphore, Ansible планирует
+однократный рестарт службы после завершения задания (transient systemd).
+Повторный запуск проверяет `<base href>` и не меняет конфигурацию.
