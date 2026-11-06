@@ -21,6 +21,7 @@
   ansible.builtin.apt:
     name:
       - qemu-guest-agent
+      - acl
       - linux-headers-amd64
       - zfs-dkms
       - zfsutils-linux
