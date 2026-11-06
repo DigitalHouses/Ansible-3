@@ -214,7 +214,14 @@
   when: media_raw_disk_action == 'erase'
   changed_when: true
 
-# IMPORT ONLY: no operation below this branch can wipe or create a pool.
+# IMPORT ONLY: match the exact expected ZFS GUID; never force foreign pools.
+- name: Require the explicit existing-pool GUID from the private site manifest
+  ansible.builtin.assert:
+    that:
+      - (media_vm.storage.import_pool_guid | default('') | string) is match('^[0-9]{5,20}$')
+    fail_msg: MEDIA30_IMPORT_EXPECTED_POOL_GUID_MISSING
+  when: media_raw_disk_action == 'import'
+
 - name: Check if requested pool is already imported
   ansible.builtin.command:
     argv: [zpool, list, -H, -o, name, "{{ media_vm.storage.pool_name }}"]
@@ -222,6 +229,24 @@
   changed_when: false
   failed_when: false
   when: media_raw_disk_action == 'import'
+
+- name: Read GUID of already-imported target pool before any import operation
+  ansible.builtin.command:
+    argv: [zpool, get, -H, -o, value, guid, "{{ media_vm.storage.pool_name }}"]
+  register: media_existing_target_guid
+  changed_when: false
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc == 0
+
+- name: Block keep plus import if the already-mounted ZFS identity changed
+  ansible.builtin.assert:
+    that:
+      - media_existing_target_guid.stdout | trim == (media_vm.storage.import_pool_guid | string)
+    fail_msg: MEDIA30_IMPORT_ACTIVE_POOL_GUID_MISMATCH
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc == 0
 
 - name: Assemble explicit scan of selected disk and its partitions
   ansible.builtin.set_fact:
@@ -231,17 +256,59 @@
     - media_raw_disk_action == 'import'
     - media_existing_target_pool.rc != 0
 
-- name: Import requested pool only, without mounting during discovery
+- name: Discover only the selected SATA drive's importable pool labels
   ansible.builtin.command:
-    argv: >-
-      {{ ['zpool', 'import', '-N', '-f']
-         + (['-o', 'readonly=on'] if media_vm.storage.mode == 'readonly' else [])
-         + media_import_scan + [media_vm.storage.pool_name] }}
+    argv: "{{ ['zpool', 'import'] + media_import_scan }}"
+  register: media_import_discovered
+  changed_when: false
+  failed_when: false
   when:
     - media_raw_disk_action == 'import'
     - media_existing_target_pool.rc != 0
 
+- name: Refuse a missing, foreign or ambiguous ZFS import candidate
+  ansible.builtin.assert:
+    that:
+      - media_import_discovered.rc == 0
+      - >-
+        (media_import_discovered.stdout
+         | regex_findall('(?m)^\\s*pool:\\s*' ~ (media_vm.storage.pool_name | regex_escape) ~ '\\s*$')
+         | length) == 1
+      - >-
+        (media_import_discovered.stdout
+         | regex_findall('(?m)^\\s*id:\\s*' ~ (media_vm.storage.import_pool_guid | string) ~ '\\s*$')
+         | length) == 1
+      - (media_import_discovered.stdout | regex_findall('(?m)^\\s*pool:') | length) == 1
+      - (media_import_discovered.stdout | regex_findall('(?m)^\\s*id:') | length) == 1
+    fail_msg: MEDIA30_IMPORT_POOL_IDENTITY_NOT_UNIQUE
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc != 0
+
+- name: Import exactly the approved GUID without forcing an active foreign host
+  ansible.builtin.command:
+    argv: >-
+      {{ ['zpool', 'import', '-N']
+         + (['-o', 'readonly=on'] if media_vm.storage.mode == 'readonly' else [])
+         + media_import_scan + [media_vm.storage.import_pool_guid | string] }}
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc != 0
   changed_when: true
+
+- name: Verify actual imported pool GUID after the import decision
+  ansible.builtin.command:
+    argv: [zpool, get, -H, -o, value, guid, "{{ media_vm.storage.pool_name }}"]
+  register: media_imported_target_guid
+  changed_when: false
+  when: media_raw_disk_action == 'import'
+
+- name: Refuse continuing on any wrong active ZFS pool after import resolution
+  ansible.builtin.assert:
+    that:
+      - media_imported_target_guid.stdout | trim == (media_vm.storage.import_pool_guid | string)
+    fail_msg: MEDIA30_IMPORT_FINAL_POOL_GUID_MISMATCH
+  when: media_raw_disk_action == 'import'
 - name: Read final target pool topology and health
   ansible.builtin.command:
     argv: [zpool, status, -LP, "{{ media_vm.storage.pool_name }}"]

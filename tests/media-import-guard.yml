@@ -1,0 +1,53 @@
+---
+# Pure Ansible fixture: import candidate recognition without any ZFS commands.
+- name: Verify selected ZFS import identities fail closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_expected_guid: '40733622006301358'
+    media_expected_pool: serzhan-pool
+    media_discovery_good: |
+      pool: serzhan-pool
+        id: 40733622006301358
+       state: ONLINE
+      config:
+        serzhan-pool ONLINE
+          /dev/sdb1 ONLINE
+    media_discovery_foreign: |
+      pool: serzhan-pool
+        id: 12345678901234567
+       state: ONLINE
+    media_discovery_duplicate: |
+      pool: serzhan-pool
+        id: 40733622006301358
+      pool: foreign-pool
+        id: 12345678901234567
+  tasks:
+    - name: Confirm unique, exact pool identity is accepted
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_discovery_good
+             | regex_findall('(?m)^\\s*pool:\\s*' ~ (media_expected_pool | regex_escape) ~ '\\s*$')
+             | length) == 1
+          - >-
+            (media_discovery_good
+             | regex_findall('(?m)^\\s*id:\\s*' ~ media_expected_guid ~ '\\s*$')
+             | length) == 1
+          - (media_discovery_good | regex_findall('(?m)^\\s*pool:') | length) == 1
+          - (media_discovery_good | regex_findall('(?m)^\\s*id:') | length) == 1
+
+    - name: Confirm wrong disk pool GUID never matches the selected identity
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_discovery_foreign
+             | regex_findall('(?m)^\\s*id:\\s*' ~ media_expected_guid ~ '\\s*$')
+             | length) == 0
+
+    - name: Confirm ambiguous scan is rejected rather than choosing one
+      ansible.builtin.assert:
+        that:
+          - (media_discovery_duplicate | regex_findall('(?m)^\\s*pool:') | length) == 2
+          - (media_discovery_duplicate | regex_findall('(?m)^\\s*id:') | length) == 2

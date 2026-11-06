@@ -9,7 +9,7 @@
       - media_spec.applications.prowlarr | bool
       - media_spec.applications.qbittorrent | bool
       - media_spec.downloads.mode == 'shared-zfs'
-      - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
+      - media_spec.downloads.path == '/' ~ media_spec.storage.pool_name ~ '/downloads'
     fail_msg: MEDIA80_ARR_WIRING_DECLARATION_INCOMPLETE
 
 - name: Create only approved ZFS download-category destinations

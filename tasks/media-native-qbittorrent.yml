@@ -5,7 +5,7 @@
   ansible.builtin.assert:
     that:
       - media_spec.downloads.mode == 'shared-zfs'
-      - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
+      - media_spec.downloads.path == '/' ~ media_spec.storage.pool_name ~ '/downloads'
     fail_msg: MEDIA80_DOWNLOAD_ROOT_MISMATCH
 
 - name: Install Debian native qBittorrent headless package
@@ -40,7 +40,7 @@
   changed_when: false
   failed_when: >-
     media_qbt_download_mount.rc != 0 or
-    media_qbt_download_mount.stdout.split()[0] != media_spec.storage.media_dataset or
+    media_qbt_download_mount.stdout.split()[0] != (media_spec.storage.pool_name ~ '/downloads') or
     media_qbt_download_mount.stdout.split()[1] != 'zfs'
 
 - name: Create qBittorrent native preferences directory
