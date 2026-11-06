@@ -79,6 +79,49 @@
   changed_when: false
   failed_when: false
 
+- name: Resolve both download paths without creating or changing links
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/readlink
+      - -e
+      - "{{ item }}"
+  loop:
+    - "{{ media_spec.downloads.path }}"
+    - "/{{ media_spec.storage.pool_name }}/downloads"
+  loop_control:
+    label: "{{ item }}"
+  register: media30_download_realpaths_raw
+  changed_when: false
+  failed_when: false
+
+- name: Inspect actual ZFS backing mount for both download paths
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/findmnt
+      - -n
+      - -o
+      - SOURCE,FSTYPE,TARGET
+      - -T
+      - "{{ item }}"
+  loop:
+    - "{{ media_spec.downloads.path }}"
+    - "/{{ media_spec.storage.pool_name }}/downloads"
+  loop_control:
+    label: "{{ item }}"
+  register: media30_download_mounts_raw
+  changed_when: false
+  failed_when: false
+
 - name: Decode native guest program exit codes and output
   ansible.builtin.set_fact:
     media30_pool_guid_result: "{{ media30_pool_guid_raw.stdout | from_json }}"
@@ -87,12 +130,24 @@
     media30_download_paths_result: >-
       {{ media30_download_path_probes.results
          | map(attribute='stdout') | map('from_json') | list }}
+    media30_download_realpaths: >-
+      {{ media30_download_realpaths_raw.results
+         | map(attribute='stdout') | map('from_json') | list }}
+    media30_download_backing_mounts: >-
+      {{ media30_download_mounts_raw.results
+         | map(attribute='stdout') | map('from_json') | list }}
   when:
     - media30_pool_guid_raw.rc == 0
     - media30_pool_topology_raw.rc == 0
     - media30_download_mount_raw.rc == 0
     - >-
       media30_download_path_probes.results
+      | selectattr('rc', 'ne', 0) | list | length == 0
+    - >-
+      media30_download_realpaths_raw.results
+      | selectattr('rc', 'ne', 0) | list | length == 0
+    - >-
+      media30_download_mounts_raw.results
       | selectattr('rc', 'ne', 0) | list | length == 0
 
 - name: Index actual download-folder checks by the examined path
@@ -135,6 +190,12 @@
            | map(attribute='item') | zip(
              media30_download_paths_result | map(attribute='exitcode'))
            | list }}
+      download_path_types: >-
+        {{ media30_download_paths_result | map(attribute='out-data') | list }}
+      resolved_download_paths: >-
+        {{ media30_download_realpaths | map(attribute='out-data') | list }}
+      backing_mounts_for_both_paths: >-
+        {{ media30_download_backing_mounts | map(attribute='out-data') | list }}
       dedicated_dataset_mount: "{{ media30_download_mount_result['out-data'] | default('unavailable') | trim }}"
       import_executed: false
       guest_changes_applied: false
