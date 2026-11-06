@@ -14,6 +14,8 @@
     media_filestash_secret:
       stdout: abcdef1234567890
     media_sambee_bind: 127.0.0.1
+    media_mqtt_username: fixture
+    media_mqtt_password: fake-fixture-only
     media_spec:
       name: mediaserver-serzhan
       vmid: 2232
@@ -21,7 +23,7 @@
       storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
       downloads: {path: /serzhan-pool/downloads}
       plex_agent:
-        mqtt: {host: 127.0.0.1, port: 1883, username: fixture, password: fake-fixture-only}
+        mqtt: {host: 127.0.0.1, port: 1883}
       discovery: {workgroup: WORKGROUP, netbios_name: MEDIA-SERZHAN}
       file_access:
         accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
@@ -89,6 +91,12 @@
               - >-
                 'topic_prefix = DigitalHouses/Global/digitalhouses_plex_agent'
                 in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
+              - >-
+                'username = fixture' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
+              - >-
+                'password = fake-fixture-only' in lookup('ansible.builtin.file',
                   media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
               - "'127.0.0.1:8000:8000' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-compose.yml.j2')"
               - "'username = \"serzhan\"' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-config.toml.j2')"

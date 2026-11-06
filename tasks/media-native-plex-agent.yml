@@ -1,15 +1,15 @@
 ---
 # Install the existing DigitalHouses Plex Agent product from a pinned tagged
 # upstream release. The Ansible repository adds no Python or shell worker.
-- name: Require site-owned MQTT credentials for the existing Plex Agent product
+- name: Require task 05 MQTT credentials for the existing Plex Agent product
   ansible.builtin.assert:
     that:
       - media_spec.plex_agent.mqtt.host | length > 0
       - media_spec.plex_agent.mqtt.port | int > 0
       - media_spec.plex_agent.mqtt.port | int <= 65535
-      - media_spec.plex_agent.mqtt.username | length > 0
-      - media_spec.plex_agent.mqtt.password | length > 0
-    fail_msg: MEDIA80_PLEX_AGENT_MQTT_SITE_CREDENTIALS_REQUIRED
+      - media_mqtt_username | default('') | length > 0
+      - media_mqtt_password | default('') | length > 0
+    fail_msg: MEDIA30_PLEX_AGENT_MQTT_CREDENTIALS_REQUIRED_FROM_TASK05
   no_log: true
 
 - name: Install upstream Plex Agent runtime prerequisites
