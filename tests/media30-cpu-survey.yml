@@ -1,0 +1,50 @@
+---
+- name: Verify CPU choices without changing PVE or media services
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_spec:
+      resources:
+        cores: 2
+        cpu_limit: 1.5
+        transcode_cpu_limit: 1.0
+  tasks:
+    - name: Select both manifest budgets when no Survey override exists
+      ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
+
+    - name: Confirm manifest percentages
+      ansible.builtin.assert:
+        that:
+          - media30_vm_cpu_percent | int == 150
+          - media30_transcode_cpu_percent | int == 100
+
+    - name: Select explicit VM and shared Plex Jellyfin caps
+      ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
+      vars:
+        DH_MEDIA_VM_CPU_PERCENT: '175'  # noqa: var-naming[pattern] external Survey name
+        DH_MEDIA_TRANSCODE_CPU_PERCENT: '150'  # noqa: var-naming[pattern] external Survey name
+
+    - name: Confirm both overrides are independent and manifest was not modified
+      ansible.builtin.assert:
+        that:
+          - media30_vm_cpu_percent | int == 175
+          - media30_transcode_cpu_percent | int == 150
+          - media_spec.resources.cpu_limit | float == 1.5
+          - media_spec.resources.transcode_cpu_limit | float == 1.0
+
+    - name: Reject an override above the available vCPU count
+      block:
+        - name: Validate an intentionally invalid CPU cap
+          ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
+          vars:
+            DH_MEDIA_VM_CPU_PERCENT: '250'  # noqa: var-naming[pattern] external Survey name
+
+        - name: Fail if the over-limit percentage was accepted
+          ansible.builtin.fail:
+            msg: MEDIA30_INVALID_CPU_WAS_ACCEPTED
+      rescue:
+        - name: Require the invalid override reached validation
+          ansible.builtin.assert:
+            that:
+              - media30_vm_cpu_override == '250'

@@ -1,0 +1,49 @@
+---
+# Read-only selection of CPU caps. Blank Survey fields inherit site manifest.
+# Percentages are per one logical CPU core: 150 == 1.5 CPU cores.
+- name: Normalize optional Semaphore CPU percentage fields
+  ansible.builtin.set_fact:
+    media30_vm_cpu_override: "{{ DH_MEDIA_VM_CPU_PERCENT | default('') | string | trim }}"
+    media30_transcode_cpu_override: "{{ DH_MEDIA_TRANSCODE_CPU_PERCENT | default('') | string | trim }}"
+
+- name: Require supported manifest and explicit CPU override values
+  ansible.builtin.assert:
+    that:
+      - media_spec.resources.cores | int >= 1
+      - (media_spec.resources.cpu_limit | float) * 100 >= 25
+      - (media_spec.resources.cpu_limit | float) <= (media_spec.resources.cores | int)
+      - (media_spec.resources.transcode_cpu_limit | float) * 100 >= 25
+      - (media_spec.resources.transcode_cpu_limit | float) <= (media_spec.resources.cores | int)
+      - >-
+        media30_vm_cpu_override == ''
+        or (media30_vm_cpu_override is match('^[1-9][0-9]{0,2}$')
+            and media30_vm_cpu_override | int >= 25
+            and media30_vm_cpu_override | int <= (media_spec.resources.cores | int * 100))
+      - >-
+        media30_transcode_cpu_override == ''
+        or (media30_transcode_cpu_override is match('^[1-9][0-9]{0,2}$')
+            and media30_transcode_cpu_override | int >= 25
+            and media30_transcode_cpu_override | int <= (media_spec.resources.cores | int * 100))
+    fail_msg: >-
+      MEDIA30_CPU_PERCENT_INVALID: use an integer percentage from 25 through
+      (VM cores x 100), or leave the Survey field blank to inherit site manifest.
+
+- name: Resolve effective VM and shared-transcoder CPU budgets
+  ansible.builtin.set_fact:
+    media30_vm_cpu_percent: >-
+      {{ (media30_vm_cpu_override | int)
+         if media30_vm_cpu_override != ''
+         else ((media_spec.resources.cpu_limit | float * 100) | round(0) | int) }}
+    media30_transcode_cpu_percent: >-
+      {{ (media30_transcode_cpu_override | int)
+         if media30_transcode_cpu_override != ''
+         else ((media_spec.resources.transcode_cpu_limit | float * 100) | round(0) | int) }}
+
+- name: Require valid final CPU percentages independently
+  ansible.builtin.assert:
+    that:
+      - media30_vm_cpu_percent | int >= 25
+      - media30_vm_cpu_percent | int <= (media_spec.resources.cores | int * 100)
+      - media30_transcode_cpu_percent | int >= 25
+      - media30_transcode_cpu_percent | int <= (media_spec.resources.cores | int * 100)
+    fail_msg: MEDIA30_EFFECTIVE_CPU_PERCENT_INVALID
