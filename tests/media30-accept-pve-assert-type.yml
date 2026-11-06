@@ -1,0 +1,15 @@
+---
+- name: Verify PVE acceptance condition typing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    pve_accept_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-pve.yml') | from_yaml }}"
+  tasks:
+    - name: Require site identity assertions to be strings
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((pve_accept_tasks | selectattr('name', 'equalto',
+              'Verify VM site identity and two dedicated passthrough devices') | first)
+             ['ansible.builtin.assert'].that | reject('string') | list | length) == 0
