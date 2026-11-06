@@ -62,6 +62,18 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 
 **Не готово:** реальная привязка Plex к аккаунту владельца (маркер PlexOnlineToken — не онлайн-проверка), проверка Jellyfin QSV реальным коротким транскодированием, Arr Forms через фактическую форму входа, native password rotation и **живое прохождение встроенной №81**. Plex библиотеки, сканирование, API-интеграция Arr/qBittorrent и Plex Agent подготовлены **только в коде, не проверены E2E**. Filestash/Sambee API требуют живой проверки; Filestash latest-бинарь и Sambee stable-тег ещё не закреплены immutable digest. Первый блокирующий gate стоит **до PVE**, второй `MEDIA80_APPLY_ACCEPTANCE_PENDING` — **после №81** в guest play, чтобы даже при ошибочном снятии первого запрета не объявить задачу завершённой. Live keep/import и destructive E2E ещё не проведены; ни один полный запуск №30 пока не подтверждён.
 
+## Подготовка явного destructive E2E `recreate + erase` (2026-11-06)
+
+Владелец запросил разрушительный запуск №30 для существующей **только** VM `2232` и диска за SATA PCI `0000:2b:00.0`. Аудит #85 подтвердил пул `serzhan-pool`, GUID `40733622006301358`, ONLINE и непустые `media/downloads` и отдельный `downloads` dataset; `erase` уничтожит также документы, резервные копии и все остальные datasets этого пула. **До этого изменения фактический `recreate + erase` не выполнялся; сам WIP deploy всё ещё заблокирован до PVE.**
+
+Подготовлены две независимые проверки перед разрушением: (1) ещё на **старой работающей VM, до `qm shutdown/destroy`**, проверка имени, описания, отсутствия lock, двух PCI devices, QGA, GUID ровно существующего пула, ONLINE, единственного ZFS vdev и отсутствия ошибок; (2) уже внутри новой VM, **до остановки служб, `zpool destroy`, `wipefs`**, повторное сопоставление единственного SATA-диска с исходным именем и GUID по активному пулу либо read-only ZFS label scan. Если диск поменяли между стадиями, выполнение прервётся до стирания. Импорт чужого пула не допускается.
+
+Образ Debian 13 с официальным SHA512 теперь предварительно скачивается на PVE **до удаления старой VM**; в `tasks/media-vm-apply.yml` после `qm destroy` нет повторных сетевых загрузок, а хэш файла проверяется перед `qm importdisk`. Дополнительно `create` отвергается для существующей VM. Private site manifest пополнен обязательной директорией `media/downloads` (PR DigitalHouses/site-serzhan-home#3), иначе первый запуск qBittorrent на пустом ZFS не смог бы стартовать.
+
+**После erase ZFS GUID всегда меняется:** native задача считывает и сообщает новый GUID в журнале. Для следующего `import` потребуется синхронизировать поле `media_vm.storage.import_pool_guid` в приватном site-repo с фактическим новым GUID; нельзя использовать старый GUID молча. Автоматического коммита в private repo во время разрушительного запуска нет.
+
+`tests/media30-recreate-erase-guard.yml` проверяет точное совпадение, чужой и неоднозначный пул (отказы ожидаемы), а также порядок preflight → download → VM lifecycle → disk erase; все проверки выполняются на DEV без изменений гостя. Это не live E2E и не разрешение снимать блокировки `MEDIA30_DEPLOY_APPLY_BLOCKED` и `MEDIA80_APPLY_ACCEPTANCE_PENDING`.
+
 ## Критерии для релиза
 
 - Syntax-check, ansible-lint, git diff --check.

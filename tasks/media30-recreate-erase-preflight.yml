@@ -1,0 +1,101 @@
+---
+# Recreate+erase site preflight. All commands are read-only, run before VM
+# shutdown/destroy. Never trust a VMID or an SATA PCI BDF alone.
+- name: Require the exact existing VM and declared single-disk pool identity
+  ansible.builtin.assert:
+    that:
+      - media_vm_conf.stat.isreg | default(false)
+      - media_current_vm.name | default('') == media_spec.name
+      - media_current_vm.description | default('') == 'DigitalHouses managed media guest v2'
+      - media_current_vm.lock is not defined
+      - media_spec.storage.import_pool_guid | default('') | string is match('^[0-9]{5,20}$')
+      - media_pci.results[0].stat.exists | default(false)
+      - media_pci.results[1].stat.exists | default(false)
+      - >-
+        (media_vm_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*'
+           ~ (media_spec.pci.gpu | regex_escape)) | length) == 1
+      - >-
+        (media_vm_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*'
+           ~ (media_spec.pci.sata_controller | regex_escape)) | length) == 1
+    fail_msg: MEDIA30_RECREATE_ERASE_PVE_OWNER_OR_DISK_IDENTITY_MISMATCH
+
+- name: Require the existing VM be running for a safe pool-identity preflight
+  ansible.builtin.assert:
+    that:
+      - media_vm_power.stdout | default('') == 'status: running'
+    fail_msg: MEDIA30_RECREATE_ERASE_VM_NOT_RUNNING_FOR_PREFLIGHT
+
+- name: Require authenticated QEMU Guest Agent before destructive VM lifecycle
+  ansible.builtin.command:
+    argv: [qm, agent, "{{ media_spec.vmid }}", ping]
+  register: media30_erase_qga_preflight
+  changed_when: false
+
+- name: Read exact active pool GUID via QGA before destroying the VM
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - get
+      - -H
+      - -o
+      - value
+      - guid
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_erase_guid_raw
+  changed_when: false
+
+- name: Read active pool physical topology via QGA before destroying the VM
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - status
+      - -LP
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_erase_topology_raw
+  changed_when: false
+
+- name: Decode QGA process status and pool-identity results
+  ansible.builtin.set_fact:
+    media30_erase_guid_result: "{{ media30_erase_guid_raw.stdout | from_json }}"
+    media30_erase_topology_result: "{{ media30_erase_topology_raw.stdout | from_json }}"
+
+- name: Refuse to destroy an unknown, unhealthy or multi-vdev ZFS pool
+  ansible.builtin.assert:
+    that:
+      - media30_erase_guid_result.exited | default(0) | int == 1
+      - media30_erase_guid_result.exitcode | default(1) | int == 0
+      - >-
+        (media30_erase_guid_result['out-data'] | default('') | trim)
+        == (media_spec.storage.import_pool_guid | string)
+      - media30_erase_topology_result.exited | default(0) | int == 1
+      - media30_erase_topology_result.exitcode | default(1) | int == 0
+      - "'state: ONLINE' in media30_erase_topology_result['out-data']"
+      - "'errors: No known data errors' in media30_erase_topology_result['out-data']"
+      - >-
+        (media30_erase_topology_result['out-data']
+         | regex_findall('(?m)^\\s+/dev/\\S+\\s+ONLINE(?:\\s|$)')
+         | length) == 1
+    fail_msg: MEDIA30_RECREATE_ERASE_POOL_GUID_OR_SINGLE_DISK_MISMATCH
+
+- name: Report exact read-only destructive target preflight
+  ansible.builtin.debug:
+    msg:
+      result: MEDIA30_RECREATE_ERASE_PREFLIGHT_PASS
+      vmid: "{{ media_spec.vmid }}"
+      vm_name: "{{ media_spec.name }}"
+      pool: "{{ media_spec.storage.pool_name }}"
+      verified_pool_guid: "{{ media_spec.storage.import_pool_guid }}"
+      sata_controller: "{{ media_spec.pci.sata_controller }}"
+      vm_or_disk_changed: false

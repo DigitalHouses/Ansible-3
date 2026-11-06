@@ -1,0 +1,98 @@
+---
+- name: Offline destructive-target identity and ordering regression
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_vm:
+      storage:
+        pool_name: serzhan-pool
+        import_pool_guid: '40733622006301358'
+    valid_candidate:
+      rc: 0
+      stdout: |
+        pool: serzhan-pool
+          id: 40733622006301358
+         state: ONLINE
+    wrong_candidate:
+      rc: 0
+      stdout: |
+        pool: foreign-pool
+          id: 12345678901234567
+         state: ONLINE
+    ambiguous_candidate:
+      rc: 0
+      stdout: |
+        pool: serzhan-pool
+          id: 40733622006301358
+         state: ONLINE
+        pool: another-pool
+          id: 12345678901234567
+         state: ONLINE
+  tasks:
+    - name: Accept exactly the declared pool name and GUID
+      ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
+      vars:
+        media30_erase_importable: "{{ valid_candidate }}"
+
+    - name: Start negative identity checks in the unaccepted state
+      ansible.builtin.set_fact:
+        media30_wrong_was_rejected: false
+        media30_ambiguous_was_rejected: false
+
+    - name: Reject foreign disk labels
+      block:
+        - name: Evaluate intentionally foreign disk labels
+          ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
+          vars:
+            media30_erase_importable: "{{ wrong_candidate }}"
+      rescue:
+        - name: Record rejection of a foreign pool
+          ansible.builtin.set_fact:
+            media30_wrong_was_rejected: true
+
+    - name: Reject ambiguous disks containing more than one old pool label
+      block:
+        - name: Evaluate intentionally ambiguous disk labels
+          ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
+          vars:
+            media30_erase_importable: "{{ ambiguous_candidate }}"
+      rescue:
+        - name: Record rejection of ambiguous pool labels
+          ansible.builtin.set_fact:
+            media30_ambiguous_was_rejected: true
+
+    - name: Require both negative cases to have actually failed closed
+      ansible.builtin.assert:
+        that:
+          - media30_wrong_was_rejected | bool
+          - media30_ambiguous_was_rejected | bool
+
+    - name: Inspect static task ordering without executing a deployment
+      ansible.builtin.set_fact:
+        media30_deploy_source: >-
+          {{ lookup('ansible.builtin.file',
+             playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}
+        media30_vm_source: >-
+          {{ lookup('ansible.builtin.file',
+             playbook_dir ~ '/../tasks/media-vm-apply.yml') }}
+        media30_disk_source: >-
+          {{ lookup('ansible.builtin.file',
+             playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}
+
+    - name: Require two independent identity checks before any destructive step
+      ansible.builtin.assert:
+        that:
+          - "'MEDIA30_DEPLOY_APPLY_BLOCKED' in media30_deploy_source"
+          - >-
+            media30_deploy_source.find('media30-recreate-erase-preflight.yml')
+            < media30_deploy_source.find('media30-image-prestage.yml')
+          - >-
+            media30_deploy_source.find('media30-image-prestage.yml')
+            < media30_deploy_source.find('media-vm-apply.yml')
+          - >-
+            media30_disk_source.find('media30-recreate-erase-guest-identity.yml')
+            < media30_disk_source.find('zpool, destroy')
+          - "'cloud.debian.org' not in media30_vm_source"
+          - "'media30_image_sha512_preflight' in media30_vm_source"
+          - "'not media_vm_present.stat.exists' in media30_vm_source"

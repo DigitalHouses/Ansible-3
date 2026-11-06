@@ -1,0 +1,20 @@
+---
+# Reusable fail-closed ZFS label validation used by the actual erase path
+# and the offline fixture. Never import/erase based on the pool name alone.
+- name: Require one matching old pool name and GUID on the selected SATA disk
+  ansible.builtin.assert:
+    that:
+      - media30_erase_importable.rc == 0
+      - >-
+        (media30_erase_importable.stdout
+         | regex_findall('(?m)^\\s*pool:\\s*'
+           ~ (media_vm.storage.pool_name | regex_escape) ~ '\\s*$')
+         | length) == 1
+      - >-
+        (media30_erase_importable.stdout
+         | regex_findall('(?m)^\\s*id:\\s*'
+           ~ (media_vm.storage.import_pool_guid | string) ~ '\\s*$')
+         | length) == 1
+      - (media30_erase_importable.stdout | regex_findall('(?m)^\\s*pool:') | length) == 1
+      - (media30_erase_importable.stdout | regex_findall('(?m)^\\s*id:') | length) == 1
+    fail_msg: MEDIA30_RECREATE_ERASE_DISK_LABEL_IDENTITY_MISMATCH

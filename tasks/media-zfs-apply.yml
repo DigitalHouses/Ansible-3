@@ -122,6 +122,12 @@
          | length == 1)
     fail_msg: MEDIA_SATA_DISK_PART_OF_MULTI_VDEV_POOL
 
+- name: Reconfirm old disk GUID before explicit recreate plus erase
+  ansible.builtin.include_tasks: media30-recreate-erase-guest-identity.yml
+  when:
+    - media_vm_action == 'recreate'
+    - media_raw_disk_action == 'erase'
+
 - name: Verify direct partition or disk is not mounted outside ZFS
   ansible.builtin.command:
     argv: [findmnt, -rn, --source, "{{ item }}"]
@@ -213,6 +219,32 @@
       - "{{ media_sata_disk }}"
   when: media_raw_disk_action == 'erase'
   changed_when: true
+
+- name: Read the new ZFS pool GUID after explicit erase and recreation
+  ansible.builtin.command:
+    argv: [zpool, get, -H, -o, value, guid, "{{ media_vm.storage.pool_name }}"]
+  register: media30_new_zfs_guid
+  changed_when: false
+  when: media_raw_disk_action == 'erase'
+
+- name: Require a fresh valid GUID after recreating the media pool
+  ansible.builtin.assert:
+    that:
+      - media30_new_zfs_guid.stdout | trim is match('^[0-9]{5,20}$')
+      - >-
+        (media30_new_zfs_guid.stdout | trim)
+        != (media_vm.storage.import_pool_guid | default('') | string)
+    fail_msg: MEDIA30_ERASE_NEW_ZFS_GUID_INVALID
+  when: media_raw_disk_action == 'erase'
+
+- name: Report exact new GUID for site-repo reconciliation after successful apply
+  ansible.builtin.debug:
+    msg:
+      result: MEDIA30_NEW_POOL_GUID_NEEDS_SITE_MANIFEST_UPDATE
+      new_guid: "{{ media30_new_zfs_guid.stdout | trim }}"
+      site_manifest_field: media_vm.storage.import_pool_guid
+      source: freshly_created_ZFS_pool
+  when: media_raw_disk_action == 'erase'
 
 # IMPORT ONLY: match the exact expected ZFS GUID; never force foreign pools.
 - name: Require the explicit existing-pool GUID from the private site manifest

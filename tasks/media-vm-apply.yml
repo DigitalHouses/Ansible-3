@@ -23,7 +23,9 @@
 - name: Require only the VM existence implied by the selected action
   ansible.builtin.assert:
     that:
-      - (media_vm_action == 'create') or (media_vm_action in ['keep', 'recreate'] and media_vm_present.stat.exists)
+      - >-
+        (media_vm_action == 'create' and not media_vm_present.stat.exists)
+        or (media_vm_action in ['keep', 'recreate'] and media_vm_present.stat.exists)
     fail_msg: "VM_ACTION_STATE_MISMATCH: create requires absent VM; keep/recreate require existing VM"
 
 - name: Protect any existing VM from foreign ownership
@@ -185,47 +187,23 @@
                  and media_vm_settings.agent | default('') in ['1', 'enabled=1']))
 
   changed_when: true
-- name: Ensure image cache exists
-  ansible.builtin.file:
-    path: /var/cache/digitalhouses/media
-    state: directory
-    mode: '0755'
+# The official image was downloaded and verified before VM lifecycle.
+# Do not make new network requests after a recreate has destroyed the old VM.
+- name: Check checksum-verified Debian image before boot-volume import
+  ansible.builtin.stat:
+    path: /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2
+    follow: false
+    checksum_algorithm: sha512
+  register: media30_cached_image_readback
   when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
 
-- name: Fetch official Debian 13 checksums
-  ansible.builtin.get_url:
-    url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
-    dest: /var/cache/digitalhouses/media/SHA512SUMS
-    mode: '0644'
-    force: true
-  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
-
-- name: Read official Debian image checksum
-  ansible.builtin.slurp:
-    src: /var/cache/digitalhouses/media/SHA512SUMS
-  register: media_image_checksums
-  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
-
-- name: Extract Debian 13 cloud image SHA512
-  ansible.builtin.set_fact:
-    media_image_sha512: >-
-      {{ (media_image_checksums.content | b64decode
-          | regex_findall('(?m)^([a-f0-9]{128})\s+\*?debian-13-generic-amd64\.qcow2\s*$')) | first | default('') }}
-  when: media_image_checksums is not skipped
-
-- name: Require signed-download checksum format before fetching image
+- name: Refuse unchecked or changed OS image after a VM recreate
   ansible.builtin.assert:
     that:
-      - media_image_sha512 | length == 128
-    fail_msg: MEDIA_DEBIAN_IMAGE_CHECKSUM_MISSING
-  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
-
-- name: Download verified official Debian 13 cloud image
-  ansible.builtin.get_url:
-    url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
-    dest: /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2
-    checksum: "sha512:{{ media_image_sha512 }}"
-    mode: '0644'
+      - media30_cached_image_readback.stat.isreg | default(false)
+      - not (media30_cached_image_readback.stat.islnk | default(false))
+      - media30_cached_image_readback.stat.checksum | default('') == media30_image_sha512_preflight
+    fail_msg: MEDIA30_RECREATE_DEBIAN_IMAGE_HASH_DRIFT
   when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
 
 - name: Import boot disk once when neither boot nor staged disk exists
