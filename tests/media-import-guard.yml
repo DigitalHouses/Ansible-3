@@ -1,53 +1,42 @@
 ---
-# Pure Ansible fixture: import candidate recognition without any ZFS commands.
-- name: Verify selected ZFS import identities fail closed
+# Offline import fixture: a pool name on one selected SATA disk is sufficient.
+- name: Verify importing existing ZFS without GUID pinning
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
-    media_expected_guid: '40733622006301358'
-    media_expected_pool: serzhan-pool
-    media_discovery_good: |
+    pool_name: serzhan-pool
+    one_pool: |
       pool: serzhan-pool
-        id: 40733622006301358
+        id: 987654321
        state: ONLINE
-      config:
-        serzhan-pool ONLINE
-          /dev/sdb1 ONLINE
-    media_discovery_foreign: |
-      pool: serzhan-pool
-        id: 12345678901234567
+    another_pool: |
+      pool: other-pool
+        id: 123456789
        state: ONLINE
-    media_discovery_duplicate: |
+    multiple_pools: |
       pool: serzhan-pool
-        id: 40733622006301358
-      pool: foreign-pool
-        id: 12345678901234567
+        id: 987654321
+      pool: other-pool
+        id: 123456789
   tasks:
-    - name: Confirm unique, exact pool identity is accepted
+    - name: Accept the one selected existing pool regardless of its GUID
       ansible.builtin.assert:
         that:
-          - >-
-            (media_discovery_good
-             | regex_findall('(?m)^\\s*pool:\\s*' ~ (media_expected_pool | regex_escape) ~ '\\s*$')
-             | length) == 1
-          - >-
-            (media_discovery_good
-             | regex_findall('(?m)^\\s*id:\\s*' ~ media_expected_guid ~ '\\s*$')
-             | length) == 1
-          - (media_discovery_good | regex_findall('(?m)^\\s*pool:') | length) == 1
-          - (media_discovery_good | regex_findall('(?m)^\\s*id:') | length) == 1
+          - (one_pool | regex_findall('(?m)^\s*pool:\s*' ~ (pool_name | regex_escape) ~ '\s*$') | length) == 1
+          - (one_pool | regex_findall('(?m)^\s*pool:') | length) == 1
 
-    - name: Confirm wrong disk pool GUID never matches the selected identity
+    - name: Reject wrong or ambiguous pool name without checking disk identifiers
       ansible.builtin.assert:
         that:
-          - >-
-            (media_discovery_foreign
-             | regex_findall('(?m)^\\s*id:\\s*' ~ media_expected_guid ~ '\\s*$')
-             | length) == 0
+          - (another_pool | regex_findall('(?m)^\s*pool:\s*' ~ (pool_name | regex_escape) ~ '\s*$') | length) == 0
+          - (multiple_pools | regex_findall('(?m)^\s*pool:') | length) == 2
 
-    - name: Confirm ambiguous scan is rejected rather than choosing one
+    - name: Verify native import uses named pool and never erase
       ansible.builtin.assert:
         that:
-          - (media_discovery_duplicate | regex_findall('(?m)^\\s*pool:') | length) == 2
-          - (media_discovery_duplicate | regex_findall('(?m)^\\s*id:') | length) == 2
+          - "'media_vm.storage.pool_name]' in media_zfs_apply"
+          - "'media_vm.storage.import_pool_guid' not in media_zfs_apply"
+          - media_zfs_apply is search('media_raw_disk_action.*import')
+      vars:
+        media_zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"

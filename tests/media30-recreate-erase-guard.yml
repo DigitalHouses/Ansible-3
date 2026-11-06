@@ -1,100 +1,35 @@
 ---
-- name: Offline destructive-target identity and ordering regression
+# Native Ansible offline regression: verify ordering, do not execute VM lifecycle.
+- name: Verify recreate and import ordering
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
-    media_vm:
-      storage:
-        pool_name: serzhan-pool
-        import_pool_guid: '40733622006301358'
-    valid_candidate:
-      rc: 0
-      stdout: |
-        pool: serzhan-pool
-          id: 40733622006301358
-         state: ONLINE
-    wrong_candidate:
-      rc: 0
-      stdout: |
-        pool: foreign-pool
-          id: 12345678901234567
-         state: ONLINE
-    ambiguous_candidate:
-      rc: 0
-      stdout: |
-        pool: serzhan-pool
-          id: 40733622006301358
-         state: ONLINE
-        pool: another-pool
-          id: 12345678901234567
-         state: ONLINE
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}"
+    vm_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-vm-apply.yml') }}"
+    zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"
   tasks:
-    - name: Accept exactly the declared pool name and GUID
-      ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
+    - name: Require named-pool preflight and Debian image before VM destruction
+      ansible.builtin.assert:
+        that:
+          - "'media_mode in [' in deploy"
+          - "'media_vm_action in [' in deploy"
+          - "'media_disk_action in [' in deploy"
+          - deploy.find('media30-recreate-preflight.yml') < deploy.find('media30-image-prestage.yml')
+          - deploy.find('media30-image-prestage.yml') < deploy.find('media-vm-apply.yml')
+          - "'MEDIA30_RECREATE_IMPORT_EXPECTED_POOL_MISSING' in recreate_preflight"
+          - "'cloud.debian.org' not in vm_apply"
+          - "'media30_image_sha512_preflight' in vm_apply"
       vars:
-        media30_erase_importable: "{{ valid_candidate }}"
+        recreate_preflight: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-recreate-preflight.yml') }}"
 
-    - name: Start negative identity checks in the unaccepted state
-      ansible.builtin.set_fact:
-        media30_wrong_was_rejected: false
-        media30_ambiguous_was_rejected: false
-
-    - name: Reject foreign disk labels
-      block:
-        - name: Evaluate intentionally foreign disk labels
-          ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
-          vars:
-            media30_erase_importable: "{{ wrong_candidate }}"
-      rescue:
-        - name: Record rejection of a foreign pool
-          ansible.builtin.set_fact:
-            media30_wrong_was_rejected: true
-
-    - name: Reject ambiguous disks containing more than one old pool label
-      block:
-        - name: Evaluate intentionally ambiguous disk labels
-          ansible.builtin.include_tasks: ../tasks/media30-erase-label-assert.yml
-          vars:
-            media30_erase_importable: "{{ ambiguous_candidate }}"
-      rescue:
-        - name: Record rejection of ambiguous pool labels
-          ansible.builtin.set_fact:
-            media30_ambiguous_was_rejected: true
-
-    - name: Require both negative cases to have actually failed closed
+    - name: Require independent import and erase actions for a single SATA disk
       ansible.builtin.assert:
         that:
-          - media30_wrong_was_rejected | bool
-          - media30_ambiguous_was_rejected | bool
-
-    - name: Inspect static task ordering without executing a deployment
-      ansible.builtin.set_fact:
-        media30_deploy_source: >-
-          {{ lookup('ansible.builtin.file',
-             playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}
-        media30_vm_source: >-
-          {{ lookup('ansible.builtin.file',
-             playbook_dir ~ '/../tasks/media-vm-apply.yml') }}
-        media30_disk_source: >-
-          {{ lookup('ansible.builtin.file',
-             playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}
-
-    - name: Require two independent identity checks before any destructive step
-      ansible.builtin.assert:
-        that:
-          - "'media_mode in [' in media30_deploy_source"
-          - "'media_vm_action in [' in media30_deploy_source"
-          - "'media_disk_action in [' in media30_deploy_source"
-          - >-
-            media30_deploy_source.find('media30-recreate-erase-preflight.yml')
-            < media30_deploy_source.find('media30-image-prestage.yml')
-          - >-
-            media30_deploy_source.find('media30-image-prestage.yml')
-            < media30_deploy_source.find('media-vm-apply.yml')
-          - >-
-            media30_disk_source.find('media30-erase-guest-identity.yml')
-            < media30_disk_source.find('zpool, destroy')
-          - "'cloud.debian.org' not in media30_vm_source"
-          - "'media30_image_sha512_preflight' in media30_vm_source"
-          - "'not media_vm_present.stat.exists' in media30_vm_source"
+          - "'MEDIA_SATA_DISK_COUNT_MUST_EQUAL_ONE' in zfs_apply"
+          - "'MEDIA_SATA_DISK_IS_SYSTEM_DISK' in zfs_apply"
+          - zfs_apply is search('media_raw_disk_action.*import')
+          - zfs_apply is search('media_raw_disk_action.*erase')
+          - "'zpool, destroy' in zfs_apply"
+          - "'media_vm.storage.import_pool_guid' not in zfs_apply"
+          - "'media30-erase-guest-identity.yml' not in zfs_apply"

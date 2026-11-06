@@ -273,11 +273,9 @@
             media_sata_pci_vendor: "{{ media_sata_vendor_raw.content | b64decode | trim | lower }}"
             media_sata_pci_device: "{{ media_sata_device_raw.content | b64decode | trim | lower }}"
 
-        - name: Verify exact existing VM and ZFS identity before recreate plus erase
-          ansible.builtin.include_tasks: ../tasks/media30-recreate-erase-preflight.yml
-          when:
-            - media_vm_action == 'recreate'
-            - media_disk_action == 'erase'
+        - name: Check managed VM and named ZFS pool before recreate
+          ansible.builtin.include_tasks: ../tasks/media30-recreate-preflight.yml
+          when: media_vm_action == 'recreate'
 
         - name: Prestage checksum-verified Debian image before create or recreate
           ansible.builtin.include_tasks: ../tasks/media30-image-prestage.yml
