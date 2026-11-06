@@ -259,8 +259,7 @@
 - name: Import existing named pool from the sole selected SATA disk
   ansible.builtin.command:
     argv: >-
-      {{ ['zpool', 'import', '-N']
-         + (['-f'] if media_vm_action in ['create', 'recreate'] else [])
+      {{ ['zpool', 'import', '-N', '-f']
          + (['-o', 'readonly=on'] if media_vm.storage.mode == 'readonly' else [])
          + media_import_scan + [media_vm.storage.pool_name] }}
   when:

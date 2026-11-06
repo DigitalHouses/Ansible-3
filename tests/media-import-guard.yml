@@ -37,6 +37,7 @@
         that:
           - "'media_vm.storage.pool_name]' in media_zfs_apply"
           - "'media_vm.storage.import_pool_guid' not in media_zfs_apply"
+          - "'-f' in media_zfs_apply"
           - media_zfs_apply is search('media_raw_disk_action.*import')
       vars:
         media_zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"
