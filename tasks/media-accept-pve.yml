@@ -50,7 +50,7 @@
         (media80_accept_pve_config.stdout
          | regex_findall('(?m)^hostpci[0-9]+:.*' ~
            (media_spec.pci.sata_controller | regex_escape)) | length) == 1
-      - media80_accept_pve_status.stdout | trim == 'status: running'
+      - "media80_accept_pve_status.stdout | trim == 'status: running'"
     fail_msg: MEDIA80_ACCEPT_PVE_VM_CONFIG_DRIFT
 
 - name: Confirm guest agent is responsive through the supported Proxmox CLI
