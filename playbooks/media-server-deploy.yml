@@ -1,8 +1,8 @@
 ---
-# Task 80: read-only foundation for native media-server deployment.
-# Intentionally NOT in catalog/tasks.yml until the apply path and acceptance exist.
-# No VM, disk, ZFS, service or Cloudflare mutations are permitted here.
-- name: "80 | Resolve media site declaration"
+# Task 30: unpublished development-only media server deployment.
+# Never listed in Semaphore catalog. Apply is blocked before PVE; additional
+# acceptance gate remains after the guest phase. Audit lives in media-server.yml.
+- name: "30 | Resolve media site declaration"
   hosts: runner
   connection: local
   gather_facts: false
@@ -23,19 +23,19 @@
           - media_vm_action in ['keep', 'create', 'recreate']
           - media_disk_action in ['import', 'erase']
           - media_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-        fail_msg: "Task 80 requires valid mode, VM action and disk action"
+        fail_msg: "Task 30 deployment requires valid mode, VM action and disk action"
 
     - name: Refuse apply while native VM, ZFS and application phases are unfinished
       ansible.builtin.assert:
         that: media_mode == 'audit'
         fail_msg: >-
-          MEDIA80_APPLY_NOT_READY: task 80 is a development-only read-only audit.
+          MEDIA30_DEPLOY_APPLY_BLOCKED: task 30 deployment remains deliberately blocked.
           It is not registered in the Semaphore catalog.
 
     - name: Require task 05 GitHub provisioning credential
       ansible.builtin.assert:
         that: media_github_token | length > 0
-        fail_msg: "Task 80 requires the GitHub credential from task 05"
+        fail_msg: "Task 30 deployment requires the GitHub credential from task 05"
       no_log: true
 
     - name: Read exact owner/site declaration from private site repository
@@ -122,7 +122,7 @@
       changed_when: false
       no_log: true
 
-- name: "80 | Observe actual media VM and selected PCI devices"
+- name: "30 | Observe actual media VM and selected PCI devices"
   hosts: media80_pve
   gather_facts: false
   become: false
@@ -222,7 +222,7 @@
           changes_applied: false
       when: media_mode == 'audit'
 
-- name: "80 | Stage native VM lifecycle (apply only)"
+- name: "30 | Stage native VM lifecycle (apply only)"
   hosts: media80_pve
   gather_facts: false
   become: false
@@ -307,7 +307,7 @@
         - name: Verify Proxmox portion of built-in task 81 acceptance
           ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
 
-- name: "80 | Pin the exact guest SSH identity (apply only)"
+- name: "30 | Pin the exact guest SSH identity (apply only)"
   hosts: runner
   connection: local
   gather_facts: false
@@ -366,7 +366,7 @@
             media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
           changed_when: false
 
-- name: "80 | Prepare native guest and ZFS (apply only)"
+- name: "30 | Prepare native guest and ZFS (apply only)"
   hosts: media80_guest
   gather_facts: false
   become: true

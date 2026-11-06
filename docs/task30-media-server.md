@@ -1,6 +1,8 @@
-# №80 — Медиасервер (Ansible-3)
+# №30 — Медиасервер (Ansible-3)
 
-**Статус:** в разработке. Подготовлены read-only аудит, инфраструктурные apply-блоки и черновой native app-onboarding. Всё применение преднамеренно заблокировано до PVE. Задача не зарегистрирована в каталоге Semaphore.
+**Статус:** №30 зарегистрирована в Semaphore и выполняется из `main` **только в режиме audit**: `playbooks/media-server.yml`. Успешные read-only запуски #78–#83 подтвердили VM 2232, QGA, здоровый ZFS и различие двух путей загрузок (`changed=0`). Следующая проверка наполненности путей и квот ещё не выполнена: попытка запуска №30 была заблокирована системой безопасности.
+
+**Незавершённое развёртывание** из Draft PR #31 хранится отдельно в `playbooks/media-server-deploy.yml`, не указано в каталоге и содержит блокировку `apply` до PVE и вторую блокировку завершения после приёмки. Не подменять им рабочий audit-playbook; объединение в один шаблон будет отдельным релизным изменением.
 
 ## Цель и границы
 
@@ -8,9 +10,9 @@
 
 Параметры: PVE endpoint — только из Runner /etc/digitalhouses/pve.yml; идентификатор сайта — /etc/digitalhouses/site-id; конфигурация — приватный DigitalHouses/site-<site-id>, inventories/<site-id>/site.yml и media_vm.yml, credential №05.
 
-**Состояние декларации 05.11.2026:** VMID 2232, mediaserver-serzhan, 192.168.11.232/24, Intel Arc A310 0000:2f:00.0, SATA 0000:2b:00.0, ZFS serzhan-pool, Hitachi 4 ТБ. Это не верифицированное живое состояние. Не переносить старые параметры Beelink/VM 2238/Samsung и их проверки NTFS/WWN.
+**Декларация и проверенная часть:** VMID 2232, mediaserver-serzhan, 192.168.11.232/24, Intel Arc A310 PCI 0000:2f:00.0, SATA PCI 0000:2b:00.0, ZFS serzhan-pool. Аудит Semaphore #82–#83 подтвердил работающую VM, наличие обоих PCI-устройств, GUID пула `40733622006301358` и состояние ONLINE без известных ошибок. Модель, серийник и размер физического Hitachi 4 ТБ в этих запусках отдельно не проверялись. Не переносить старые параметры Beelink/VM 2238/Samsung и проверки NTFS/WWN.
 
-В site manifest остаётся backup_export.pve_host=192.168.11.6, а также старые dh- ссылки портала; источник PVE endpoint — Runner, не эти устаревающие поля. Перенос backup/NFS вне №80.
+В site manifest остаётся backup_export.pve_host=192.168.11.6, а также старые dh- ссылки портала; источник PVE endpoint — Runner, не эти устаревающие поля. Перенос backup/NFS вне №30.
 
 ## Два обязательных выбора Semaphore, без default
 
@@ -26,7 +28,7 @@
 3. QGA для доверенного SSH ключа guest, только один SATA-диск, native zpool/zfs, declared datasets, директории, автомонтирование. Никаких дополнительных технических approvals.
 4. Plex, Jellyfin, qBittorrent, Radarr, Sonarr, Prowlarr, Filestash, Sambee, digitalhouses_plex_agent, локальный портал и авторизация native API/CLI. При необходимости собственного Python сначала отдельное техническое согласование; не копировать старые custom Python tools.
 5. SMB shares Media, Documents, Backups, DigitalHouses; Bonjour, Plex autoscan, медиапути, CPU/ARC и GPU. Общий пользовательский пароль 6–8 символов, первичный — 8, без логирования; Plex со своей учёткой. Нельзя открывать смену пароля через незащищённый HTTP.
-6. №81 как приёмка внутри №80: VM, QGA, ZFS, GPU, SMB, приложения/логины/порты, библиотека, повторное исполнение.
+6. №81 как приёмка внутри №30: VM, QGA, ZFS, GPU, SMB, приложения/логины/порты, библиотека, повторное исполнение.
 
 ## Исключения
 
@@ -34,7 +36,7 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 
 ## Реализовано в ветке
 
-- Режим audit: читает оба приватных manifest через токен №05, сверяет site/name/VMID/PCI, подключается к PVE по закреплённому SSH №10, читает VM configuration/status, наличие GPU/SATA и чужую привязку SATA. Возвращает MEDIA80_AUDIT_ONLY.
+- Рабочий `playbooks/media-server.yml` (из `main`): читает оба приватных manifest через токен №05, проверяет VM/PVE/PCI и через QGA — ZFS, GUID, datasets, сервисы, реальные download mountpoints; возвращает MEDIA30_AUDIT_ONLY с `changed=0`. В PR сохранён без изменений после merge `origin/main`. Установочные операции находятся только в `playbooks/media-server-deploy.yml`.
 - Подготовленный apply-контур (пока недостижим): нативный qm lifecycle для keep/create/recreate, cloud-init/QGA, сверка ED25519 через QGA и SSH, SATA vendor/device/class, ZFS import/erase, datasets, native ZFS boot, QGA/GPU/ARC/swap. `import` теперь **без `-f`**: для активного пула проверяется точный GUID из private manifest, а для отсутствующего выполняется read-only scan только выбранного SATA диска/разделов, проверка уникального name+GUID и импорт **строго по GUID без force**, затем повторная проверка GUID/топологии. Тест `tests/media-import-guard.yml`: правильный/чужой/неоднозначный идентификатор (`ok=3, changed=0, failed=0`). В отличие от старой версии, qm destroy не включает purge backup jobs.
 - Гостевая часть (пока недостижима): два POSIX/Samba пользователя из site-repo, пароль на ZFS (генерируется только при отсутствии, сохраняется при повторах), четыре закрытых SMB share, Bonjour, базовая локальная страница на 80 без ложной функции смены пароля.
 - Native Plex: официальный signed APT источник, системный сервис, Intel render/media group, проверка HTTP identity и доступа к media dataset. Создание только отсутствующих библиотек Фильмы/Сериалы/Музыка штатным `Plex Media Scanner`, определение ID/типа из Plex SQLite только через `sqlite3 -readonly`, проверка результата на диске; существующие библиотеки не перезаписываются. Четыре штатных атрибута Preferences.xml (auto + partial + periodic 900s) через `community.general.xml` с остановкой Plex только при изменении. Не создаём отдельный сканирующий сервис и не трогаем Plex account claim.
@@ -48,11 +50,11 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 - Встроенная №81 оформлена в `tasks/media-accept-pve.yml`, `tasks/media-accept-guest.yml`, `tasks/media-accept-smb.yml` и вызывается в общем playbook после соответствующих стадий. PVE: VM identity, core/RAM/balloon, GPU/SATA PCI, running/QGA. Guest: healthy ZFS, declared datasets и ZFS mount, systemd, TCP endpoints, LAN portal, неавторизованный Arr/qBittorrent API, Jellyfin/Plex libraries, Plex account claim marker + scan settings, реальные входы qBittorrent/Sambee/Filestash, все 4 SMB-шары под owner/admin. Для SMB используются только временные файлы `0600` в `/run`, удаляемые в `always` и скрытые через `no_log`. **Это подготовленные тесты, а не live-приёмка.**
 - `tests/media-native-render.yml` — офлайн-шаблоны, `ok=6, failed=0`. `tests/media-jellyfin-qsv.yml` — заводская QSV/HEVC-перенастройка и идемпотентность, `ok=10, failed=0`. `tests/media-plex-xml.yml` сначала не работал на DEV без `lxml`, затем успешно запущен (`ok=6, failed=0`) в изолированном временном окружении с распакованными Debian `python3-lxml` и `libxslt1.1`. Системные пакеты DEV не менялись. Guest получает `python3-lxml` через нативный Ansible apt. Ни один офлайн-тест не заменяет live E2E.
 - Нового собственного Python или Bash-оркестратора нет. Вся orchestration-логика — Ansible; системные qm/zpool/zfs/openssl/smbpasswd вызываются нативными задачами.
-- Apply жёстко остановлен **до PVE**, не подтверждён ни одним live E2E. Каталог Semaphore не меняется. Это stage implementation, не готовая установка.
+- Установка из `playbooks/media-server-deploy.yml` жёстко остановлена **до PVE**. Действующий каталог Semaphore №30 ссылается исключительно на `playbooks/media-server.yml` (audit) и не изменён. Это staged implementation, а не готовая установка.
 
 **Выявлен блокер конфигурации загрузок (Semaphore #83):** `/serzhan-pool/media/downloads` и `/serzhan-pool/downloads` — **две настоящие директории на разных ZFS datasets**, а private manifest указывает первую, хотя `downloads` создан отдельным dataset с `complete/incomplete`. В WIP введён ранний fail-closed для пути, не равного `/{{ pool_name }}/downloads`, и проверки qBittorrent/Arr привязаны к настоящему dataset. **Private manifest и реальные файлы не изменялись**: количество существующих файлов/квоты ещё не подтверждены, поскольку следующий read-only запуск №30 заблокирован системой безопасности, повторять его через другой канал нельзя. До разрешения расхождения apply не открывать.
 
-**Не готово:** реальная привязка Plex к аккаунту владельца (маркер PlexOnlineToken — не онлайн-проверка), проверка Jellyfin QSV реальным коротким транскодированием, Arr Forms через фактическую форму входа, native password rotation и **живое прохождение встроенной №81**. Plex библиотеки, сканирование, API-интеграция Arr/qBittorrent и Plex Agent подготовлены **только в коде, не проверены E2E**. Filestash/Sambee API требуют живой проверки; Filestash latest-бинарь и Sambee stable-тег ещё не закреплены immutable digest. Первый блокирующий gate стоит **до PVE**, второй `MEDIA80_APPLY_ACCEPTANCE_PENDING` — **после №81** в guest play, чтобы даже при ошибочном снятии первого запрета не объявить задачу завершённой. Live keep/import и destructive E2E ещё не проведены; ни один полный запуск №80 пока не подтверждён.
+**Не готово:** реальная привязка Plex к аккаунту владельца (маркер PlexOnlineToken — не онлайн-проверка), проверка Jellyfin QSV реальным коротким транскодированием, Arr Forms через фактическую форму входа, native password rotation и **живое прохождение встроенной №81**. Plex библиотеки, сканирование, API-интеграция Arr/qBittorrent и Plex Agent подготовлены **только в коде, не проверены E2E**. Filestash/Sambee API требуют живой проверки; Filestash latest-бинарь и Sambee stable-тег ещё не закреплены immutable digest. Первый блокирующий gate стоит **до PVE**, второй `MEDIA80_APPLY_ACCEPTANCE_PENDING` — **после №81** в guest play, чтобы даже при ошибочном снятии первого запрета не объявить задачу завершённой. Live keep/import и destructive E2E ещё не проведены; ни один полный запуск №30 пока не подтверждён.
 
 ## Критерии для релиза
 
@@ -61,4 +63,4 @@ PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публи�
 - Шесть комбинаций VM×Disk, безопасный отказ на неверном объекте, отсутствие стирания в import; повторный keep+import.
 - Полная E2E-проверка native служб, учетных записей, библиотек, SMB и GPU.
 - Разрушительный E2E только по отдельному явному разрешению владельца на точную VM и диск.
-- После готовности: зарегистрировать один шаблон №80, выполнить №00, проверить запуск и PLAY RECAP.
+- После готовности: расширить существующий шаблон №30, сохранив его аудит и добавив **явно управляемый** apply, выполнить №00 и проверить PLAY RECAP. Новый шаблон-дубликат не создавать.
