@@ -1,0 +1,16 @@
+---
+# Tested independently with offline fixtures.
+- name: Require reliable read-only signature scan with no orphan ZFS signature
+  ansible.builtin.assert:
+    that:
+      - (media30_erase_signatures.results | rejectattr('rc', 'equalto', 0) | list | length) == 0
+      - >-
+        (media30_erase_signatures.results
+         | selectattr('stdout', 'search', '(?im)^\s*zfs_member\s*$')
+         | list | length) == 0
+      - media30_erase_importable.rc != 0
+      - >-
+        (media30_erase_importable.stdout | default('')
+         | regex_findall('(?m)^\s*(?:pool|id):')
+         | length) == 0
+    fail_msg: MEDIA30_ERASE_UNKNOWN_OR_ORPHAN_ZFS_SIGNATURE

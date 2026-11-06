@@ -1,7 +1,7 @@
 ---
-# Regression guard: the live Semaphore task 30 must remain a read-only audit,
-# while the unfinished deploy entrypoint remains unpublished and hard-blocked.
-- name: Verify native media audit and deployment are safely separated
+# Regression guard: the release catalog exposes the real native #30 entrypoint.
+# Existing read-only audit remains separately available in the code.
+- name: Verify native media audit remains safe and deployment is explicit
   hosts: localhost
   connection: local
   gather_facts: false
@@ -20,15 +20,17 @@
              | selectattr('name', 'equalto', '30-Медиасервер')
              | list }}
 
-    - name: Verify one media task points exclusively to the audit entrypoint
+    - name: Verify one media task points to the native deployment entrypoint
       ansible.builtin.assert:
         that:
           - media30_catalog_matches | length == 1
-          - media30_catalog_matches[0].playbook == 'playbooks/media-server.yml'
+          - media30_catalog_matches[0].playbook == 'playbooks/media-server-deploy.yml'
+          - media30_catalog_matches[0].survey_vars | map(attribute='name') | list | length == 5
           - >-
-            'playbooks/media-server-deploy.yml'
-            not in (media_catalog.tasks | map(attribute='playbook') | list)
-        fail_msg: MEDIA30_UNFINISHED_DEPLOYMENT_MUST_NOT_BE_PUBLISHED
+            (media30_catalog_matches[0].survey_vars | map(attribute='name') | list)
+            == ['DH_MEDIA_MODE', 'DH_MEDIA_VM_ACTION', 'DH_MEDIA_DISK_ACTION',
+                'DH_MEDIA_VM_CPU_PERCENT', 'DH_MEDIA_TRANSCODE_CPU_PERCENT']
+        fail_msg: MEDIA30_NATIVE_ENTRYPOINT_OR_SURVEY_MISSING
 
     - name: Read the tracked audit playbook without executing it
       ansible.builtin.slurp:
@@ -45,7 +47,7 @@
         media30_audit_source: "{{ media30_audit_file.content | b64decode }}"
         media30_deploy_source: "{{ media30_deploy_file.content | b64decode }}"
 
-    - name: Refuse accidental removal of read-only audit or deployment barriers
+    - name: Require safe audit, explicit actions and native deployment entrypoint
       ansible.builtin.assert:
         that:
           - "'MEDIA30_AUDIT_ONLY' in media30_audit_source"
@@ -53,9 +55,9 @@
           - "'media-vm-apply.yml' not in media30_audit_source"
           - "'media-zfs-apply.yml' not in media30_audit_source"
           - "'media-native-apps.yml' not in media30_audit_source"
-          - "'MEDIA30_DEPLOY_APPLY_BLOCKED' in media30_deploy_source"
-          - "'MEDIA80_APPLY_ACCEPTANCE_PENDING' in media30_deploy_source"
-          - >-
-            media30_deploy_source.index('MEDIA30_DEPLOY_APPLY_BLOCKED')
-            < media30_deploy_source.index('ansible.builtin.add_host:')
-        fail_msg: MEDIA30_AUDIT_OR_APPLY_GATE_REGRESSION
+          - "'media_vm_action in [' in media30_deploy_source"
+          - "'media_disk_action in [' in media30_deploy_source"
+          - "'media-zfs-apply.yml' in media30_deploy_source"
+          - "'media-vm-apply.yml' in media30_deploy_source"
+          - "'MEDIA30_DEPLOY_APPLY_BLOCKED' not in media30_deploy_source"
+        fail_msg: MEDIA30_AUDIT_OR_ACTION_SELECTION_REGRESSION

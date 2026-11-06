@@ -83,7 +83,9 @@
     - name: Require two independent identity checks before any destructive step
       ansible.builtin.assert:
         that:
-          - "'MEDIA30_DEPLOY_APPLY_BLOCKED' in media30_deploy_source"
+          - "'media_mode in [' in media30_deploy_source"
+          - "'media_vm_action in [' in media30_deploy_source"
+          - "'media_disk_action in [' in media30_deploy_source"
           - >-
             media30_deploy_source.find('media30-recreate-erase-preflight.yml')
             < media30_deploy_source.find('media30-image-prestage.yml')
@@ -91,7 +93,7 @@
             media30_deploy_source.find('media30-image-prestage.yml')
             < media30_deploy_source.find('media-vm-apply.yml')
           - >-
-            media30_disk_source.find('media30-recreate-erase-guest-identity.yml')
+            media30_disk_source.find('media30-erase-guest-identity.yml')
             < media30_disk_source.find('zpool, destroy')
           - "'cloud.debian.org' not in media30_vm_source"
           - "'media30_image_sha512_preflight' in media30_vm_source"

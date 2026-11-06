@@ -122,8 +122,36 @@ tasks:
           - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
           - {name: "snmp-ups — сетевой", value: snmp-ups}
   - name: "30-Медиасервер"
-    playbook: playbooks/media-server.yml
-    description: "Безопасный аудит VM, PCI SATA/GPU и manifest; CPU-параметры пока только отображаются"
+    playbook: playbooks/media-server-deploy.yml
+    description: "Медиасервер: аудит или установка; VM keep/create/recreate; SATA import/erase"
     survey_vars:
+      - name: DH_MEDIA_MODE
+        title: "Режим №30"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Аудит — без изменений", value: audit}
+          - {name: "Применить конфигурацию медиасервера", value: apply}
+      - name: DH_MEDIA_VM_ACTION
+        title: "Действие с VM"
+        type: enum
+        target: ""
+        required: true
+        default_value: keep
+        values:
+          - {name: "keep — сохранить VM", value: keep}
+          - {name: "create — создать отсутствующую VM", value: create}
+          - {name: "recreate — пересоздать существующую VM", value: recreate}
+      - name: DH_MEDIA_DISK_ACTION
+        title: "Действие с SATA-диском"
+        type: enum
+        target: ""
+        required: true
+        default_value: import
+        values:
+          - {name: "import — импортировать существующий ZFS, не стирать", value: import}
+          - {name: "erase — СТЕРЕТЬ выбранный SATA-диск и создать ZFS заново", value: erase}
       - {name: DH_MEDIA_VM_CPU_PERCENT, title: "CPU всей VM (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
       - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "CPU Plex+Jellyfin общий (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}

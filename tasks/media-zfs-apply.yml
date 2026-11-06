@@ -122,11 +122,9 @@
          | length == 1)
     fail_msg: MEDIA_SATA_DISK_PART_OF_MULTI_VDEV_POOL
 
-- name: Reconfirm old disk GUID before explicit recreate plus erase
-  ansible.builtin.include_tasks: media30-recreate-erase-guest-identity.yml
-  when:
-    - media_vm_action == 'recreate'
-    - media_raw_disk_action == 'erase'
+- name: Verify SATA-disk identity before any requested erase, for all VM actions
+  ansible.builtin.include_tasks: media30-erase-guest-identity.yml
+  when: media_raw_disk_action == 'erase'
 
 - name: Verify direct partition or disk is not mounted outside ZFS
   ansible.builtin.command:

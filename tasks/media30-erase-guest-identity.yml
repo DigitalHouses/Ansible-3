@@ -1,0 +1,98 @@
+---
+# Fail-closed identity check for ALL erase modes. The disk has already
+# been resolved uniquely by passed-through PCI AHCI controller ancestry.
+# No filesystem is changed by this preflight.
+- name: Forbid erasing an active ZFS pool with an unexpected name
+  ansible.builtin.assert:
+    that:
+      - media_sata_active_pools | length <= 1
+      - >-
+        media_sata_active_pools | length == 0
+        or media_sata_active_pools[0].item == media_vm.storage.pool_name
+    fail_msg: MEDIA30_ERASE_ACTIVE_FOREIGN_POOL
+
+- name: Read active old ZFS GUID, when a pool is mounted on the selected disk
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - get
+      - -H
+      - -o
+      - value
+      - guid
+      - "{{ media_vm.storage.pool_name }}"
+  register: media30_erase_active_guid
+  changed_when: false
+  when: media_sata_active_pools | length == 1
+
+- name: Refuse erasing any active ZFS pool that differs from the site manifest
+  ansible.builtin.assert:
+    that:
+      - (media_vm.storage.import_pool_guid | default('') | string) is match('^[0-9]{5,20}$')
+      - media30_erase_active_guid.stdout | trim == media_vm.storage.import_pool_guid | string
+    fail_msg: MEDIA30_ERASE_ACTIVE_POOL_GUID_MISMATCH
+  when: media_sata_active_pools | length == 1
+
+- name: Assemble a read-only search restricted to the exact SATA disk and partitions
+  ansible.builtin.set_fact:
+    media30_erase_scan_args: "{{ (media30_erase_scan_args | default([])) + ['-d', item] }}"
+  loop: "{{ [media_sata_disk] + media_sata_partitions }}"
+  when: media_sata_active_pools | length == 0
+
+- name: Discover any exported ZFS labels without importing the pool
+  ansible.builtin.command:
+    argv: "{{ ['zpool', 'import'] + media30_erase_scan_args }}"
+  register: media30_erase_importable
+  changed_when: false
+  failed_when: false
+  when: media_sata_active_pools | length == 0
+
+- name: Record whether any exported ZFS pool labels were detected
+  ansible.builtin.set_fact:
+    media30_erase_exported_present: >-
+      {{ (media30_erase_importable.stdout | default('')
+         | regex_findall('(?m)^\s*pool:')) | length > 0 }}
+  when: media_sata_active_pools | length == 0
+
+- name: Match any exported ZFS identity exactly to the private site manifest
+  ansible.builtin.include_tasks: media30-erase-label-assert.yml
+  when:
+    - media_sata_active_pools | length == 0
+    - media30_erase_exported_present | bool
+
+- name: Inspect signatures on non-ZFS or blank disks without changing them
+  ansible.builtin.command:
+    argv: [wipefs, --no-act, --output, TYPE, --noheadings, "{{ item }}"]
+  loop: "{{ [media_sata_disk] + media_sata_partitions }}"
+  register: media30_erase_signatures
+  changed_when: false
+  failed_when: false
+  when:
+    - media_sata_active_pools | length == 0
+    - not (media30_erase_exported_present | bool)
+
+- name: Reject unreadable disks and unrecognized orphan ZFS signatures
+  ansible.builtin.include_tasks: media30-erase-signature-assert.yml
+  when:
+    - media_sata_active_pools | length == 0
+    - not (media30_erase_exported_present | bool)
+
+- name: Require an old approved ZFS pool for recreating an existing VM
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_sata_active_pools | length == 1
+        or (media30_erase_exported_present | default(false) | bool)
+    fail_msg: MEDIA30_RECREATE_ERASE_OLD_POOL_DISAPPEARED
+  when: media_vm_action == 'recreate'
+
+- name: Confirm erase targets only the selected SATA disk
+  ansible.builtin.debug:
+    msg:
+      result: MEDIA30_ERASE_CONTROLLER_IDENTITY_PASS
+      vm_action: "{{ media_vm_action }}"
+      disk_action: erase
+      sata_disk: "{{ media_sata_disk }}"
+      active_zfs_pool: "{{ media_sata_active_pools | length == 1 }}"
+      exported_zfs_pool: "{{ media30_erase_exported_present | default(false) | bool }}"
+      changed: false

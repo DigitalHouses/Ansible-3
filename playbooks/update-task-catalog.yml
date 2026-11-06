@@ -5,8 +5,7 @@
   gather_facts: false
   become: false
   vars:
-    semaphore_api: https://127.0.0.1:3000/api
-    semaphore_ca: /etc/semaphore/tls.crt
+    semaphore_api: http://127.0.0.1/api
     site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     catalog: >-
       {{ lookup('ansible.builtin.file', playbook_dir ~ '/../catalog/tasks.yml')
@@ -24,7 +23,6 @@
         method: GET
         headers:
           Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: 200
       register: projects
@@ -49,7 +47,6 @@
         method: GET
         headers:
           Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: 200
       register: templates
@@ -80,6 +77,14 @@
              selectattr('playbook', 'equalto', item.playbook) | list | length) ==
             (templates.json | selectattr('name', 'equalto', item.name) |
              list | length)
+            or
+            (item.name == '30-Медиасервер'
+             and item.playbook == 'playbooks/media-server-deploy.yml'
+             and (templates.json | selectattr('name', 'equalto', item.name)
+                  | selectattr('playbook', 'equalto', 'playbooks/media-server.yml')
+                  | list | length) == 1
+             and (templates.json | selectattr('name', 'equalto', item.name)
+                  | list | length) == 1)
           - item.name is match('^[0-9]{2,3}-')
           - item.playbook is match('^playbooks/[a-z0-9_-]+\.yml$')
         fail_msg: Invalid or conflicting task catalog entry
@@ -109,7 +114,6 @@
           allow_override_args_in_task: false
           autorun: false
           survey_vars: "{{ item.survey_vars | default([]) }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: [200, 201]
       loop: "{{ catalog.tasks }}"
@@ -137,7 +141,6 @@
           repository_id: "{{ current_template.repository_id }}"
           environment_id: "{{ current_template.environment_id }}"
           survey_vars: "{{ item.survey_vars }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: [200, 204]
       vars:
@@ -166,8 +169,59 @@
             (item.survey_vars | map(attribute='target', default='') | list)
       no_log: true
 
+    - name: "Verify ownership of existing task 30 before changing its entrypoint"
+      ansible.builtin.assert:
+        that:
+          - current_template.app == 'ansible'
+          - current_template.playbook in ['playbooks/media-server.yml', 'playbooks/media-server-deploy.yml']
+          - current_template.repository_id == bootstrap_templates[0].repository_id
+          - current_template.inventory_id == bootstrap_templates[0].inventory_id
+          - current_template.environment_id == bootstrap_templates[0].environment_id
+        fail_msg: MEDIA30_CATALOG_FOREIGN_TEMPLATE_REFUSED
+      vars:
+        current_template: "{{ templates.json | selectattr('name', 'equalto', item.name) | first }}"
+      loop: "{{ catalog.tasks | selectattr('name', 'equalto', '30-Медиасервер') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.name in (templates.json | map(attribute='name') | list)
+        - item.playbook == 'playbooks/media-server-deploy.yml'
+
+    - name: "Repoint owned task 30 from audit to native deployment"
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates/{{ current_template.id }}"
+        method: PUT
+        body_format: json
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        body:
+          id: "{{ current_template.id }}"
+          project_id: "{{ site_projects[0].id }}"
+          name: "{{ current_template.name }}"
+          app: "{{ current_template.app }}"
+          description: "{{ item.description }}"
+          playbook: "{{ item.playbook }}"
+          arguments: "{{ current_template.arguments }}"
+          inventory_id: "{{ current_template.inventory_id }}"
+          repository_id: "{{ current_template.repository_id }}"
+          environment_id: "{{ current_template.environment_id }}"
+          survey_vars: "{{ item.survey_vars }}"
+        use_proxy: false
+        status_code: [200, 204]
+      vars:
+        current_template: "{{ templates.json | selectattr('name', 'equalto', item.name) | first }}"
+      loop: "{{ catalog.tasks | selectattr('name', 'equalto', '30-Медиасервер') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.name in (templates.json | map(attribute='name') | list)
+        - item.playbook == 'playbooks/media-server-deploy.yml'
+        - current_template.playbook != item.playbook
+      no_log: true
+
     - name: Report catalog sync
       ansible.builtin.debug:
         msg: >-
           Catalog checked for {{ site_id }}. Existing tasks kept;
-          missing templates added and existing Surveys reconciled; nothing executed or deleted.
+          missing templates added and Surveys reconciled; only the known #30
+          audit-to-native entrypoint may be updated. Nothing executed or deleted.

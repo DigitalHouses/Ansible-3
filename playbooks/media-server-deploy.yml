@@ -1,7 +1,7 @@
 ---
-# Task 30: unpublished development-only media server deployment.
-# Never listed in Semaphore catalog. Apply is blocked before PVE; additional
-# acceptance gate remains after the guest phase. Audit lives in media-server.yml.
+# Task 30: full native media deployment, explicitly selected by Semaphore Survey.
+# The existing read-only audit remains playbooks/media-server.yml for reference.
+# All destructive operations require the exact VM and disk actions selected.
 - name: "30 | Resolve media site declaration"
   hosts: runner
   connection: local
@@ -28,13 +28,6 @@
           - media_disk_action in ['import', 'erase']
           - media_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
         fail_msg: "Task 30 deployment requires valid mode, VM action and disk action"
-
-    - name: Refuse apply while native VM, ZFS and application phases are unfinished
-      ansible.builtin.assert:
-        that: media_mode == 'audit'
-        fail_msg: >-
-          MEDIA30_DEPLOY_APPLY_BLOCKED: task 30 deployment remains deliberately blocked.
-          It is not registered in the Semaphore catalog.
 
     - name: Require task 05 GitHub provisioning credential
       ansible.builtin.assert:
@@ -439,13 +432,6 @@
 
     - name: Accept Windows discovery and both guest consoles
       ansible.builtin.include_tasks: ../tasks/media30-discovery-console-accept.yml
-
-    - name: Retain explicit production completion gate pending live acceptance
-      ansible.builtin.fail:
-        msg: >-
-          MEDIA80_APPLY_ACCEPTANCE_PENDING: native password rotation,
-          Plex owner claim and complete live E2E across all six VM/disk modes
-          still require acceptance. Task 80 remains development-only.
 
   handlers:
     - name: Rebuild media initramfs

@@ -1,0 +1,87 @@
+---
+- name: Offline regression for erase on blank, NTFS and orphan-ZFS disks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    mock_no_importable_pool: {rc: 1, stdout: ''}
+    mock_ntfs:
+      results:
+        - {rc: 0, stdout: "gpt"}
+        - {rc: 0, stdout: "ntfs"}
+    mock_blank:
+      results:
+        - {rc: 0, stdout: ''}
+    mock_orphan_zfs:
+      results:
+        - {rc: 0, stdout: "gpt"}
+        - {rc: 0, stdout: "zfs_member"}
+    mock_unreadable:
+      results:
+        - {rc: 1, stdout: ''}
+  tasks:
+    - name: Permit an explicitly selected empty SATA disk
+      ansible.builtin.include_tasks: ../tasks/media30-erase-signature-assert.yml
+      vars:
+        media30_erase_importable: "{{ mock_no_importable_pool }}"
+        media30_erase_signatures: "{{ mock_blank }}"
+
+    - name: Permit previously formatted non-ZFS SATA disk after explicit erase selection
+      ansible.builtin.include_tasks: ../tasks/media30-erase-signature-assert.yml
+      vars:
+        media30_erase_importable: "{{ mock_no_importable_pool }}"
+        media30_erase_signatures: "{{ mock_ntfs }}"
+
+    - name: Initialize negative-test result markers
+      ansible.builtin.set_fact:
+        orphan_zfs_was_rejected: false
+        unreadable_disk_was_rejected: false
+
+    - name: Reject residual ZFS signatures even when normal label scan failed
+      block:
+        - name: Evaluate intentionally orphaned ZFS member
+          ansible.builtin.include_tasks: ../tasks/media30-erase-signature-assert.yml
+          vars:
+            media30_erase_importable: "{{ mock_no_importable_pool }}"
+            media30_erase_signatures: "{{ mock_orphan_zfs }}"
+      rescue:
+        - name: Note expected orphan ZFS refusal
+          ansible.builtin.set_fact:
+            orphan_zfs_was_rejected: true
+
+    - name: Reject media disk that cannot be inspected
+      block:
+        - name: Evaluate intentionally unreadable disk
+          ansible.builtin.include_tasks: ../tasks/media30-erase-signature-assert.yml
+          vars:
+            media30_erase_importable: "{{ mock_no_importable_pool }}"
+            media30_erase_signatures: "{{ mock_unreadable }}"
+      rescue:
+        - name: Note expected unreadable disk refusal
+          ansible.builtin.set_fact:
+            unreadable_disk_was_rejected: true
+
+    - name: Require both destructive negative cases to have been refused
+      ansible.builtin.assert:
+        that:
+          - orphan_zfs_was_rejected | bool
+          - unreadable_disk_was_rejected | bool
+
+    - name: Assert all six valid VM and disk combinations are represented
+      ansible.builtin.set_fact:
+        media30_combinations: >-
+          {{ ['keep', 'create', 'recreate'] | product(['import', 'erase']) | list }}
+
+    - name: Require exactly the six supported combinations
+      ansible.builtin.assert:
+        that:
+          - media30_combinations | length == 6
+          - "['keep', 'import'] in media30_combinations"
+          - "['keep', 'erase'] in media30_combinations"
+          - "['create', 'import'] in media30_combinations"
+          - "['create', 'erase'] in media30_combinations"
+          - "['recreate', 'import'] in media30_combinations"
+          - "['recreate', 'erase'] in media30_combinations"
+          - >-
+            'media30-erase-guest-identity.yml'
+            in lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml')
