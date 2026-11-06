@@ -1,3 +1,5 @@
+**Текущая схема с 07.11.2026:** нативный Semaphore HTTP на порту 80 в LAN, Cloudflare HTTPS + Access с origin `http://127.0.0.1:80`. Запуск #87 SUCCESS; старые заметки о локальном HTTPS:3000 ниже относятся только к историческому пилоту.
+
 # Ansible-3 — автономная разработка, запуск и диагностика
 
 **Версия:** 0.1 (проект на согласование, 03.11.2026)  
@@ -120,7 +122,7 @@ Linux-доступ **не зависит** от API Semaphore. Он нужен �
 ### Подтверждённое подключение Codex → Semaphore MCP (03.11.2026)
 
 - Создан отдельный локальный launcher `/root/.local/bin/semaphore-mcp-local` с правами `0700`; он читает **уже существующий** токен из `/root/.config/ansible-3/semaphore-api-token` при запуске MCP-процесса и передаёт его через окружение. Значение не публикуется в Git и не включается в параметры `codex mcp add`.
-- `codex mcp list` сообщает `semaphore: enabled` (stdio). Несекретные настройки: `SEMAPHORE_URL=https://127.0.0.1:3000`, `SEMAPHORE_CA_BUNDLE=/etc/semaphore/tls.crt`, `SEMAPHORE_TOOL_PROFILE=core`, `SEMAPHORE_PROJECT_IDS=1`.
+- `codex mcp list` сообщает `semaphore: enabled` (stdio). Несекретные настройки: `SEMAPHORE_URL=http://192.168.11.231`, `SEMAPHORE_TOOL_PROFILE=core`, `SEMAPHORE_PROJECT_IDS=1`.
 - **E2E чтение успешно:** Codex действительно вызвал `semaphore/list_projects` и `semaphore/list_templates`, получил проект `serzhan-home` (ID 1) и шаблон №10 (ID 5).
 - **E2E чтение логов успешно:** Codex вызвал `semaphore/get_task` и `semaphore/get_task_output` для уже существовавшего запуска task ID 18, подтвердил статус `error`, наличие `PLAY RECAP` и объяснил, что подробности отказа скрыты через Ansible `no_log: true`.
 - Все перечисленные проверки — **только чтение**. Запуск новой задачи через MCP по-прежнему **не проверен**. Не путать способность читать задания с подтверждённым правом запускать их.

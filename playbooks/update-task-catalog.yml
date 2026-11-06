@@ -5,8 +5,7 @@
   gather_facts: false
   become: false
   vars:
-    semaphore_api: https://127.0.0.1:3000/api
-    semaphore_ca: /etc/semaphore/tls.crt
+    semaphore_api: http://127.0.0.1/api
     site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     catalog: >-
       {{ lookup('ansible.builtin.file', playbook_dir ~ '/../catalog/tasks.yml')
@@ -24,7 +23,6 @@
         method: GET
         headers:
           Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: 200
       register: projects
@@ -49,7 +47,6 @@
         method: GET
         headers:
           Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: 200
       register: templates
@@ -109,7 +106,6 @@
           allow_override_args_in_task: false
           autorun: false
           survey_vars: "{{ item.survey_vars | default([]) }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: [200, 201]
       loop: "{{ catalog.tasks }}"
@@ -137,7 +133,6 @@
           repository_id: "{{ current_template.repository_id }}"
           environment_id: "{{ current_template.environment_id }}"
           survey_vars: "{{ item.survey_vars }}"
-        ca_path: "{{ semaphore_ca }}"
         use_proxy: false
         status_code: [200, 204]
       vars:

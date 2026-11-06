@@ -4,7 +4,6 @@
   no_log: true
   module_defaults:
     ansible.builtin.uri:
-      ca_path: "{{ semaphore_ca }}"
       validate_certs: true
       use_proxy: false
       headers:
@@ -205,8 +204,7 @@
           # Site {{ site_id }}; project {{ dev_project_id }}
           header = "Authorization: Bearer {{ dev_api_token }}"
           header = "Content-Type: application/json"
-          cacert = "/home/dev/.config/ansible-3/{{ site_id }}.crt"
-          proto = "=https"
+          proto = "=http"
           fail
           silent
           show-error

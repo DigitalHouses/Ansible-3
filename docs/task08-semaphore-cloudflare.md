@@ -1,41 +1,38 @@
 # №08 — Semaphore и Cloudflare Access
 
-Веб-доступ к Semaphore на сервере Runner через выделенный Cloudflare Tunnel
-`<site-id>-semaphore` и адрес `https://<site-id>-pve-semaphore.digitalhouses.vip/`.
-Это продолжение существующей задачи №08 (DEV ↔ Semaphore), а не №10 PVE.
+## Схема (07.11.2026)
 
-- Источник: `https://127.0.0.1:3000` непосредственно в Runner LXC.
-- Origin TLS проверяется с `/etc/semaphore/tls.crt` (`noTLSVerify=false`).
-- Требуется уже существующая защищённая Cloudflare Access политика
-  для `*.digitalhouses.vip` или точного hostname. Без неё DNS не создаётся.
-- Токен Cloudflare берётся из нативной Variable Group задачи №05.
-- `cloudflared` устанавливается из подписанного Cloudflare APT репозитория;
-  токен туннеля хранится `root:root 0600` и не выводится в Ansible/Semaphore.
-- Повторный Apply не пересоздаёт туннель, не трогает DEV-токен и не меняет
-  PVE, DNS других сервисов, Access policy или старый общий Tunnel.
-- Аудит Cloudflare в №08 явный, bootstrap без секретов вызывает `skip`.
-- Готовность: `/` origin HTTPS/CA OK, туннель healthy, конфигурация и
-  DNS readback, публичный HTTPS 302 на Cloudflare Access, повторное
-  выполнение идемпотентно.
+- **LAN:** `http://<runner-ip>/`; для serzhan-home это `http://192.168.11.231/`.
+- **Единственный нативный Semaphore:** HTTP на порту `80`, `web_host: /`.
+  Никакого локального TLS, доверенных сертификатов Windows или отдельного nginx.
+- **Внешний доступ:** `https://<site-id>-pve-semaphore.digitalhouses.vip/`
+  через выделенный Cloudflare Tunnel и существующий Cloudflare Access.
+- **Cloudflare origin:** `http://127.0.0.1:80` внутри Runner, не публичный HTTP.
+  Остальные публичные hostname, DNS и Access policy не изменяются.
+- **Runner и DEV API:** `http://127.0.0.1/api` и
+  `http://<runner-ip>/api` соответственно. DEV использует защищённый
+  revocable API-токен, передаваемый по действующему пути №08.
+- Токены Cloudflare выдаются штатной задачей №05; запуск №08 не создаёт
+  дополнительного пользователя, не пересоздаёт Tunnel и не требует пароля TLS.
 
-## Исправление публичного имени
+Bootstrap, №00, №05 и №08 используют ту же простую схему HTTP 80.
+Повторный №08 проверяет, что `<base href="/">` корректен для LAN и CF.
+Если `web_host` надо исправить, существующий рестарт Semaphore
+откладывается до выхода из исполняемой задачи.
 
-Согласованный стандарт для Semaphore на Proxmox: `https://<site-id>-pve-semaphore.digitalhouses.vip/`.
-При обновлении №08 проверяет старый маршрут `<site-id>-semaphore.digitalhouses.vip`,
-если он существует, добавляет новый в **тот же** tunnel, проверяет
-Cloudflare Access с корректными SNI/TLS, затем удаляет старый маршрут и
-DNS без перенаправления. UUID, имя и token туннеля не меняются. При
-повторном применении все проверки выполняются без изменений.
+## Миграция действующего узла
 
-## Network Error: `web_host` после Cloudflare Access
+Одноразовая миграция выполнена Semaphore task `#87`, status `success`.
+Владение Tunnel, старый ingress, состояние локального HTTPS и доступность
+порта 80 проверены перед изменением. Сохранена root-only копия старого
+`/etc/semaphore/config.json` на случай отката. После перенастройки origin
+служба Semaphore перезапущена штатно на `:80`. Временный шаблон и временный
+репозиторий Semaphore удалены.
 
-В HTTP-странице Semaphore значение `web_host` попадает в `<base href>`.
-Если там `https://<runner-ip>:3000/`, внешний браузер пытается получить JS/API
-по локальному IP, поэтому видит `Network Error`. №08 применяет
-`web_host=https://<site-id>-pve-semaphore.digitalhouses.vip` только после
-проверенной публикации Cloudflare. Остальные параметры `config.json`,
-включая cookie keys, остаются неизменными. Для штатного DEV API и других
-внутренних задач используется исходный IPv4 `eth0` Runner, независимо от
-`web_host`. Поскольку task08 исполняет сам Semaphore, Ansible планирует
-однократный рестарт службы после завершения задания (transient systemd).
-Повторный запуск проверяет `<base href>` и не меняет конфигурацию.
+Проверено из центрального DEV: `GET http://192.168.11.231/api/ping`
+— HTTP 200, `GET /` — HTTP 200, авторизованный DEV API `/api/user/`
+— успешен; внешний CF HTTPS продолжает переводить неавторизованного клиента
+на Access login (HTTP 302).
+
+Локальный HTTP передаёт авторизацию в пределах домашней сети без TLS.
+Публичный интернет-доступ остаётся только через Cloudflare HTTPS/Access.

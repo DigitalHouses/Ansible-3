@@ -97,7 +97,7 @@ ChatGPT (этот чат) ── GitHub plugin ──> DigitalHouses/Ansible-3 (
 | `/opt/ansible-3/.codex/config.toml` | **проектная** конфигурация Codex, в Git |
 | `/root/.local/bin/semaphore-mcp-local` | небольшой локальный launcher, читает токен и запускает готовый MCP |
 | `/root/.config/ansible-3/semaphore-api-token` | существующий API-токен Semaphore; **секрет, не коммитить** |
-| `/etc/semaphore/tls.crt` | сертификат для TLS-проверки подключения к локальному Semaphore |
+| `/etc/semaphore/tls.crt` | архивный локальный сертификат старой схемы HTTPS:3000; для HTTP:80 больше не нужен |
 | `/root/.codex/` | локальные сессии и аутентификация Codex; **не копировать в публичный Git** |
 
 Для совместимости с сокращённым `PATH` root-консоли в `/usr/bin/` созданы ссылки: `codex → /opt/ansible-3-codex/bin/codex` и `node → /opt/dh-node/bin/node`. Ссылка `/usr/local/bin/codex` существует также. Это устранило ошибки `command not found` / `env: node: No such file or directory`.
@@ -121,7 +121,7 @@ ChatGPT (этот чат) ── GitHub plugin ──> DigitalHouses/Ansible-3 (
 command = "/root/.local/bin/semaphore-mcp-local"
 
 [mcp_servers.semaphore.env]
-SEMAPHORE_URL = "https://127.0.0.1:3000"
+SEMAPHORE_URL = "http://127.0.0.1"
 SEMAPHORE_CA_BUNDLE = "/etc/semaphore/tls.crt"
 SEMAPHORE_PROJECT_IDS = "1"
 SEMAPHORE_READ_ONLY = "false"
@@ -154,7 +154,7 @@ exec /opt/ansible-3-tools/semaphoreui-mcp/.venv/bin/semaphoreui-mcp "$@"
 
 - Токен хранится только в локальном файле `0600`, значение не помещено в TOML, Git, аргументы команды или примеры документации.
 - Launcher `0700` запускается от текущего root-контекста.
-- MCP общается с Semaphore по `https://127.0.0.1:3000` с проверкой `/etc/semaphore/tls.crt`.
+- MCP общается с Semaphore по `http://127.0.0.1`.
 - `SEMAPHORE_PROJECT_IDS=1` ограничивает доступную область проекта на уровне адаптера; разрешения самого токена/пользователя Semaphore действуют дополнительно.
 - `SEMAPHORE_READ_ONLY=false` необходимо для разрешённых действий создания/запуска; фактические изменения всё равно требуют правил approval Codex.
 - Секретная часть при восстановлении **вводится/восстанавливается отдельно**, никогда не извлекается из репозитория.
@@ -243,7 +243,7 @@ git -C /opt/ansible-3 remote -v
 1. Восстановить Debian 13 LXC с согласованными ресурсами, hostname и сетевым доступом.
 2. Установить стандартные компоненты: Git, Python 3.13 с `venv`/`pip`, сертификаты CA, curl, Node.js **24.22.0** и npm. Источник Node использовать доверенный; не копировать бинарник из Git.
 3. Восстановить штатный Ansible runner с `ansible-core==2.21.4` (согласно требованиям установочного проекта) в `/opt/ansible/venv`.
-4. Восстановить Semaphore UI **2.20.16-beta9** с его штатным сервисом, конфигурацией, TLS, базой и project credentials. **Сохранение содержимого Semaphore и порядок восстановительных операций — отдельная задача**, этот документ не является бэкапом его базы.
+4. Восстановить Semaphore UI **2.20.16-beta9** с его штатным сервисом HTTP:80, конфигурацией, базой и project credentials. **Сохранение содержимого Semaphore и порядок восстановительных операций — отдельная задача**, этот документ не является бэкапом его базы.
 5. Восстановить авторизованное подключение Desktop Commander отдельно, если оно требуется для удалённой диагностики ChatGPT. Его учётные данные/идентификаторы не публикуются.
 
 ### 11.2. Исходники, Codex и MCP (зафиксированные команды)
@@ -277,7 +277,7 @@ cd /opt/ansible-3-tools/semaphoreui-mcp
 2. Создать launcher **ровно по разделу 7** с правами `0700`.
 3. Создать глобальный локальный `/root/.codex/config.toml` по **разделу 6** с правами `0600`. Проектные инструкции и настройки уже приедут из Git.
 4. Авторизовать Codex: `codex login --device-auth` (при необходимости включить вход по коду устройства в Security Settings ChatGPT); проверить `codex login status`. Не публиковать коды входа и содержимое аутентификационных файлов.
-5. Проверить цепочку доверия TLS, `codex mcp list` и **read-only** вызов к конкретному Semaphore проекту. Не лечить ошибку прав отключением approvals, TLS или песочницы.
+5. Проверить локальный API `http://127.0.0.1/api`, `codex mcp list` и **read-only** вызов к конкретному Semaphore проекту. Публичный HTTPS и Access проверяются отдельно через Cloudflare. Не лечить ошибку прав отключением approvals или песочницы.
 
 ### 11.4. Объекты Semaphore
 

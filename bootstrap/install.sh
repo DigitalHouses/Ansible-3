@@ -188,6 +188,6 @@ fi
 
 echo '=== 5/5 Ready ==='
 echo "BOOTSTRAP_FRESH_DONE=PASS commit=$CODE_RELEASE"
-echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
+echo "SEMAPHORE_URL=http://$RUNNER_IP/"
 echo "GET_SEMAPHORE_ADMIN_PASSWORD: pct exec $CTID -- cat /root/dh-semaphore-initial-admin-password"
 echo 'ONLY_TASK=00-Обновить список задач'
