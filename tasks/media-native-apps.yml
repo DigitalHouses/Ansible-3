@@ -50,6 +50,10 @@
   ansible.builtin.include_vars:
     file: "{{ playbook_dir | dirname }}/vars/media-arr-releases.yml"
 
+- name: Load verified third-party release artifacts from public catalog
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir | dirname }}/vars/media-app-artifacts.yml"
+
 - name: Create native application release cache
   ansible.builtin.file:
     path: /var/cache/digitalhouses/media

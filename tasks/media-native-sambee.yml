@@ -70,7 +70,7 @@
     that:
       - >-
         not media_sambee_compose_stat.stat.exists
-        or 'ghcr.io/helgeklein/sambee:stable'
+        or ('image: ' ~ media_sambee_image)
         in (media_sambee_existing_compose.content | b64decode)
       - >-
         not media_sambee_compose_stat.stat.exists
@@ -132,6 +132,19 @@
   ansible.builtin.command:
     argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, config, --quiet]
   changed_when: false
+
+- name: Read exact Compose-resolved Sambee image before container startup
+  ansible.builtin.command:
+    argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, config, --images]
+  register: media_sambee_effective_images
+  changed_when: false
+
+- name: Refuse an unpinned or unexpected Sambee container image
+  ansible.builtin.assert:
+    that:
+      - media_sambee_image is match('^ghcr[.]io/helgeklein/sambee:stable@sha256:[0-9a-f]{64}$')
+      - media_sambee_effective_images.stdout_lines == [media_sambee_image]
+    fail_msg: MEDIA30_SAMBEE_UNPINNED_OR_FOREIGN_IMAGE
 
 - name: Start the declared Sambee container
   ansible.builtin.command:

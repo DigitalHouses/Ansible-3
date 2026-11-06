@@ -6,6 +6,7 @@
   gather_facts: false
   vars_files:
     - ../vars/media-arr-releases.yml
+    - ../vars/media-app-artifacts.yml
   vars:
     media_site: {owner_slug: serzhan}
     media_arr: {slug: radarr, name: Radarr, port: 7878}
@@ -109,6 +110,10 @@
                 'password = fake-fixture-only' in lookup('ansible.builtin.file',
                   media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
               - "'127.0.0.1:8000:8000' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-compose.yml.j2')"
+              - media_sambee_image is match('^ghcr\\.io/helgeklein/sambee:stable@sha256:[a-f0-9]{64}$')
+              - >-
+                ('image: ' ~ media_sambee_image) in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-sambee-compose.yml.j2')
               - "'username = \"serzhan\"' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-config.toml.j2')"
               - media_filestash_fixture.general.secret_key == 'abcdef1234567890'
               - >-
