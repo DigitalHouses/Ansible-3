@@ -163,7 +163,7 @@
     - { key: cores, value: "{{ media_vm.resources.cores | string }}" }
     - { key: memory, value: "{{ media_vm.resources.memory_mb | string }}" }
     - { key: balloon, value: '0' }
-    - { key: cpulimit, value: "{{ media_vm.resources.cpu_limit | string }}" }
+    - { key: cpulimit, value: "{{ (media30_vm_cpu_percent | float / 100) | string }}" }
     - { key: cpuunits, value: "{{ media_vm.resources.cpu_units | string }}" }
     - { key: onboot, value: "{{ '1' if media_vm.lifecycle.onboot | default(true) else '0' }}" }
     - { key: startup, value: 'order=1' }
@@ -175,8 +175,13 @@
     - { key: hostpci0, value: "{{ media_vm.pci.gpu }},pcie=1" }
     - { key: hostpci1, value: "{{ media_vm.pci.sata_controller }},pcie=1" }
   when: >-
-    media_vm_settings[item.key] | default('') != item.value
-    and not (item.key == 'agent' and media_vm_settings.agent | default('') in ['1', 'enabled=1'])
+    (item.key == 'cpulimit'
+     and (media_vm_settings.cpulimit | default('0') | float)
+         != (media30_vm_cpu_percent | float / 100))
+    or (item.key != 'cpulimit'
+        and media_vm_settings[item.key] | default('') != item.value
+        and not (item.key == 'agent'
+                 and media_vm_settings.agent | default('') in ['1', 'enabled=1']))
 
   changed_when: true
 - name: Ensure image cache exists

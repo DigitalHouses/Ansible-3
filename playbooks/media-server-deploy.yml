@@ -76,6 +76,9 @@
         media_spec: "{{ (media_vm_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
+    - name: Resolve selected CPU caps from the task 30 Survey or site manifest
+      ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
+
     - name: Reject mismatched site, VM or PCI declaration
       ansible.builtin.assert:
         that:
@@ -121,6 +124,8 @@
         media_mode: "{{ media_mode }}"
         media_site: "{{ media_site }}"
         media_spec: "{{ media_spec }}"
+        media30_vm_cpu_percent: "{{ media30_vm_cpu_percent }}"
+        media30_transcode_cpu_percent: "{{ media30_transcode_cpu_percent }}"
         media_mqtt_username: "{{ media_mqtt_username }}"
         media_mqtt_password: "{{ media_mqtt_password }}"
         media_site_blob: "{{ media_vm_file.json.sha }}"
@@ -367,6 +372,8 @@
             media_site: "{{ hostvars['media_pve'].media_site }}"
             media_vm_action: "{{ hostvars['media_pve'].media_vm_action }}"
             media_disk_action: "{{ hostvars['media_pve'].media_disk_action }}"
+            media30_vm_cpu_percent: "{{ hostvars['media_pve'].media30_vm_cpu_percent }}"
+            media30_transcode_cpu_percent: "{{ hostvars['media_pve'].media30_transcode_cpu_percent }}"
             media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
             media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
             media_mqtt_username: "{{ hostvars['media_pve'].media_mqtt_username }}"
@@ -404,6 +411,9 @@
 
     - name: Commission native media applications with protected firstboot
       ansible.builtin.include_tasks: ../tasks/media-native-apps.yml
+
+    - name: Enforce one shared CPU budget for Plex and Jellyfin
+      ansible.builtin.include_tasks: ../tasks/media30-cpu-shared-apply.yml
 
     - name: Publish local media homepage
       ansible.builtin.include_tasks: ../tasks/media-portal-apply.yml

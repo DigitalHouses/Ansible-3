@@ -18,6 +18,12 @@
   register: media80_accept_pve_config
   changed_when: false
 
+- name: Parse effective Proxmox VM settings for CPU readback
+  ansible.builtin.set_fact:
+    media80_accept_pve_settings: >-
+      {{ dict(media80_accept_pve_config.stdout_lines
+         | select('search', ': ') | map('split', ': ', 1)) }}
+
 - name: Read VM run status without changing power state
   ansible.builtin.command:
     argv: [qm, status, "{{ media_spec.vmid }}"]
@@ -31,6 +37,9 @@
       - "'cores: ' ~ (media_spec.resources.cores | string) in media80_accept_pve_config.stdout_lines"
       - "'memory: ' ~ (media_spec.resources.memory_mb | string) in media80_accept_pve_config.stdout_lines"
       - "'balloon: 0' in media80_accept_pve_config.stdout_lines"
+      - >-
+        (media80_accept_pve_settings.cpulimit | default('0') | float)
+        == (media30_vm_cpu_percent | float / 100)
       - >-
         (media80_accept_pve_config.stdout
          | regex_findall('(?m)^hostpci[0-9]+:.*' ~
