@@ -103,6 +103,10 @@
       guest_changes_applied: false
   when: media30_qga_ping.rc == 0
 
+- name: Check keep plus import and download paths without guest mutations
+  ansible.builtin.include_tasks: media30-storage-preflight.yml
+  when: media30_qga_ping.rc == 0
+
 - name: Report unavailable QGA without attempting guest modifications
   ansible.builtin.debug:
     msg: MEDIA30_GUEST_QGA_UNAVAILABLE; NO_CHANGES_APPLIED
