@@ -1,0 +1,62 @@
+---
+# Pure offline fixture, no guest or PVE changes.
+- name: Check Windows discovery interface selection and PVE console contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_spec:
+      network:
+        gateway: 192.168.11.1
+        ipv4: 192.168.11.232/24
+      discovery:
+        netbios_name: MEDIA-SERZHAN
+        workgroup: WORKGROUP
+      lifecycle:
+        display: std
+    media30_wsd_guest_route:
+      stdout: '192.168.11.1 dev ens18 src 192.168.11.232 uid 0 cache'
+    media30_pve_config_fixture:
+      - 'name: mediaserver-serzhan'
+      - 'serial0: socket'
+      - 'vga: std'
+  tasks:
+    - name: Extract interface and guest source address from kernel route fixture
+      ansible.builtin.set_fact:
+        media30_wsd_route_devices: >-
+          {{ media30_wsd_guest_route.stdout
+             | regex_findall('(?:^|\s)dev\s+([A-Za-z0-9_.-]+)(?:\s|$)') }}
+        media30_wsd_route_sources: >-
+          {{ media30_wsd_guest_route.stdout
+             | regex_findall('(?:^|\s)src\s+([0-9.]+)(?:\s|$)') }}
+
+    - name: Require exact discovered interface and source IP
+      ansible.builtin.assert:
+        that:
+          - media30_wsd_route_devices == ['ens18']
+          - media30_wsd_route_sources == [media_spec.network.ipv4.split('/')[0]]
+
+    - name: Set the discovered guest interface before rendering the template
+      ansible.builtin.set_fact:
+        media30_wsd_interface: "{{ media30_wsd_route_devices[0] }}"
+
+    - name: Render Windows discovery override only in Ansible memory
+      ansible.builtin.set_fact:
+        media30_wsd_template: >-
+          {{ lookup('ansible.builtin.template',
+             playbook_dir ~ '/../templates/media30-wsdd2.service.conf.j2') }}
+
+    - name: Require correct Windows SMB identity without affecting LLMNR
+      ansible.builtin.assert:
+        that:
+          - "'ExecStart=/usr/sbin/wsdd2 -w -i ens18' in media30_wsd_template"
+          - "'-H MEDIA-SERZHAN' in media30_wsd_template"
+          - "'-N MEDIA-SERZHAN' in media30_wsd_template"
+          - "'-G WORKGROUP' in media30_wsd_template"
+          - "'LLMNR' not in media30_wsd_template"
+
+    - name: Require both console devices in PVE configuration fixture
+      ansible.builtin.assert:
+        that:
+          - "'serial0: socket' in media30_pve_config_fixture"
+          - "'vga: ' ~ media_spec.lifecycle.display in media30_pve_config_fixture"

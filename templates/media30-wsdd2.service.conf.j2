@@ -1,0 +1,3 @@
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/wsdd2 -w -i {{ media30_wsd_interface }} -H {{ media_spec.discovery.netbios_name }} -N {{ media_spec.discovery.netbios_name }} -G {{ media_spec.discovery.workgroup }}

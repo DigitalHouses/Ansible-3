@@ -397,6 +397,9 @@
     - name: Install native Debian, ZFS and Intel GPU prerequisites
       ansible.builtin.include_tasks: ../tasks/media-guest-prereqs.yml
 
+    - name: Enable native Debian serial and virtual VGA login consoles
+      ansible.builtin.include_tasks: ../tasks/media30-console-apply.yml
+
     - name: Apply approved emergency swap protection on the guest root filesystem
       ansible.builtin.include_tasks: ../tasks/media-swap-apply.yml
 
@@ -420,6 +423,9 @@
 
     - name: Run built-in task 81 read-only guest acceptance
       ansible.builtin.include_tasks: ../tasks/media-accept-guest.yml
+
+    - name: Accept Windows discovery and both guest consoles
+      ansible.builtin.include_tasks: ../tasks/media30-discovery-console-accept.yml
 
     - name: Retain explicit production completion gate pending live acceptance
       ansible.builtin.fail:

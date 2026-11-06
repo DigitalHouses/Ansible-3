@@ -1,0 +1,39 @@
+---
+# Final read-only checks. Client-side Windows discovery and browser noVNC still need live E2E.
+- name: Check effective WS-Discovery service configuration
+  ansible.builtin.command:
+    argv: [systemctl, show, wsdd2.service, --property=ExecStart, --value]
+  register: media30_accept_wsd_command
+  changed_when: false
+
+- name: Check running discovery and Debian console services
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  loop:
+    - wsdd2.service
+    - getty@tty1.service
+    - serial-getty@ttyS0.service
+  register: media30_accept_console_services
+  changed_when: false
+
+- name: Verify services are running with exact site discovery identity
+  ansible.builtin.assert:
+    that:
+      - (media30_accept_console_services.results | map(attribute='stdout') | list) == ['active', 'active', 'active']
+      - "'-w' in media30_accept_wsd_command.stdout"
+      - "('-i ' ~ media30_wsd_interface) in media30_accept_wsd_command.stdout"
+      - "('-H ' ~ media_spec.discovery.netbios_name) in media30_accept_wsd_command.stdout"
+      - "('-N ' ~ media_spec.discovery.netbios_name) in media30_accept_wsd_command.stdout"
+      - "('-G ' ~ media_spec.discovery.workgroup) in media30_accept_wsd_command.stdout"
+    fail_msg: MEDIA30_ACCEPT_DISCOVERY_OR_CONSOLE_UNAVAILABLE
+
+- name: Report limited guest console and discovery acceptance
+  ansible.builtin.debug:
+    msg:
+      wsdd2_identity: PASS
+      wsdd2_interface: "{{ media30_wsd_interface }}"
+      serial_getty: PASS
+      virtual_vga_getty: PASS
+      windows_explorer_network_view: REQUIRES_CLIENT_E2E
+      proxmox_novnc_browser: REQUIRES_BROWSER_E2E
+      account_password_login: NOT_TESTED

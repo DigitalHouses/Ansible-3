@@ -75,7 +75,7 @@
     media_vm: "{{ media_spec }}"
   register: media_smb_config
 
-- name: Enable authenticated Samba and Windows discovery
+- name: Enable authenticated Samba services
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: true
@@ -83,7 +83,9 @@
   loop:
     - smbd.service
     - nmbd.service
-    - wsdd2.service
+
+- name: Reconcile Windows WS-Discovery using the observed LAN interface
+  ansible.builtin.include_tasks: media30-wsdd-apply.yml
 
 - name: Ensure no anonymous access to Media share
   ansible.builtin.command:

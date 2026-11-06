@@ -168,6 +168,7 @@
     - { key: onboot, value: "{{ '1' if media_vm.lifecycle.onboot | default(true) else '0' }}" }
     - { key: startup, value: 'order=1' }
     - { key: vga, value: "{{ media_vm.lifecycle.display | default('std') }}" }
+    - { key: serial0, value: socket }
     - { key: agent, value: 'enabled=1' }
     - { key: ciuser, value: debian }
     - { key: ipconfig0, value: "ip={{ media_vm.network.ipv4 }},gw={{ media_vm.network.gateway }}" }

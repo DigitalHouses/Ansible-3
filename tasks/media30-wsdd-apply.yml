@@ -1,0 +1,87 @@
+---
+# Windows Explorer WSD identity; no LLMNR or system resolver changes.
+- name: Require safe Windows discovery identity
+  ansible.builtin.assert:
+    that:
+      - media_spec.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_spec.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
+      - media_spec.network.gateway is match('^[0-9]+(\\.[0-9]+){3}$')
+    fail_msg: MEDIA30_WSD_IDENTITY_INVALID
+
+- name: Read actual guest route to its declared LAN gateway
+  ansible.builtin.command:
+    argv: [ip, -o, -4, route, get, "{{ media_spec.network.gateway }}"]
+  register: media30_wsd_guest_route
+  changed_when: false
+
+- name: Extract the actual LAN interface and selected source IP
+  ansible.builtin.set_fact:
+    media30_wsd_route_devices: >-
+      {{ media30_wsd_guest_route.stdout
+         | regex_findall('(?:^|\s)dev\s+([A-Za-z0-9_.-]+)(?:\s|$)') }}
+    media30_wsd_route_sources: >-
+      {{ media30_wsd_guest_route.stdout
+         | regex_findall('(?:^|\s)src\s+([0-9.]+)(?:\s|$)') }}
+
+- name: Refuse ambiguous network paths or unexpected guest IP
+  ansible.builtin.assert:
+    that:
+      - media30_wsd_route_devices | length == 1
+      - media30_wsd_route_sources == [media_spec.network.ipv4.split('/')[0]]
+    fail_msg: MEDIA30_WSD_LAN_ROUTE_MISMATCH
+
+- name: Use the observed interface for Windows WS-Discovery
+  ansible.builtin.set_fact:
+    media30_wsd_interface: "{{ media30_wsd_route_devices[0] }}"
+
+- name: Prepare wsdd2 service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/wsdd2.service.d
+    owner: root
+    group: root
+    mode: '0755'
+    state: directory
+
+- name: Bind Windows discovery to only this media guest and site identity
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media30-wsdd2.service.conf.j2"
+    dest: /etc/systemd/system/wsdd2.service.d/50-dh-media-identity.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: media30_wsd_override
+
+# An inline reload is required here: wsdd2 must restart only after reload.
+- name: Reload systemd for changed WSD identity  # noqa: no-handler
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: media30_wsd_override.changed
+
+- name: Ensure Windows WS-Discovery advertises this VM
+  ansible.builtin.systemd_service:
+    name: wsdd2.service
+    enabled: true
+    state: "{{ 'restarted' if media30_wsd_override.changed else 'started' }}"
+
+- name: Read effective WSD service command
+  ansible.builtin.command:
+    argv: [systemctl, show, wsdd2.service, --property=ExecStart, --value]
+  register: media30_wsd_effective_command
+  changed_when: false
+
+- name: Verify exact interface and advertised identity are active
+  ansible.builtin.assert:
+    that:
+      - "'-w' in media30_wsd_effective_command.stdout"
+      - "('-i ' ~ media30_wsd_interface) in media30_wsd_effective_command.stdout"
+      - "('-H ' ~ media_spec.discovery.netbios_name) in media30_wsd_effective_command.stdout"
+      - "('-N ' ~ media_spec.discovery.netbios_name) in media30_wsd_effective_command.stdout"
+      - "('-G ' ~ media_spec.discovery.workgroup) in media30_wsd_effective_command.stdout"
+    fail_msg: MEDIA30_WSD_EFFECTIVE_IDENTITY_MISMATCH
+
+- name: Confirm Windows discovery daemon is running
+  ansible.builtin.command:
+    argv: [systemctl, is-active, wsdd2.service]
+  register: media30_wsd_live
+  changed_when: false
+  failed_when: media30_wsd_live.stdout | trim != 'active'

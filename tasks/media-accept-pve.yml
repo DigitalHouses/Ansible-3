@@ -37,6 +37,8 @@
       - "'cores: ' ~ (media_spec.resources.cores | string) in media80_accept_pve_config.stdout_lines"
       - "'memory: ' ~ (media_spec.resources.memory_mb | string) in media80_accept_pve_config.stdout_lines"
       - "'balloon: 0' in media80_accept_pve_config.stdout_lines"
+      - "'serial0: socket' in media80_accept_pve_config.stdout_lines"
+      - "'vga: ' ~ (media_spec.lifecycle.display | default('std')) in media80_accept_pve_config.stdout_lines"
       - >-
         (media80_accept_pve_settings.cpulimit | default('0') | float)
         == (media30_vm_cpu_percent | float / 100)
