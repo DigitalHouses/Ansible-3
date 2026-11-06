@@ -1,0 +1,146 @@
+---
+# Read-only keep+import preflight for the already-running VM.
+# Uses only named QGA reads; it never imports, exports or mounts a pool.
+- name: Observe active pool GUID through the running guest
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - get
+      - -H
+      - -o
+      - value
+      - guid
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_pool_guid_raw
+  changed_when: false
+  failed_when: false
+
+- name: Inspect selected pool's actual block-device topology
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - status
+      - -LP
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_pool_topology_raw
+  changed_when: false
+  failed_when: false
+
+- name: Probe download folders without following symlinks or making directories
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/stat
+      - --format
+      - '%F|%n'
+      - "{{ item }}"
+  loop: >-
+    {{ [
+       media_spec.downloads.path,
+       '/' ~ media_spec.storage.pool_name ~ '/downloads',
+       '/' ~ media_spec.storage.pool_name ~ '/downloads/complete',
+       '/' ~ media_spec.storage.pool_name ~ '/downloads/incomplete'
+       ] | unique | list }}
+  loop_control:
+    label: "{{ item }}"
+  register: media30_download_path_probes
+  changed_when: false
+  failed_when: false
+
+- name: Read mountpoint of the independent download dataset
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/findmnt
+      - -n
+      - -o
+      - SOURCE,FSTYPE,TARGET
+      - -T
+      - "/{{ media_spec.storage.pool_name }}/downloads"
+  register: media30_download_mount_raw
+  changed_when: false
+  failed_when: false
+
+- name: Decode native guest program exit codes and output
+  ansible.builtin.set_fact:
+    media30_pool_guid_result: "{{ media30_pool_guid_raw.stdout | from_json }}"
+    media30_pool_topology_result: "{{ media30_pool_topology_raw.stdout | from_json }}"
+    media30_download_mount_result: "{{ media30_download_mount_raw.stdout | from_json }}"
+    media30_download_paths_result: >-
+      {{ media30_download_path_probes.results
+         | map(attribute='stdout') | map('from_json') | list }}
+  when:
+    - media30_pool_guid_raw.rc == 0
+    - media30_pool_topology_raw.rc == 0
+    - media30_download_mount_raw.rc == 0
+    - >-
+      media30_download_path_probes.results
+      | selectattr('rc', 'ne', 0) | list | length == 0
+
+- name: Index actual download-folder checks by the examined path
+  ansible.builtin.set_fact:
+    media30_download_probe_codes: >-
+      {{ dict(media30_download_path_probes.results
+         | map(attribute='item')
+         | zip(media30_download_paths_result | map(attribute='exitcode'))) }}
+  when: media30_pool_guid_result is defined
+
+- name: Identify whether keep plus import would safely leave this pool alone
+  ansible.builtin.set_fact:
+    media30_import_guid_matches: >-
+      {{ media30_pool_guid_result.exitcode | default(1) == 0
+         and (media30_pool_guid_result['out-data'] | default('') | trim)
+             == (media_spec.storage.import_pool_guid | default('') | string) }}
+    media30_download_path_exists: >-
+      {{ media30_download_probe_codes.get(media_spec.downloads.path, 1) == 0 }}
+    media30_download_dataset_exists: >-
+      {{ media30_download_probe_codes.get('/' ~ media_spec.storage.pool_name ~ '/downloads', 1) == 0 }}
+  when: media30_pool_guid_result is defined
+
+- name: Report keep plus import readiness without attempting an import
+  ansible.builtin.debug:
+    msg:
+      operation: MEDIA30_KEEP_IMPORT_PREFLIGHT_READ_ONLY
+      requested_vm: "{{ media_spec.vmid }}"
+      expected_pool: "{{ media_spec.storage.pool_name }}"
+      expected_pool_guid: "{{ media_spec.storage.import_pool_guid }}"
+      actual_pool_guid: "{{ media30_pool_guid_result['out-data'] | default('unavailable') | trim }}"
+      pool_guid_matches: "{{ media30_import_guid_matches | default(false) }}"
+      topology_exitcode: "{{ media30_pool_topology_result.exitcode | default('unknown') }}"
+      pool_topology: "{{ (media30_pool_topology_result['out-data'] | default('')).splitlines() }}"
+      downloads_manifest_path: "{{ media_spec.downloads.path }}"
+      downloads_manifest_path_exists: "{{ media30_download_path_exists | default(false) }}"
+      dedicated_download_dataset_path: "/{{ media_spec.storage.pool_name }}/downloads"
+      dedicated_download_dataset_exists: "{{ media30_download_dataset_exists | default(false) }}"
+      download_path_checks: >-
+        {{ media30_download_path_probes.results
+           | map(attribute='item') | zip(
+             media30_download_paths_result | map(attribute='exitcode'))
+           | list }}
+      dedicated_dataset_mount: "{{ media30_download_mount_result['out-data'] | default('unavailable') | trim }}"
+      import_executed: false
+      guest_changes_applied: false
+  when: media30_pool_guid_result is defined
+
+- name: Report a failed read-only probe without applying any changes
+  ansible.builtin.debug:
+    msg: MEDIA30_KEEP_IMPORT_PREFLIGHT_UNAVAILABLE; NO_CHANGES_APPLIED
+  when: media30_pool_guid_result is not defined
