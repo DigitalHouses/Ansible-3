@@ -96,9 +96,8 @@
           - media_spec.network.ipv4.split('/')[0] != media_spec.network.gateway
           - media_spec.storage.pool_name == media_site.owner_slug ~ '-pool'
           - media_spec.storage.media_dataset == media_spec.storage.pool_name ~ '/media'
-          - "'downloads' in media_spec.storage.layout.datasets"
           - media_spec.downloads.mode == 'shared-zfs'
-          - media_spec.downloads.path == '/' ~ media_spec.storage.pool_name ~ '/downloads'
+          - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
           - media_spec.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
           - media_spec.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
         fail_msg: MEDIA80_SITE_VM_DECLARATION_MISMATCH

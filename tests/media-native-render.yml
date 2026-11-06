@@ -21,7 +21,7 @@
       vmid: 2232
       network: {ipv4: 192.168.11.232/24}
       storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
-      downloads: {path: /serzhan-pool/downloads}
+      downloads: {path: /serzhan-pool/media/downloads}
       plex_agent:
         mqtt: {host: 127.0.0.1, port: 1883}
       discovery: {workgroup: WORKGROUP, netbios_name: MEDIA-SERZHAN}
@@ -38,6 +38,13 @@
       portal: {show_admin_links: false, admin_links: []}
     media_vm: "{{ media_spec }}"
   tasks:
+    - name: Require one shared ZFS dataset for downloads and media libraries
+      ansible.builtin.assert:
+        that:
+          - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
+          - media_spec.downloads.path != '/' ~ media_spec.storage.pool_name ~ '/downloads'
+        fail_msg: MEDIA30_DOWNLOADS_MUST_STAY_INSIDE_MEDIA_DATASET
+
     - name: Verify native release checksum shapes
       ansible.builtin.assert:
         that:

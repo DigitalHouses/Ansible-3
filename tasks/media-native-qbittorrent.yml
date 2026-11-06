@@ -5,8 +5,49 @@
   ansible.builtin.assert:
     that:
       - media_spec.downloads.mode == 'shared-zfs'
-      - media_spec.downloads.path == '/' ~ media_spec.storage.pool_name ~ '/downloads'
+      - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
     fail_msg: MEDIA80_DOWNLOAD_ROOT_MISMATCH
+
+- name: Inspect shared-media folders before any qBittorrent changes
+  ansible.builtin.stat:
+    path: "/{{ media_spec.storage.media_dataset }}/{{ item }}"
+    follow: false
+  loop: [movies, tvshows, downloads]
+  register: media_qbt_shared_roots
+
+- name: Refuse missing folders or symlinks in media library and downloads
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+      - not (item.stat.islnk | default(false))
+    fail_msg: MEDIA80_QBT_SHARED_MEDIA_ROOT_UNSAFE
+  loop: "{{ media_qbt_shared_roots.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read ZFS backing for downloads and both import destinations
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - SOURCE,FSTYPE
+      - -T
+      - "/{{ media_spec.storage.media_dataset }}/{{ item }}"
+  loop: [movies, tvshows, downloads]
+  register: media_qbt_shared_mounts
+  changed_when: false
+
+- name: Require one common media dataset for hardlink-safe imports
+  ansible.builtin.assert:
+    that:
+      - item.stdout.split() | length == 2
+      - item.stdout.split()[0] == media_spec.storage.media_dataset
+      - item.stdout.split()[1] == 'zfs'
+    fail_msg: MEDIA80_QBT_IMPORT_PATH_CROSSES_ZFS_DATASETS
+  loop: "{{ media_qbt_shared_mounts.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Install Debian native qBittorrent headless package
   ansible.builtin.apt:
@@ -32,16 +73,6 @@
     group: media_group
     mode: '2770'
   loop: [incomplete, complete, complete/movies, complete/series]
-
-- name: Verify downloads live on the declared ZFS dataset
-  ansible.builtin.command:
-    argv: [findmnt, -n, -o, 'SOURCE,FSTYPE', -T, "{{ media_spec.downloads.path }}"]
-  register: media_qbt_download_mount
-  changed_when: false
-  failed_when: >-
-    media_qbt_download_mount.rc != 0 or
-    media_qbt_download_mount.stdout.split()[0] != (media_spec.storage.pool_name ~ '/downloads') or
-    media_qbt_download_mount.stdout.split()[1] != 'zfs'
 
 - name: Create qBittorrent native preferences directory
   ansible.builtin.file:
