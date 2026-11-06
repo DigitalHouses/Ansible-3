@@ -3,7 +3,8 @@
 - name: Require safe Windows discovery identity
   ansible.builtin.assert:
     that:
-      - media_spec.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_spec.discovery.netbios_name is match('^server-[a-z][a-z0-9-]{0,7}$')
+      - media_spec.discovery.netbios_name == 'server-' ~ media_site.owner_slug
       - media_spec.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
       - media_spec.network.gateway is match('^[0-9]+(\\.[0-9]+){3}$')
     fail_msg: MEDIA30_WSD_IDENTITY_INVALID

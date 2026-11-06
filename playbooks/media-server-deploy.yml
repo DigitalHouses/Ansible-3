@@ -85,6 +85,8 @@
           - media_site.id == media_site_id
           - media_site.owner_slug is match('^[a-z][a-z0-9-]*$')
           - media_spec.name == 'mediaserver-' ~ media_site.owner_slug
+          - media_spec.discovery.netbios_name == 'server-' ~ media_site.owner_slug
+          - media_spec.discovery.netbios_name is match('^server-[a-z][a-z0-9-]{0,7}$')
           - media_spec.vmid | int >= 100
           - media_spec.network.bridge is match('^vmbr[0-9]+$')
           - media_spec.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/[0-9]+$')

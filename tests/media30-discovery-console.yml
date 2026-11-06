@@ -5,12 +5,13 @@
   connection: local
   gather_facts: false
   vars:
+    media_site: {owner_slug: serzhan}
     media_spec:
       network:
         gateway: 192.168.11.1
         ipv4: 192.168.11.232/24
       discovery:
-        netbios_name: MEDIA-SERZHAN
+        netbios_name: server-serzhan
         workgroup: WORKGROUP
       lifecycle:
         display: std
@@ -49,9 +50,11 @@
     - name: Require correct Windows SMB identity without affecting LLMNR
       ansible.builtin.assert:
         that:
+          - media_spec.discovery.netbios_name == 'server-' ~ media_site.owner_slug
+          - media_spec.discovery.netbios_name is match('^server-[a-z][a-z0-9-]{0,7}$')
           - "'ExecStart=/usr/sbin/wsdd2 -w -i ens18' in media30_wsd_template"
-          - "'-H MEDIA-SERZHAN' in media30_wsd_template"
-          - "'-N MEDIA-SERZHAN' in media30_wsd_template"
+          - "'-H server-serzhan' in media30_wsd_template"
+          - "'-N server-serzhan' in media30_wsd_template"
           - "'-G WORKGROUP' in media30_wsd_template"
           - "'LLMNR' not in media30_wsd_template"
 

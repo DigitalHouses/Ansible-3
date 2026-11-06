@@ -24,7 +24,7 @@
       downloads: {path: /serzhan-pool/media/downloads}
       plex_agent:
         mqtt: {host: 127.0.0.1, port: 1883}
-      discovery: {workgroup: WORKGROUP, netbios_name: MEDIA-SERZHAN}
+      discovery: {workgroup: WORKGROUP, netbios_name: server-serzhan}
       file_access:
         accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
       applications:
@@ -93,6 +93,9 @@
               - "'WebUI' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
               - "'127.0.0.1' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
               - "'[DigitalHouses]' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-smb.conf.j2')"
+              - >-
+                'netbios name = server-serzhan' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-smb.conf.j2')
               - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - >-
