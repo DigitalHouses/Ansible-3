@@ -31,7 +31,9 @@
       - smartmontools
     state: present
     update_cache: true
-    cache_valid_time: 3600
+    # Fresh cloud images may already have a recent main-only APT cache.
+    # Always refresh after enabling contrib, otherwise zfs-dkms is invisible.
+    cache_valid_time: 0
 
 - name: Install native Intel GPU and LAN service prerequisites
   ansible.builtin.apt:
