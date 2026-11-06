@@ -28,7 +28,7 @@
   ansible.builtin.set_fact:
     media_plex_root_matches: >-
       {{ media_plex_sections_before.stdout_lines
-         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '[|]')
          | list }}
 
 - name: Refuse a duplicate or wrong-type Plex library
@@ -80,14 +80,14 @@
   delay: 3
   until: >-
     (media_plex_sections_after.stdout_lines
-     | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+     | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '[|]')
      | list | length) == 1
 
 - name: Resolve and check the resulting Plex section
   ansible.builtin.set_fact:
     media_plex_verified_matches: >-
       {{ media_plex_sections_after.stdout_lines
-         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '[|]')
          | list }}
 
 - name: Require the verified Plex section type and stable ID

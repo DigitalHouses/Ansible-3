@@ -1,0 +1,39 @@
+---
+- name: Verify Plex SQLite root matching is exact
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_plex_rows:
+      - /serzhan-pool/media/movies|1|1
+      - /serzhan-pool/media/tvshows|2|2
+      - /serzhan-pool/media/music|3|8
+  tasks:
+    - name: Match each declared library without matching other rows
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_plex_rows
+             | select('match', '^' ~ (item.path | regex_escape) ~ '[|]')
+             | list) == [item.row]
+      loop:
+        - {path: /serzhan-pool/media/movies, row: '/serzhan-pool/media/movies|1|1'}
+        - {path: /serzhan-pool/media/tvshows, row: '/serzhan-pool/media/tvshows|2|2'}
+        - {path: /serzhan-pool/media/music, row: '/serzhan-pool/media/music|3|8'}
+        - {path: /serzhan-pool/media/absent, row: ''}
+      when: item.path != '/serzhan-pool/media/absent'
+
+    - name: Require absent paths to match no existing library
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_plex_rows
+             | select('match', '^' ~ ('/serzhan-pool/media/absent' | regex_escape) ~ '[|]')
+             | list | length) == 0
+
+    - name: Require the production task to use the literal pipe at all three call sites
+      ansible.builtin.assert:
+        that:
+          - source.count("~ '[|]'") == 3
+      vars:
+        source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-plex-library-one.yml') }}"
