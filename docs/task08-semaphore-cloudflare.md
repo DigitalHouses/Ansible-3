@@ -1,7 +1,7 @@
 # №08 — Semaphore и Cloudflare Access
 
 Веб-доступ к Semaphore на сервере Runner через выделенный Cloudflare Tunnel
-`<site-id>-semaphore` и адрес `https://<site-id>-semaphore.digitalhouses.vip/`.
+`<site-id>-semaphore` и адрес `https://<site-id>-pve-semaphore.digitalhouses.vip/`.
 Это продолжение существующей задачи №08 (DEV ↔ Semaphore), а не №10 PVE.
 
 - Источник: `https://127.0.0.1:3000` непосредственно в Runner LXC.
@@ -17,3 +17,12 @@
 - Готовность: `/` origin HTTPS/CA OK, туннель healthy, конфигурация и
   DNS readback, публичный HTTPS 302 на Cloudflare Access, повторное
   выполнение идемпотентно.
+
+## Исправление публичного имени
+
+Согласованный стандарт для Semaphore на Proxmox: `https://<site-id>-pve-semaphore.digitalhouses.vip/`.
+При обновлении №08 проверяет старый маршрут `<site-id>-semaphore.digitalhouses.vip`,
+если он существует, добавляет новый в **тот же** tunnel, проверяет
+Cloudflare Access с корректными SNI/TLS, затем удаляет старый маршрут и
+DNS без перенаправления. UUID, имя и token туннеля не меняются. При
+повторном применении все проверки выполняются без изменений.

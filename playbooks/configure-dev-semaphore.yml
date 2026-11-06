@@ -15,7 +15,8 @@
     sem_cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     sem_cf_api: https://api.cloudflare.com/client/v4
     sem_cf_tunnel_name: "{{ dev_site_id }}-semaphore"
-    sem_cf_hostname: "{{ dev_site_id }}-semaphore.digitalhouses.vip"
+    sem_cf_hostname: "{{ dev_site_id }}-pve-semaphore.digitalhouses.vip"
+    sem_cf_legacy_hostname: "{{ dev_site_id }}-semaphore.digitalhouses.vip"
     sem_cf_headers:
       Authorization: "Bearer {{ sem_cf_token }}"
       Accept: application/json
