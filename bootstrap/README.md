@@ -96,7 +96,7 @@ fresh bootstrap, и №08. Существующий валидный токен 
 
 ```bash
 CONFIG=/home/dev/.config/ansible-3/serzhan-home.curl
-API=https://192.168.11.231:3000/api
+API=http://192.168.11.231/api
 curl -q --config "$CONFIG" "$API/projects"
 curl -q --config "$CONFIG" "$API/project/1/templates"
 curl -q --config "$CONFIG" "$API/project/1/tasks"

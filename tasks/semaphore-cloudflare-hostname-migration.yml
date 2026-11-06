@@ -6,14 +6,10 @@
   ansible.builtin.set_fact:
     sem_cf_legacy_ingress:
       - hostname: "{{ sem_cf_legacy_hostname }}"
-        service: https://127.0.0.1:3000
-        originRequest:
-          caPool: /etc/semaphore/tls.crt
-          noTLSVerify: false
+        service: http://127.0.0.1:80
       - service: http_status:404
     sem_cf_staging_ingress: >-
-      {{ [{'hostname': sem_cf_legacy_hostname, 'service': 'https://127.0.0.1:3000',
-           'originRequest': {'caPool': '/etc/semaphore/tls.crt', 'noTLSVerify': false}},
+      {{ [{'hostname': sem_cf_legacy_hostname, 'service': 'http://127.0.0.1:80'},
           sem_cf_desired_config.ingress[0], sem_cf_desired_config.ingress[1]] }}
     sem_cf_original_ingress: >-
       {{ (sem_cf_existing_config.json.result.config | default({})).ingress | default([]) }}

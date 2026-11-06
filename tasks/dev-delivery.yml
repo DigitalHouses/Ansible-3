@@ -69,7 +69,6 @@
     - /home/dev/.config
     - "{{ dev_dir }}"
     - "{{ dev_curl_path }}"
-    - "{{ dev_cert_path }}"
   loop_control:
     label: "{{ item }}"
   changed_when: false
@@ -87,13 +86,6 @@
   failed_when: false
   no_log: true
 
-- name: Read DEV TLS trust digest
-  ansible.builtin.command:
-    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/sha256sum, "{{ dev_cert_path }}"]
-  register: dev_existing_cert_digest
-  changed_when: false
-  failed_when: false
-
 - name: Inspect DEV API config ownership and permissions
   ansible.builtin.command:
     argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/stat, -c, '%a:%U:%G', "{{ dev_curl_path }}"]
@@ -102,13 +94,6 @@
   failed_when: false
   no_log: true
 
-- name: Inspect DEV certificate ownership and permissions
-  ansible.builtin.command:
-    argv: [pct, exec, "{{ dev_ctid }}", --, /usr/bin/stat, -c, '%a:%U:%G', "{{ dev_cert_path }}"]
-  register: dev_existing_cert_mode
-  changed_when: false
-  failed_when: false
-
 - name: Decide whether enrollment files require a refresh
   ansible.builtin.set_fact:
     dev_config_needs_copy: >-
@@ -116,15 +101,10 @@
          dev_existing_config_digest.stdout.split(' ') | first !=
          (hostvars['runner'].dev_transfer_config.content | b64decode | hash('sha256')) or
          dev_existing_config_mode.stdout != '600:dev:dev' }}
-    dev_cert_needs_copy: >-
-      {{ dev_existing_cert_digest.rc != 0 or
-         dev_existing_cert_digest.stdout.split(' ') | first !=
-         (hostvars['runner'].dev_transfer_cert.content | b64decode | hash('sha256')) or
-         dev_existing_cert_mode.stdout != '600:dev:dev' }}
   no_log: true
 
 - name: Transfer only changed site access files through protected PVE staging
-  when: dev_config_needs_copy | bool or dev_cert_needs_copy | bool
+  when: dev_config_needs_copy | bool
   block:
     - name: Allocate root-only temporary staging directory on PVE
       ansible.builtin.tempfile:
@@ -144,21 +124,6 @@
       when: dev_config_needs_copy | bool
       no_log: true
 
-    - name: Stage public Semaphore TLS certificate
-      ansible.builtin.copy:
-        dest: "{{ dev_stage.path }}/semaphore.crt"
-        content: "{{ hostvars['runner'].dev_transfer_cert.content | b64decode }}"
-        owner: root
-        group: root
-        mode: '0600'
-      when: dev_cert_needs_copy | bool
-
-    - name: Install public TLS certificate into DEV
-      ansible.builtin.command:
-        argv: [pct, push, "{{ dev_ctid }}", "{{ dev_stage.path }}/semaphore.crt", "{{ dev_cert_path }}", --user, dev, --group, dev, --perms, '0600']
-      when: dev_cert_needs_copy | bool
-      changed_when: true
-
     - name: Install dedicated DEV API config into DEV
       ansible.builtin.command:
         argv: [pct, push, "{{ dev_ctid }}", "{{ dev_stage.path }}/access.curl", "{{ dev_curl_path }}", --user, dev, --group, dev, --perms, '0600']
@@ -173,7 +138,7 @@
       when: dev_stage is defined and dev_stage.path is defined
       no_log: true
 
-- name: Verify dedicated DEV authentication through native HTTPS API
+- name: Verify dedicated DEV authentication through native HTTP API
   ansible.builtin.command:
     argv:
       - pct

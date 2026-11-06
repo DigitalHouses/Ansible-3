@@ -1,0 +1,47 @@
+---
+# Offline regression: one native Semaphore HTTP 80 and public Cloudflare HTTPS.
+- name: Verify the minimal Semaphore HTTP80 contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sem_bootstrap: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../bootstrap/runner.yml') }}"
+    sem_dev: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/configure-dev-semaphore.yml') }}"
+    sem_catalog: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/update-task-catalog.yml') }}"
+    sem_credentials: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/obtain-site-credentials.yml') }}"
+    sem_cf: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/semaphore-cloudflare.yml') }}"
+    sem_dev_curl: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../bootstrap/tasks/dev-access.yml') }}"
+  tasks:
+    - name: Require native HTTP80 bootstrap and no self-signed certificate
+      ansible.builtin.assert:
+        that:
+          - sem_bootstrap is search('port:.*:80')
+          - "'AmbientCapabilities=CAP_NET_BIND_SERVICE' in sem_bootstrap"
+          - "'enabled: false' in sem_bootstrap"
+          - sem_bootstrap is search('web_host:')
+          - "'port: 3000' not in sem_bootstrap"
+          - "'/etc/semaphore/tls.crt' not in sem_bootstrap"
+
+    - name: Require task 00, 05 and 08 to use the same local API
+      ansible.builtin.assert:
+        that:
+          - "'http://127.0.0.1/api' in sem_catalog"
+          - "'http://127.0.0.1/api' in sem_credentials"
+          - "'http://127.0.0.1/api' in sem_dev"
+          - sem_dev is search('dev_api_url:.*http://')
+          - "'dev_transfer_cert' not in sem_dev"
+          - "'dev_cert_path' not in sem_dev"
+
+    - name: Require token-only DEV HTTP configuration without CA bundle
+      ansible.builtin.assert:
+        that:
+          - sem_dev_curl is search('proto.*=http')
+          - "'cacert =' not in sem_dev_curl"
+
+    - name: Require exact HTTP80 Tunnel origin behind public HTTPS Access
+      ansible.builtin.assert:
+        that:
+          - "'service: http://127.0.0.1:80' in sem_cf"
+          - "'http://127.0.0.1/api/ping' in sem_cf"
+          - "'originRequest:' not in sem_cf"
+          - "'https://127.0.0.1:3000' not in sem_cf"

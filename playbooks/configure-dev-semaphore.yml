@@ -9,8 +9,7 @@
   vars_files:
     - /etc/digitalhouses/pve.yml
   vars:
-    semaphore_api: https://127.0.0.1:3000/api
-    semaphore_ca: /etc/semaphore/tls.crt
+    semaphore_api: http://127.0.0.1/api
     sem_cf_action: "{{ DH_SEMAPHORE_CF_ACTION | default('skip', true) }}"
     sem_cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     sem_cf_api: https://api.cloudflare.com/client/v4
@@ -54,7 +53,6 @@
         url: "{{ semaphore_api }}/projects"
         headers:
           Authorization: "Bearer {{ dev_admin_token }}"
-        ca_path: "{{ semaphore_ca }}"
         validate_certs: true
         use_proxy: false
       register: dev_site_projects
@@ -78,12 +76,7 @@
       register: dev_transfer_config
       no_log: true
 
-    - name: Read Semaphore public TLS certificate
-      ansible.builtin.slurp:
-        src: /etc/semaphore/tls.crt
-      register: dev_transfer_cert
-
-    - name: Read the configured HTTPS endpoint without exposing configuration secrets
+    - name: Read the configured local HTTP endpoint without exposing configuration secrets
       ansible.builtin.slurp:
         src: /etc/semaphore/config.json
       register: dev_server_config
@@ -124,15 +117,14 @@
         mode: '0640'
         content: |
           {{ ((dev_server_config.content | b64decode | from_json)
-             | combine({'web_host': 'https://' ~ sem_cf_hostname})) | to_nice_json }}
+             | combine({'web_host': '/'})) | to_nice_json }}
       register: sem_public_web_host_config
       no_log: true
       when: sem_cf_action == 'apply'
 
     - name: Read current Semaphore HTML after a prior Cloudflare deployment
       ansible.builtin.uri:
-        url: https://127.0.0.1:3000/
-        ca_path: "{{ semaphore_ca }}"
+        url: http://127.0.0.1/
         validate_certs: true
         use_proxy: false
         status_code: 200
@@ -144,10 +136,10 @@
         - sem_cf_action == 'apply'
         - not sem_public_web_host_config.changed
 
-    - name: Require the browser base URL to use the actual Cloudflare hostname
+    - name: Require origin-relative browser base for both LAN and Cloudflare
       ansible.builtin.assert:
         that:
-          - sem_public_html.content.find('<base href="https://' ~ sem_cf_hostname ~ '/">') >= 0
+          - sem_public_html.content.find('<base href="/">') >= 0
         fail_msg: "Semaphore HTML still uses an incorrect browser base URL"
       when:
         - sem_cf_action == 'apply'
@@ -178,9 +170,8 @@
     dev_dir: /home/dev/.config/ansible-3
     dev_site_id: "{{ hostvars['runner'].dev_site_id }}"
     dev_runner_ip: "{{ hostvars['runner'].dev_runner_ip }}"
-    dev_api_url: "https://{{ dev_runner_ip }}:3000/api"
+    dev_api_url: "http://{{ dev_runner_ip }}/api"
     dev_curl_path: "{{ dev_dir }}/{{ dev_site_id }}.curl"
-    dev_cert_path: "{{ dev_dir }}/{{ dev_site_id }}.crt"
   tasks:
     - name: Use the shared transport without introducing another service
       ansible.builtin.include_tasks: ../tasks/dev-delivery.yml
