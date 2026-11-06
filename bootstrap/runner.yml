@@ -240,6 +240,28 @@
           - --version
       changed_when: false
 
+    - name: Install pinned native Ansible XML collection for task 30
+      ansible.builtin.command:
+        argv:
+          - /opt/ansible/venv/bin/ansible-galaxy
+          - collection
+          - install
+          - community.general:11.2.1
+          - -p
+          - /usr/share/ansible/collections
+        creates: /usr/share/ansible/collections/ansible_collections/community/general/MANIFEST.json
+
+    - name: Read installed community.general collection manifest
+      ansible.builtin.slurp:
+        src: /usr/share/ansible/collections/ansible_collections/community/general/MANIFEST.json
+      register: runner_general_collection_manifest
+
+    - name: Require the pinned XML module collection version
+      ansible.builtin.assert:
+        that:
+          - (runner_general_collection_manifest.content | b64decode | from_json).collection_info.version == '11.2.1'
+        fail_msg: RUNNER_COMMUNITY_GENERAL_VERSION_MISMATCH
+
     - name: Install Semaphore systemd unit
       ansible.builtin.copy:
         dest: /etc/systemd/system/digitalhouses-semaphore.service
