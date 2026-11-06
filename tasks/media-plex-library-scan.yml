@@ -1,0 +1,108 @@
+---
+# Plex-supported preferences, no custom scanner/timer or Python helper.
+- name: Install native XML edit and SQLite query prerequisites
+  ansible.builtin.apt:
+    name: [python3-lxml, sqlite3]
+    state: present
+
+- name: Inspect Plex preference store before policy reconciliation
+  ansible.builtin.stat:
+    path: "{{ media_plex_prefs }}"
+    follow: false
+  register: media_plex_prefs_stat
+
+- name: Protect Plex's persistent server preferences from symlinks
+  ansible.builtin.assert:
+    that:
+      - media_plex_prefs_stat.stat.isreg | default(false)
+      - not (media_plex_prefs_stat.stat.islnk | default(false))
+      - media_plex_prefs_stat.stat.pw_name == 'plex'
+    fail_msg: MEDIA80_PLEX_PREFERENCES_UNAVAILABLE
+
+- name: Read Plex's existing scanner preferences without exposing its token
+  ansible.builtin.slurp:
+    src: "{{ media_plex_prefs }}"
+  register: media_plex_prefs_raw
+  no_log: true
+
+- name: Decide whether supported native Plex scanning policy needs update
+  ansible.builtin.set_fact:
+    media_plex_scan_needs_update: >-
+      {{ ('FSEventLibraryUpdatesEnabled="1"' not in (media_plex_prefs_raw.content | b64decode))
+         or ('FSEventLibraryPartialScanEnabled="1"' not in (media_plex_prefs_raw.content | b64decode))
+         or ('ScheduledLibraryUpdatesEnabled="1"' not in (media_plex_prefs_raw.content | b64decode))
+         or ('ScheduledLibraryUpdateInterval="900"' not in (media_plex_prefs_raw.content | b64decode)) }}
+  no_log: true
+
+- name: Set Plex's native event and periodic library scanning only on drift
+  when: media_plex_scan_needs_update | bool
+  block:
+    - name: Stop Plex before changing its persistent preferences
+      ansible.builtin.systemd_service:
+        name: plexmediaserver.service
+        state: stopped
+
+    - name: Update selected Plex scanning attributes in its native XML
+      community.general.xml:
+        path: "{{ media_plex_prefs }}"
+        xpath: /Preferences
+        attribute: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        pretty_print: false
+      loop:
+        - {key: FSEventLibraryUpdatesEnabled, value: '1'}
+        - {key: FSEventLibraryPartialScanEnabled, value: '1'}
+        - {key: ScheduledLibraryUpdatesEnabled, value: '1'}
+        - {key: ScheduledLibraryUpdateInterval, value: '900'}
+      no_log: true
+
+  always:
+    - name: Ensure Plex is running after preference reconciliation
+      ansible.builtin.systemd_service:
+        name: plexmediaserver.service
+        state: started
+
+- name: Verify persisted Plex scanning settings after service restart
+  ansible.builtin.slurp:
+    src: "{{ media_plex_prefs }}"
+  register: media_plex_prefs_after
+  no_log: true
+
+- name: Require automatic and periodic Plex scans to be enabled
+  ansible.builtin.assert:
+    that:
+      - "'FSEventLibraryUpdatesEnabled=\"1\"' in (media_plex_prefs_after.content | b64decode)"
+      - "'FSEventLibraryPartialScanEnabled=\"1\"' in (media_plex_prefs_after.content | b64decode)"
+      - "'ScheduledLibraryUpdatesEnabled=\"1\"' in (media_plex_prefs_after.content | b64decode)"
+      - "'ScheduledLibraryUpdateInterval=\"900\"' in (media_plex_prefs_after.content | b64decode)"
+    fail_msg: MEDIA80_PLEX_NATIVE_SCAN_POLICY_DRIFT
+  no_log: true
+
+- name: Require Plex library database on its normal guest system disk
+  ansible.builtin.stat:
+    path: "{{ media_plex_db }}"
+    follow: false
+  register: media_plex_db_stat
+
+- name: Block library edits if Plex has not initialized its native database
+  ansible.builtin.assert:
+    that:
+      - media_plex_db_stat.stat.isreg | default(false)
+      - not media_plex_db_stat.stat.islnk | default(false)
+    fail_msg: MEDIA80_PLEX_NATIVE_LIBRARY_DATABASE_MISSING
+
+- name: Preserve existing Plex libraries and create only missing media roots
+  ansible.builtin.include_tasks: media-plex-library-one.yml
+  loop:
+    - {title: Фильмы, folder: movies, type: 1, agent: tv.plex.agents.movie}
+    - {title: Сериалы, folder: tvshows, type: 2, agent: tv.plex.agents.series}
+    - {title: Музыка, folder: music, type: 8, agent: tv.plex.agents.music}
+  loop_control:
+    loop_var: media_plex_library_declared
+    label: "{{ media_plex_library_declared.folder }}"
+  vars:
+    media_plex_library: >-
+      {{ media_plex_library_declared
+         | combine({'path': '/' ~ media_spec.storage.media_dataset
+             ~ '/' ~ media_plex_library_declared.folder}) }}

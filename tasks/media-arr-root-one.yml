@@ -1,0 +1,63 @@
+---
+# Reconcile one actual Radarr/Sonarr root folder through its official API.
+- name: List current native Servarr library roots
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/rootfolder"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_root_folders_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse any ambiguous duplicate managed root
+  ansible.builtin.assert:
+    that:
+      - media_wire_root_folders_before.json is sequence
+      - >-
+        (media_wire_root_folders_before.json
+         | selectattr('path', 'equalto', media_wire_arr.path)
+         | list | length) <= 1
+    fail_msg: MEDIA80_ARR_LIBRARY_ROOT_CONFLICT
+  no_log: true
+
+- name: Add the missing declared ZFS root via the native Servarr API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/rootfolder"
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    body_format: json
+    body:
+      path: "{{ media_wire_arr.path }}"
+    status_code: [200, 201]
+    use_proxy: false
+  when: >-
+    (media_wire_root_folders_before.json
+     | selectattr('path', 'equalto', media_wire_arr.path)
+     | list | length) == 0
+  no_log: true
+
+- name: Verify exact ZFS library folder exists in Servarr
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/rootfolder"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_root_folders_after
+  changed_when: false
+  no_log: true
+
+- name: Refuse missing or duplicated ZFS root after reconciliation
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_wire_root_folders_after.json
+         | selectattr('path', 'equalto', media_wire_arr.path)
+         | list | length) == 1
+    fail_msg: MEDIA80_ARR_ZFS_ROOT_NOT_VERIFIED
+  no_log: true

@@ -1,0 +1,99 @@
+---
+# Reconcile a single Plex media root without touching the library SQLite DB.
+# The sqlite3 CLI queries the live DB read-only; only Plex's own Scanner creates sections.
+- name: Require the declared Plex media folder is traversable
+  ansible.builtin.command:
+    argv: [test, -r, "{{ media_plex_library.path }}"]
+  become: true
+  become_user: plex
+  changed_when: false
+
+- name: Read Plex section IDs and root paths through read-only native SQLite CLI
+  ansible.builtin.command:
+    argv:
+      - sqlite3
+      - -readonly
+      - -separator
+      - '|'
+      - "{{ media_plex_db }}"
+      - >-
+        SELECT sl.root_path, ls.id, ls.section_type FROM section_locations sl
+        JOIN library_sections ls ON ls.id = sl.library_section_id;
+  become: true
+  become_user: plex
+  register: media_plex_sections_before
+  changed_when: false
+
+- name: Keep only Plex sections for the exact declared ZFS root
+  ansible.builtin.set_fact:
+    media_plex_root_matches: >-
+      {{ media_plex_sections_before.stdout_lines
+         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+         | list }}
+
+- name: Refuse a duplicate or wrong-type Plex library
+  ansible.builtin.assert:
+    that:
+      - media_plex_root_matches | length <= 1
+      - >-
+        media_plex_root_matches | length == 0
+        or (media_plex_root_matches[0].split('|')[2] | int)
+        == (media_plex_library.type | int)
+    fail_msg: MEDIA80_PLEX_LIBRARY_ROOT_OR_TYPE_CONFLICT
+
+- name: Add only the missing Plex section through the vendor Scanner CLI
+  ansible.builtin.command:
+    argv:
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --add-section
+      - "{{ media_plex_library.title }}"
+      - --type
+      - "{{ media_plex_library.type }}"
+      - --agent
+      - "{{ media_plex_library.agent }}"
+      - --location
+      - "{{ media_plex_library.path }}"
+      - --lang
+      - ru
+  become: true
+  become_user: plex
+  register: media_plex_add_section
+  when: media_plex_root_matches | length == 0
+  changed_when: true
+
+- name: Read Plex section after native Scanner operation
+  ansible.builtin.command:
+    argv:
+      - sqlite3
+      - -readonly
+      - -separator
+      - '|'
+      - "{{ media_plex_db }}"
+      - >-
+        SELECT sl.root_path, ls.id, ls.section_type FROM section_locations sl
+        JOIN library_sections ls ON ls.id = sl.library_section_id;
+  become: true
+  become_user: plex
+  register: media_plex_sections_after
+  changed_when: false
+  retries: 8
+  delay: 3
+  until: >-
+    (media_plex_sections_after.stdout_lines
+     | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+     | list | length) == 1
+
+- name: Resolve and check the resulting Plex section
+  ansible.builtin.set_fact:
+    media_plex_verified_matches: >-
+      {{ media_plex_sections_after.stdout_lines
+         | select('match', '^' ~ (media_plex_library.path | regex_escape) ~ '\\|')
+         | list }}
+
+- name: Require the verified Plex section type and stable ID
+  ansible.builtin.assert:
+    that:
+      - media_plex_verified_matches | length == 1
+      - media_plex_verified_matches[0].split('|')[1] | int > 0
+      - (media_plex_verified_matches[0].split('|')[2] | int) == (media_plex_library.type | int)
+    fail_msg: MEDIA80_PLEX_SCANNER_DID_NOT_PERSIST_LIBRARY

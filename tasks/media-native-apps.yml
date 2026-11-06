@@ -1,0 +1,99 @@
+---
+# Commission the applications directly with native package managers and APIs.
+# No Python helpers, unmanaged passwords, or client-visible bootstrap secrets.
+- name: Require explicitly declared customer-facing applications
+  ansible.builtin.assert:
+    that:
+      - item in media_spec.applications
+      - media_spec.applications[item] is boolean
+    fail_msg: MEDIA80_APPLICATION_SELECTION_REQUIRED
+  loop: [jellyfin, radarr, sonarr, prowlarr, qbittorrent, filestash, sambee]
+
+- name: Require the commissioned owner credential on the managed ZFS dataset
+  ansible.builtin.stat:
+    path: "/{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_site.owner_slug }}.txt"
+    follow: false
+  register: media_owner_record_stat
+  no_log: true
+
+- name: Refuse absent, symlinked or unprotected owner account record
+  ansible.builtin.assert:
+    that:
+      - media_owner_record_stat.stat.isreg | default(false)
+      - not media_owner_record_stat.stat.islnk | default(false)
+      - media_owner_record_stat.stat.pw_name == 'root'
+      - media_owner_record_stat.stat.mode in ['0600', '0640']
+    fail_msg: MEDIA80_APPLICATION_OWNER_CREDENTIAL_NOT_READY
+  no_log: true
+
+- name: Read existing owner credential without exposing it
+  ansible.builtin.slurp:
+    src: "/{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_site.owner_slug }}.txt"
+  register: media_owner_record
+  no_log: true
+
+- name: Validate owner credential schema and length
+  ansible.builtin.assert:
+    that:
+      - (media_owner_record.content | b64decode).splitlines() | length == 2
+      - (media_owner_record.content | b64decode).splitlines()[0] == 'username=' ~ media_site.owner_slug
+      - (media_owner_record.content | b64decode).splitlines()[1] is match('^password=[A-Za-z0-9]{6,8}$')
+    fail_msg: MEDIA80_APPLICATION_OWNER_PASSWORD_INVALID
+  no_log: true
+
+- name: Keep the shared client password only in protected Ansible memory
+  ansible.builtin.set_fact:
+    media_owner_password: "{{ (media_owner_record.content | b64decode).splitlines()[1][9:] }}"
+  no_log: true
+
+- name: Load checksum-pinned Servarr releases from the public Ansible catalog
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir | dirname }}/vars/media-arr-releases.yml"
+
+- name: Load verified third-party release artifacts from public catalog
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir | dirname }}/vars/media-app-artifacts.yml"
+
+- name: Create native application release cache
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    owner: root
+    group: root
+    state: directory
+    mode: '0755'
+
+- name: Install native Plex service and verify local health
+  ansible.builtin.include_tasks: media-native-plex.yml
+
+- name: Install and commission owner logins for declared native Servarr apps
+  ansible.builtin.include_tasks: media-native-arr-one.yml
+  loop: "{{ media_arr_releases }}"
+  loop_control:
+    loop_var: media_arr
+    label: "{{ media_arr.slug }}"
+  when: media_spec.applications[media_arr.slug] | bool
+
+- name: Install and commission native qBittorrent with authenticated LAN
+  ansible.builtin.include_tasks: media-native-qbittorrent.yml
+  when: media_spec.applications.qbittorrent | bool
+
+- name: Install, authenticate and reconcile native Jellyfin libraries
+  ansible.builtin.include_tasks: media-native-jellyfin.yml
+  when: media_spec.applications.jellyfin | bool
+
+- name: Install Filestash with native SMB passthrough authentication
+  ansible.builtin.include_tasks: media-native-filestash.yml
+  when: media_spec.applications.filestash | bool
+
+- name: Install Sambee with upstream owner API and a closed firstboot listener
+  ansible.builtin.include_tasks: media-native-sambee.yml
+  when: media_spec.applications.sambee | bool
+
+- name: Reconcile native Arr and qBittorrent API integration
+  ansible.builtin.include_tasks: media-arr-wire.yml
+
+- name: Install the existing release-pinned DigitalHouses Plex Agent product
+  ansible.builtin.include_tasks: media-native-plex-agent.yml
+
+# Keep unresolved acceptance and credential lifecycle blockers in the final
+# playbook gate, after the built-in read-only task 81 checks have run.

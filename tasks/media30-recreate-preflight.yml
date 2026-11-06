@@ -1,0 +1,57 @@
+---
+# Before destroying an existing VM, confirm that this is our managed VM.
+# Disk GUID/serial/WWN checks are intentionally not part of this flow.
+- name: Require the existing managed VM and exclusive declared PCI devices
+  ansible.builtin.assert:
+    that:
+      - media_vm_conf.stat.isreg | default(false)
+      - media_current_vm.name | default('') == media_spec.name
+      - media_current_vm.description | default('') == 'DigitalHouses managed media guest v2'
+      - media_current_vm.lock is not defined
+      - media_pci.results[0].stat.exists | default(false)
+      - media_pci.results[1].stat.exists | default(false)
+      - >-
+        (media_vm_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*'
+           ~ (media_spec.pci.gpu | regex_escape)) | length) == 1
+      - >-
+        (media_vm_config.stdout
+         | regex_findall('(?m)^hostpci[0-9]+:.*'
+           ~ (media_spec.pci.sata_controller | regex_escape)) | length) == 1
+    fail_msg: MEDIA30_RECREATE_VM_OR_CONTROLLER_NOT_OWNED
+
+- name: Require old VM running for import preflight
+  ansible.builtin.assert:
+    that:
+      - media_vm_power.stdout | default('') == 'status: running'
+    fail_msg: MEDIA30_RECREATE_IMPORT_OLD_VM_NOT_RUNNING
+  when: media_disk_action == 'import'
+
+- name: Check existing ZFS pool is visible before recreate plus import
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - list
+      - -H
+      - -o
+      - name
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_old_pool_raw
+  changed_when: false
+  when: media_disk_action == 'import'
+
+- name: Require named pool before deleting its existing VM
+  ansible.builtin.assert:
+    that:
+      - media30_old_pool_result.exited | default(0) | int == 1
+      - media30_old_pool_result.exitcode | default(1) | int == 0
+      - (media30_old_pool_result['out-data'] | default('') | trim) == media_spec.storage.pool_name
+    fail_msg: MEDIA30_RECREATE_IMPORT_EXPECTED_POOL_MISSING
+  vars:
+    media30_old_pool_result: "{{ media30_old_pool_raw.stdout | from_json }}"
+  when: media_disk_action == 'import'

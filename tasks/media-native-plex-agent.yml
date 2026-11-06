@@ -1,0 +1,169 @@
+---
+# Install the existing DigitalHouses Plex Agent product from a pinned tagged
+# upstream release. The Ansible repository adds no Python or shell worker.
+- name: Require task 05 MQTT credentials for the existing Plex Agent product
+  ansible.builtin.assert:
+    that:
+      - media_spec.plex_agent.mqtt.host | length > 0
+      - media_spec.plex_agent.mqtt.port | int > 0
+      - media_spec.plex_agent.mqtt.port | int <= 65535
+      - media_mqtt_username | default('') | length > 0
+      - media_mqtt_password | default('') | length > 0
+    fail_msg: MEDIA30_PLEX_AGENT_MQTT_CREDENTIALS_REQUIRED_FROM_TASK05
+  no_log: true
+
+- name: Install upstream Plex Agent runtime prerequisites
+  ansible.builtin.apt:
+    name: [git, python3-venv, intel-gpu-tools]
+    state: present
+
+- name: Create upstream Plex Agent system group
+  ansible.builtin.group:
+    name: digitalhouses_plex_agent
+    system: true
+    state: present
+
+- name: Ensure protected Plex Agent configuration location exists
+  ansible.builtin.file:
+    path: /etc/digitalhouses_plex_agent
+    state: directory
+    owner: root
+    group: digitalhouses_plex_agent
+    mode: '0750'
+  register: media_plex_agent_config_directory
+
+- name: Store the site-owned MQTT configuration for the existing Plex Agent
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/digitalhouses-plex-agent.conf.j2"
+    dest: /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
+    owner: root
+    group: digitalhouses_plex_agent
+    mode: '0640'
+  vars:
+    media_vm: "{{ media_spec }}"
+  register: media_plex_agent_config
+  no_log: true
+
+- name: Inspect installed Plex Agent release provenance
+  ansible.builtin.stat:
+    path: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+    follow: false
+  register: media_plex_agent_build_stat
+
+- name: Read installed Plex Agent release provenance without changing state
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+  register: media_plex_agent_build
+  when: media_plex_agent_build_stat.stat.exists
+
+- name: Refuse existing Plex Agent with unexpected release provenance path
+  ansible.builtin.assert:
+    that:
+      - not (media_plex_agent_build_stat.stat.islnk | default(false))
+    fail_msg: MEDIA80_PLEX_AGENT_BUILD_INFO_UNSAFE
+
+- name: Determine whether the pinned Plex Agent product installation is required
+  ansible.builtin.set_fact:
+    media_plex_agent_install_needed: >-
+      {{ not media_plex_agent_build_stat.stat.exists or
+         'source = digitalhouses_plex_agent-v0.8.5'
+         not in (media_plex_agent_build.content | default('') | b64decode) }}
+
+- name: Download integrity-pinned vendor Plex Agent release installer
+  ansible.builtin.get_url:
+    url: >-
+      https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_plex_agent-v0.8.5/digitalhouses_plex_agent/install.sh
+    dest: /var/cache/digitalhouses/media/plex-agent-v0.8.5-install.sh
+    checksum: sha256:49176adc0a9ff1c3c40107283f13930f9d831956e892d8ac6112af8704921754
+    owner: root
+    group: root
+    mode: '0700'
+  when: media_plex_agent_install_needed | bool
+
+- name: Install only the upstream, checked Plex Agent product release
+  ansible.builtin.command:
+    argv: [bash, /var/cache/digitalhouses/media/plex-agent-v0.8.5-install.sh]
+  environment:
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_plex_agent-v0.8.5
+  when: media_plex_agent_install_needed | bool
+  changed_when: true
+  no_log: true
+
+- name: Require native Plex Agent local token capability
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_plex_agent/plex_local_admin_token
+    follow: false
+  register: media_plex_agent_plex_token_stat
+  no_log: true
+
+- name: Refuse a Plex Agent missing its protected local API token
+  ansible.builtin.assert:
+    that:
+      - media_plex_agent_plex_token_stat.stat.isreg | default(false)
+      - not media_plex_agent_plex_token_stat.stat.islnk | default(false)
+    fail_msg: MEDIA80_PLEX_AGENT_NATIVE_PLEX_TOKEN_MISSING
+  no_log: true
+
+- name: Create isolated Intel GPU helper systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d
+    owner: root
+    group: root
+    mode: '0755'
+    state: directory
+
+- name: Give the vendor Intel GPU helper only the required PMU capabilities
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d/20-dh-intel-pmu.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      CapabilityBoundingSet=
+      CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN
+      AmbientCapabilities=
+      AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
+  register: media_plex_agent_gpu_helper_override
+
+- name: Start upstream GPU telemetry helper with native systemd
+  ansible.builtin.systemd_service:
+    name: digitalhouses_plex_agent_gpu_helper.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if media_plex_agent_gpu_helper_override.changed else 'started' }}"
+
+- name: Inspect current Intel PMU helper output
+  ansible.builtin.slurp:
+    src: /var/lib/digitalhouses_plex_agent/gpu_state.json
+  register: media_plex_agent_gpu_state
+  retries: 10
+  delay: 3
+  until: media_plex_agent_gpu_state.content is defined
+  no_log: true
+
+- name: Verify actual live GPU PMU status without custom Python
+  ansible.builtin.assert:
+    that:
+      - (media_plex_agent_gpu_state.content | b64decode | from_json).supported | bool
+      - (media_plex_agent_gpu_state.content | b64decode | from_json).available | bool
+      - (media_plex_agent_gpu_state.content | b64decode | from_json).status == 'ok'
+      - >-
+        (now(utc=true).timestamp() | int)
+        - ((media_plex_agent_gpu_state.content | b64decode | from_json).collected_at_epoch | int)
+        < 30
+    fail_msg: MEDIA80_PLEX_AGENT_GPU_PMU_UNAVAILABLE
+  no_log: true
+
+- name: Start existing Plex Agent product with protected site MQTT settings
+  ansible.builtin.systemd_service:
+    name: digitalhouses_plex_agent.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_agent_config.changed or media_plex_agent_install_needed else 'started' }}"
+
+- name: Require active DigitalHouses Plex Agent product
+  ansible.builtin.command:
+    argv: [systemctl, is-active, digitalhouses_plex_agent.service]
+  register: media_plex_agent_status
+  changed_when: false
+  failed_when: media_plex_agent_status.stdout != 'active'

@@ -1,0 +1,27 @@
+---
+# Six choices are declarative; only two disk workflows (import / erase).
+- name: Verify simple VM and ZFS actions
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Enumerate supported VM and SATA actions
+      ansible.builtin.set_fact:
+        media30_combinations: "{{ ['keep', 'create', 'recreate'] | product(['import', 'erase']) | list }}"
+
+    - name: Require six explicit combinations without GUID checks
+      ansible.builtin.assert:
+        that:
+          - media30_combinations | length == 6
+          - "['keep', 'import'] in media30_combinations"
+          - "['keep', 'erase'] in media30_combinations"
+          - "['create', 'import'] in media30_combinations"
+          - "['create', 'erase'] in media30_combinations"
+          - "['recreate', 'import'] in media30_combinations"
+          - "['recreate', 'erase'] in media30_combinations"
+          - "'media30-erase-guest-identity.yml' not in zfs_source"
+          - "'media_vm.storage.import_pool_guid' not in zfs_source"
+          - "'- name: Create requested new ZFS pool' in zfs_source"
+          - "'- name: Import existing named pool' in zfs_source"
+      vars:
+        zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"

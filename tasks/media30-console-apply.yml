@@ -1,0 +1,41 @@
+---
+# Standard Debian console services; no custom password helper or GPU driver override.
+- name: Verify expected guest serial device before enabling login
+  ansible.builtin.stat:
+    path: /dev/ttyS0
+    follow: false
+  register: media30_console_serial_device
+
+- name: Refuse absent VM serial hardware rather than forcing a guest reboot
+  ansible.builtin.assert:
+    that:
+      - media30_console_serial_device.stat.ischr | default(false)
+    fail_msg: MEDIA30_SERIAL_DEVICE_NOT_ACTIVE_REQUIRES_VM_POWER_CYCLE
+
+- name: Enable ordinary Debian text logins on virtual VGA and serial
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - getty@tty1.service
+    - serial-getty@ttyS0.service
+
+- name: Verify both guest console login prompts are supervised by systemd
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  loop:
+    - getty@tty1.service
+    - serial-getty@ttyS0.service
+  register: media30_console_login_services
+  changed_when: false
+
+- name: Require active text consoles without creating any accounts
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - item.stdout | trim == 'active'
+    fail_msg: MEDIA30_CONSOLE_GETTY_NOT_ACTIVE
+  loop: "{{ media30_console_login_services.results }}"
+  loop_control:
+    label: "{{ item.item }}"

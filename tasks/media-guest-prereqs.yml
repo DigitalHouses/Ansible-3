@@ -1,0 +1,131 @@
+---
+# Debian 13 media guest prerequisites; no custom Python or worker.
+- name: Confirm expected Debian guest before changing packages
+  ansible.builtin.command:
+    argv: [cat, /etc/os-release]
+  register: media_os_release
+  changed_when: false
+  failed_when: >-
+    media_os_release.rc != 0 or
+    'ID=debian' not in media_os_release.stdout or
+    'VERSION_ID="13"' not in media_os_release.stdout
+
+- name: Enable Debian contrib and non-free-firmware for ZFS and Intel GPU
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^(Components:\s*)main$'
+    replace: '\1main contrib non-free-firmware'
+  register: media_debian_components
+
+- name: Install native Debian media storage prerequisites
+  ansible.builtin.apt:
+    name:
+      - qemu-guest-agent
+      - linux-headers-amd64
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-zed
+      - gdisk
+      - util-linux
+      - pciutils
+      - smartmontools
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install native Intel GPU and LAN service prerequisites
+  ansible.builtin.apt:
+    name:
+      - firmware-intel-graphics
+      - intel-media-va-driver
+      - vainfo
+      - curl
+      - ca-certificates
+      - openssl
+      - samba
+      - smbclient
+      - wsdd2
+      - avahi-daemon
+      - nginx
+    state: present
+
+- name: Enable QEMU Guest Agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent.service
+    enabled: true
+    state: started
+
+- name: Persist site-declared ZFS ARC maximum
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/90-dh-media-zfs-arc.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: "options zfs zfs_arc_max={{ media_spec.resources.zfs_arc_max_mb | int * 1024 * 1024 }}\n"
+  notify: Rebuild media initramfs
+
+- name: Apply ARC boot setting before any GPU firmware reboot
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify Intel GPU DRM render device
+  ansible.builtin.stat:
+    path: /dev/dri/renderD128
+  register: media_gpu_drm_node
+
+- name: Reject unavailable Intel GPU
+  ansible.builtin.assert:
+    that: media_gpu_drm_node.stat.exists
+    fail_msg: MEDIA80_GPU_RENDER_NODE_MISSING
+
+- name: Check VA-API after firmware installation
+  ansible.builtin.command:
+    argv: [vainfo, --display, drm, --device, /dev/dri/renderD128]
+  environment:
+    LIBVA_DRIVER_NAME: iHD
+  register: media_gpu_vaapi
+  changed_when: false
+  failed_when: false
+
+- name: Reboot once for new GPU firmware when required
+  ansible.builtin.reboot:
+    msg: DigitalHouses media guest Intel GPU initialization
+    reboot_timeout: 420
+    connect_timeout: 8
+    post_reboot_delay: 8
+  when: media_gpu_vaapi.rc != 0
+
+- name: Verify Intel VA-API is functional on effective boot
+  ansible.builtin.command:
+    argv: [vainfo, --display, drm, --device, /dev/dri/renderD128]
+  environment:
+    LIBVA_DRIVER_NAME: iHD
+  register: media_gpu_final_vaapi
+  changed_when: false
+  failed_when: >-
+    media_gpu_final_vaapi.rc != 0 or
+    'VAProfileH264' not in media_gpu_final_vaapi.stdout
+
+- name: Verify the ZFS kernel module loads
+  ansible.builtin.command:
+    argv: [modprobe, zfs]
+  changed_when: false
+
+- name: Read currently active ZFS ARC ceiling
+  ansible.builtin.command:
+    argv: [cat, /sys/module/zfs/parameters/zfs_arc_max]
+  register: media_arc_live_before
+  changed_when: false
+
+- name: Converge runtime ZFS ARC limit before pool work
+  ansible.builtin.command:
+    argv: [tee, /sys/module/zfs/parameters/zfs_arc_max]
+    stdin: "{{ media_spec.resources.zfs_arc_max_mb | int * 1024 * 1024 }}"
+  when: media_arc_live_before.stdout | trim != (media_spec.resources.zfs_arc_max_mb | int * 1024 * 1024) | string
+  changed_when: true
+
+- name: Verify live ZFS ARC maximum
+  ansible.builtin.command:
+    argv: [cat, /sys/module/zfs/parameters/zfs_arc_max]
+  register: media_arc_live_after
+  changed_when: false
+  failed_when: media_arc_live_after.stdout | trim != (media_spec.resources.zfs_arc_max_mb | int * 1024 * 1024) | string

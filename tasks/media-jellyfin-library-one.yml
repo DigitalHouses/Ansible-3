@@ -1,0 +1,67 @@
+---
+# Called for one declared Jellyfin library after owner auth is confirmed.
+- name: Find existing Jellyfin library by exact name
+  ansible.builtin.set_fact:
+    media_jellyfin_matching_folders: >-
+      {{ media_jellyfin_folders.json
+         | selectattr('Name', 'equalto', media_jellyfin_library.name) | list }}
+  no_log: true
+
+- name: Refuse a duplicate or remapped Jellyfin library
+  ansible.builtin.assert:
+    that:
+      - media_jellyfin_matching_folders | length <= 1
+      - >-
+        media_jellyfin_matching_folders | length == 0
+        or (media_jellyfin_matching_folders[0].Locations | default([]))
+        == [media_jellyfin_library.path]
+      - >-
+        media_jellyfin_matching_folders | length == 0
+        or media_jellyfin_matching_folders[0].CollectionType == media_jellyfin_library.type
+    fail_msg: MEDIA80_JELLYFIN_LIBRARY_DRIFT
+  no_log: true
+
+- name: Create missing Jellyfin library through its official API
+  ansible.builtin.uri:
+    url: >-
+      {{ 'http://127.0.0.1:8096/Library/VirtualFolders?name='
+         ~ (media_jellyfin_library.name | urlencode)
+         ~ '&collectionType=' ~ media_jellyfin_library.type
+         ~ '&refreshLibrary=false' }}
+    method: POST
+    headers:
+      Authorization: "{{ media_jellyfin_authorization }}"
+    body_format: json
+    body:
+      LibraryOptions:
+        PathInfos:
+          - Path: "{{ media_jellyfin_library.path }}"
+        EnableRealtimeMonitor: true
+    status_code: [200, 204]
+    use_proxy: false
+  when: media_jellyfin_matching_folders | length == 0
+  no_log: true
+
+- name: Read Jellyfin folders after optional creation
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/Library/VirtualFolders
+    headers:
+      Authorization: "{{ media_jellyfin_authorization }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_jellyfin_folders
+  changed_when: false
+  no_log: true
+
+- name: Require one Jellyfin library mapped to the intended dataset
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_jellyfin_folders.json
+         | selectattr('Name', 'equalto', media_jellyfin_library.name)
+         | selectattr('CollectionType', 'equalto', media_jellyfin_library.type)
+         | selectattr('Locations', 'equalto', [media_jellyfin_library.path])
+         | list | length) == 1
+    fail_msg: MEDIA80_JELLYFIN_LIBRARY_NOT_VERIFIED
+  no_log: true

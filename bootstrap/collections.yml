@@ -1,0 +1,6 @@
+---
+# Runtime Ansible collections, shared by the central Semaphore runner.
+# Pin native upstream collections; no custom DigitalHouses Python modules.
+collections:
+  - name: community.general
+    version: 11.2.1

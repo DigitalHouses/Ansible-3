@@ -1,0 +1,42 @@
+---
+# Offline import fixture: a pool name on one selected SATA disk is sufficient.
+- name: Verify importing existing ZFS without GUID pinning
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    pool_name: serzhan-pool
+    one_pool: |
+      pool: serzhan-pool
+        id: 987654321
+       state: ONLINE
+    another_pool: |
+      pool: other-pool
+        id: 123456789
+       state: ONLINE
+    multiple_pools: |
+      pool: serzhan-pool
+        id: 987654321
+      pool: other-pool
+        id: 123456789
+  tasks:
+    - name: Accept the one selected existing pool regardless of its GUID
+      ansible.builtin.assert:
+        that:
+          - (one_pool | regex_findall('(?m)^\s*pool:\s*' ~ (pool_name | regex_escape) ~ '\s*$') | length) == 1
+          - (one_pool | regex_findall('(?m)^\s*pool:') | length) == 1
+
+    - name: Reject wrong or ambiguous pool name without checking disk identifiers
+      ansible.builtin.assert:
+        that:
+          - (another_pool | regex_findall('(?m)^\s*pool:\s*' ~ (pool_name | regex_escape) ~ '\s*$') | length) == 0
+          - (multiple_pools | regex_findall('(?m)^\s*pool:') | length) == 2
+
+    - name: Verify native import uses named pool and never erase
+      ansible.builtin.assert:
+        that:
+          - "'media_vm.storage.pool_name]' in media_zfs_apply"
+          - "'media_vm.storage.import_pool_guid' not in media_zfs_apply"
+          - media_zfs_apply is search('media_raw_disk_action.*import')
+      vars:
+        media_zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"

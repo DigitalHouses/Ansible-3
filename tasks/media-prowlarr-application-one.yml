@@ -1,0 +1,167 @@
+---
+# One native Prowlarr application link to Radarr or Sonarr.
+- name: Declare only the expected Prowlarr integration fields
+  ansible.builtin.set_fact:
+    media_wire_prowlarr_wanted:
+      prowlarrUrl: http://127.0.0.1:9696
+      baseUrl: "http://127.0.0.1:{{ media_wire_app.port }}"
+      apiKey: "{{ media_wire_arr_keys[media_wire_app.slug] }}"
+  no_log: true
+
+- name: Read existing Prowlarr application links
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/applications
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_prowlarr_links_before
+  changed_when: false
+  no_log: true
+
+- name: Select only this site's declared Prowlarr link
+  ansible.builtin.set_fact:
+    media_wire_papp_existing: >-
+      {{ media_wire_prowlarr_links_before.json
+         | selectattr('name', 'equalto', 'DigitalHouses ' ~ media_wire_app.name)
+         | list }}
+  no_log: true
+
+- name: Refuse duplicate or foreign Prowlarr integration ownership
+  ansible.builtin.assert:
+    that:
+      - media_wire_papp_existing | length <= 1
+      - >-
+        media_wire_papp_existing | length == 0
+        or (media_wire_papp_existing[0].implementation | lower)
+        == media_wire_app.slug
+    fail_msg: MEDIA80_PROWLARR_APPLICATION_OWNERSHIP_CONFLICT
+  no_log: true
+
+- name: Read existing Prowlarr link field values without printing API keys
+  ansible.builtin.set_fact:
+    media_wire_papp_existing_fields: >-
+      {{ media_wire_papp_existing[0].fields
+         | items2dict(key_name='name', value_name='value') }}
+  when: media_wire_papp_existing | length == 1
+  no_log: true
+
+- name: Preserve an existing Prowlarr link only if all expected fields match
+  ansible.builtin.assert:
+    that:
+      - item.key in media_wire_papp_existing_fields
+      - media_wire_papp_existing_fields[item.key] == item.value
+    fail_msg: MEDIA80_PROWLARR_MANAGED_APPLICATION_DRIFT
+  loop: "{{ media_wire_prowlarr_wanted | dict2items }}"
+  when: media_wire_papp_existing | length == 1
+  no_log: true
+
+- name: Fetch upstream native Prowlarr application schemas when missing
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/applications/schema
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_papp_schema_all
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Identify the exact native Prowlarr Radarr or Sonarr provider
+  ansible.builtin.set_fact:
+    media_wire_papp_schema_candidates: >-
+      {{ media_wire_papp_schema_all.json
+         | selectattr('implementation', 'equalto', media_wire_app.name)
+         | list }}
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Require supported Prowlarr application schema and expected fields
+  ansible.builtin.assert:
+    that:
+      - media_wire_papp_schema_candidates | length == 1
+      - >-
+        (media_wire_prowlarr_wanted.keys() | list
+         | difference(media_wire_papp_schema_candidates[0].fields
+            | map(attribute='name') | list) | length) == 0
+    fail_msg: MEDIA80_PROWLARR_APP_SCHEMA_INCOMPATIBLE
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Reset Prowlarr integration schema fields for the missing application
+  ansible.builtin.set_fact:
+    media_wire_papp_fields: []
+  when: media_wire_papp_existing | length == 0
+
+- name: Populate Prowlarr's own supported application schema fields
+  ansible.builtin.set_fact:
+    media_wire_papp_fields: >-
+      {{ media_wire_papp_fields +
+         [item | combine({'value': media_wire_prowlarr_wanted[item.name]})
+          if item.name in media_wire_prowlarr_wanted else item] }}
+  loop: >-
+    {{ media_wire_papp_schema_candidates[0].fields
+       if media_wire_papp_existing | length == 0 else [] }}
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Prepare native Prowlarr application payload without foreign changes
+  ansible.builtin.set_fact:
+    media_wire_papp_payload: >-
+      {{ media_wire_papp_schema_candidates[0] | combine({
+        'name': 'DigitalHouses ' ~ media_wire_app.name,
+        'enable': true, 'syncLevel': 'fullSync', 'tags': [],
+        'fields': media_wire_papp_fields
+      }) }}
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Test Prowlarr's own connection to the native Arr API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/applications/test
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    body_format: json
+    body: "{{ media_wire_papp_payload }}"
+    status_code: 200
+    use_proxy: false
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Create only the absent native Prowlarr application link
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/applications
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    body_format: json
+    body: "{{ media_wire_papp_payload }}"
+    status_code: [200, 201]
+    use_proxy: false
+  when: media_wire_papp_existing | length == 0
+  no_log: true
+
+- name: Read installed native Prowlarr application links again
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/applications
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_wire_papp_after
+  changed_when: false
+  no_log: true
+
+- name: Require exact owner-managed Prowlarr application link
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_wire_papp_after.json
+         | selectattr('name', 'equalto', 'DigitalHouses ' ~ media_wire_app.name)
+         | list | length) == 1
+    fail_msg: MEDIA80_PROWLARR_APP_NOT_VERIFIED
+  no_log: true

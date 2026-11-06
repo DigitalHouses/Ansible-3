@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }}</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#e9f2fc;background:#121b28}
+body{max-width:960px;padding:28px 20px 64px;margin:auto}
+h1{font-size:clamp(2rem,5vw,3rem);margin:16px 0}
+p,small{color:#b5c4d5;line-height:1.55}
+h2{font-size:1.25rem;margin:28px 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+a.card{display:block;padding:18px 20px;background:#1c2c3e;border:1px solid #354b66;
+border-radius:12px;color:#e9f2fc;text-decoration:none}
+a.card:hover,a.card:focus{border-color:#9acdf2;outline-offset:3px}
+a.card strong{display:block;margin-bottom:6px}
+code{color:#cce8fc;overflow-wrap:anywhere}
+.note{background:#1d3248;border-radius:10px;padding:14px 16px}
+</style>
+</head>
+<body>
+{% set host = media_spec.network.ipv4.split('/')[0] %}
+<header>
+<small>DigitalHouses · медиасервер</small>
+<h1>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }}</h1>
+<p>Сервисы домашней медиатеки. Каждое приложение использует собственную авторизацию.</p>
+<p class="note">Сохраните <code>http://{{ host }}/</code> в закладки. Пароли здесь не отображаются.</p>
+</header>
+<section>
+<h2>Просмотр и прослушивание</h2>
+<div class="grid">
+<a class="card" href="http://{{ host }}:32400/web/"><strong>Plex</strong><small>Основная медиатека (отдельный Plex-аккаунт).</small></a>
+{% if media_spec.applications.jellyfin | default(false) %}
+<a class="card" href="http://{{ host }}:8096/"><strong>Jellyfin</strong><small>Фильмы, сериалы, музыка.</small></a>
+{% endif %}
+</div>
+</section>
+<section>
+<h2>Доступ к файлам</h2>
+<div class="grid">
+{% if media_spec.applications.filestash | default(false) %}
+<a class="card" href="http://{{ host }}:8334/"><strong>Filestash</strong><small>Работа с файлами из браузера.</small></a>
+{% endif %}
+{% if media_spec.applications.sambee | default(false) %}
+<a class="card" href="http://{{ host }}:8000/"><strong>Sambee</strong><small>Веб-файловый менеджер.</small></a>
+{% endif %}
+</div>
+<p class="note">Windows: <code>\\{{ host }}\Media</code>. macOS: <code>smb://{{ host }}/Media</code>.<br>
+Для доступа нужны выданные учётные данные.</p>
+</section>
+<section>
+<h2>Загрузки и автоматизация</h2>
+<div class="grid">
+{% if media_spec.applications.radarr | default(false) %}
+<a class="card" href="http://{{ host }}:7878/"><strong>Radarr</strong><small>Библиотека фильмов.</small></a>
+{% endif %}
+{% if media_spec.applications.sonarr | default(false) %}
+<a class="card" href="http://{{ host }}:8989/"><strong>Sonarr</strong><small>Библиотека сериалов.</small></a>
+{% endif %}
+{% if media_spec.applications.prowlarr | default(false) %}
+<a class="card" href="http://{{ host }}:9696/"><strong>Prowlarr</strong><small>Источники поиска.</small></a>
+{% endif %}
+{% if media_spec.applications.qbittorrent | default(false) %}
+<a class="card" href="http://{{ host }}:8080/"><strong>qBittorrent</strong><small>Очередь загрузок.</small></a>
+{% endif %}
+</div>
+</section>
+{% if media_spec.portal.show_admin_links | default(false) and media_spec.portal.admin_links | default([]) | length > 0 %}
+<section><h2>Инфраструктура</h2><div class="grid">
+{% for link in media_spec.portal.admin_links %}
+<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Сервис') | e }}</small></a>
+{% endfor %}
+</div></section>
+{% endif %}
+<footer><small>Локальная стартовая страница; не предоставляет единый вход и не открывает доступ из Интернета.</small></footer>
+</body>
+</html>

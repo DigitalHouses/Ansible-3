@@ -30,6 +30,8 @@
         that:
           - media30_vm_cpu_percent | int == 175
           - media30_transcode_cpu_percent | int == 150
+          - (media30_vm_cpu_percent | float / 100) == 1.75
+          - (media30_transcode_cpu_percent | string) ~ '%' == '150%'
           - media_spec.resources.cpu_limit | float == 1.5
           - media_spec.resources.transcode_cpu_limit | float == 1.0
 

@@ -1,0 +1,116 @@
+---
+# Fail closed on foreign QSV settings. Apply only to known untouched Jellyfin
+# factory defaults; never interrupt an active transcode session.
+- name: Require real Intel render node for Jellyfin
+  ansible.builtin.stat:
+    path: /dev/dri/renderD128
+    follow: false
+  register: media_jf_render_node
+
+- name: Reject missing GPU character device before touching Jellyfin settings
+  ansible.builtin.assert:
+    that:
+      - media_jf_render_node.stat.ischr | default(false)
+      - not media_jf_render_node.stat.islnk | default(false)
+    fail_msg: MEDIA80_JELLYFIN_RENDER_DEVICE_MISSING
+
+- name: Verify Jellyfin service user has access to Intel hardware decoder
+  ansible.builtin.command:
+    argv: [runuser, -u, jellyfin, --, vainfo, --display, drm, --device, /dev/dri/renderD128]
+  environment:
+    LIBVA_DRIVER_NAME: iHD
+  register: media_jf_vaapi
+  changed_when: false
+  failed_when: >-
+    media_jf_vaapi.rc != 0 or
+    'VAProfileH264' not in media_jf_vaapi.stdout or
+    'VAProfileHEVCMain' not in media_jf_vaapi.stdout
+
+- name: Inspect Jellyfin's actual saved encoding configuration
+  ansible.builtin.stat:
+    path: /etc/jellyfin/encoding.xml
+    follow: false
+  register: media_jf_encoding_stat
+
+- name: Refuse unexpected Jellyfin encoding file ownership
+  ansible.builtin.assert:
+    that:
+      - media_jf_encoding_stat.stat.isreg | default(false)
+      - not media_jf_encoding_stat.stat.islnk | default(false)
+    fail_msg: MEDIA80_JELLYFIN_ENCODING_FILE_UNSAFE
+
+- name: Read Jellyfin encoding XML without disclosing unrelated settings
+  ansible.builtin.slurp:
+    src: /etc/jellyfin/encoding.xml
+  register: media_jf_encoding_raw
+  no_log: true
+
+- name: Recognize factory-only or already-compliant Jellyfin QSV mode
+  ansible.builtin.set_fact:
+    media_jf_factory_qsv: >-
+      {{ '<HardwareAccelerationType>none</HardwareAccelerationType>' in
+         (media_jf_encoding_raw.content | b64decode)
+         and ((media_jf_encoding_raw.content | b64decode) |
+           regex_search('(?s)<HardwareDecodingCodecs>\s*<string>h264</string>\s*<string>vc1</string>\s*</HardwareDecodingCodecs>')) is not none }}
+    media_jf_existing_qsv: >-
+      {{ '<HardwareAccelerationType>qsv</HardwareAccelerationType>' in
+         (media_jf_encoding_raw.content | b64decode)
+         and '<string>h264</string>' in (media_jf_encoding_raw.content | b64decode)
+         and '<string>hevc</string>' in (media_jf_encoding_raw.content | b64decode) }}
+  no_log: true
+
+- name: Refuse changing non-factory or deliberately disabled Jellyfin codec policy
+  ansible.builtin.assert:
+    that:
+      - media_jf_factory_qsv | bool or media_jf_existing_qsv | bool
+    fail_msg: MEDIA80_JELLYFIN_QSV_UNMANAGED_ENCODING_POLICY
+  no_log: true
+
+- name: Safely enable Intel QSV and HEVC on factory Jellyfin profile
+  when: media_jf_factory_qsv | bool
+  block:
+    - name: Refuse to stop Jellyfin while an active video transcode is running
+      ansible.builtin.command:
+        argv: [pgrep, -u, jellyfin, -x, ffmpeg]
+      register: media_jf_active_ffmpeg
+      changed_when: false
+      failed_when: media_jf_active_ffmpeg.rc != 1
+
+    - name: Stop Jellyfin only for approved factory QSV setting change
+      ansible.builtin.systemd_service:
+        name: jellyfin.service
+        state: stopped
+
+    - name: Switch only untouched factory hardware acceleration to QSV
+      ansible.builtin.replace:
+        path: /etc/jellyfin/encoding.xml
+        regexp: '(<HardwareAccelerationType>)none(</HardwareAccelerationType>)'
+        replace: '\1qsv\2'
+        backup: true
+
+    - name: Add supported HEVC decoder to factory Jellyfin hardware codecs
+      ansible.builtin.replace:
+        path: /etc/jellyfin/encoding.xml
+        regexp: '(<HardwareDecodingCodecs>\n)'
+        replace: '\1    <string>hevc</string>\n'
+        backup: true
+  always:
+    - name: Restore Jellyfin service after possible configuration change
+      ansible.builtin.systemd_service:
+        name: jellyfin.service
+        state: started
+
+- name: Read effective Jellyfin QSV configuration
+  ansible.builtin.slurp:
+    src: /etc/jellyfin/encoding.xml
+  register: media_jf_encoding_after
+  no_log: true
+
+- name: Require persistent QSV and HEVC/H264 decoder support
+  ansible.builtin.assert:
+    that:
+      - "'<HardwareAccelerationType>qsv</HardwareAccelerationType>' in (media_jf_encoding_after.content | b64decode)"
+      - "'<string>hevc</string>' in (media_jf_encoding_after.content | b64decode)"
+      - "'<string>h264</string>' in (media_jf_encoding_after.content | b64decode)"
+    fail_msg: MEDIA80_JELLYFIN_HEVC_QSV_NOT_CONVERGED
+  no_log: true

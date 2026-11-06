@@ -1,0 +1,35 @@
+---
+# Native Ansible offline regression: verify ordering, do not execute VM lifecycle.
+- name: Verify recreate and import ordering
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}"
+    vm_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-vm-apply.yml') }}"
+    zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"
+  tasks:
+    - name: Require named-pool preflight and Debian image before VM destruction
+      ansible.builtin.assert:
+        that:
+          - "'media_mode in [' in deploy"
+          - "'media_vm_action in [' in deploy"
+          - "'media_disk_action in [' in deploy"
+          - deploy.find('media30-recreate-preflight.yml') < deploy.find('media30-image-prestage.yml')
+          - deploy.find('media30-image-prestage.yml') < deploy.find('media-vm-apply.yml')
+          - "'MEDIA30_RECREATE_IMPORT_EXPECTED_POOL_MISSING' in recreate_preflight"
+          - "'cloud.debian.org' not in vm_apply"
+          - "'media30_image_sha512_preflight' in vm_apply"
+      vars:
+        recreate_preflight: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-recreate-preflight.yml') }}"
+
+    - name: Require independent import and erase actions for a single SATA disk
+      ansible.builtin.assert:
+        that:
+          - "'MEDIA_SATA_DISK_COUNT_MUST_EQUAL_ONE' in zfs_apply"
+          - "'MEDIA_SATA_DISK_IS_SYSTEM_DISK' in zfs_apply"
+          - zfs_apply is search('media_raw_disk_action.*import')
+          - zfs_apply is search('media_raw_disk_action.*erase')
+          - "'zpool, destroy' in zfs_apply"
+          - "'media_vm.storage.import_pool_guid' not in zfs_apply"
+          - "'media30-erase-guest-identity.yml' not in zfs_apply"

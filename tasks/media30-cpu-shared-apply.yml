@@ -1,0 +1,90 @@
+---
+# One shared CPU quota for Plex + Jellyfin; all unrelated VM services unaffected.
+# This file is imported exclusively by the blocked deployment path.
+- name: Require the validated shared CPU budget from task 30
+  ansible.builtin.assert:
+    that:
+      - media30_transcode_cpu_percent | int >= 25
+      - media30_transcode_cpu_percent | int <= media_spec.resources.cores | int * 100
+    fail_msg: MEDIA30_TRANSCODER_CPU_SELECTION_INVALID
+
+- name: Configure the shared Plex and Jellyfin systemd CPU slice
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dhtranscode.slice
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses shared Plex and Jellyfin CPU budget
+
+      [Slice]
+      CPUAccounting=yes
+      CPUQuota={{ media30_transcode_cpu_percent | int }}%
+  register: media30_cpu_slice_file
+
+- name: Create player service override directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: [plexmediaserver, jellyfin]
+
+- name: Place both players under one shared CPU quota
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.service.d/40-dh-cpu-budget.conf"
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      Slice=dhtranscode.slice
+  loop: [plexmediaserver, jellyfin]
+  register: media30_cpu_player_overrides
+
+- name: Reload systemd only after CPU budget changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: >-
+    media30_cpu_slice_file.changed
+    or (media30_cpu_player_overrides.results | selectattr('changed') | list | length > 0)
+
+- name: Restart player only if the shared budget or its membership changed
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}.service"
+    state: restarted
+  loop: "{{ media30_cpu_player_overrides.results }}"
+  when: media30_cpu_slice_file.changed or item.changed
+
+- name: Read effective CPU slice assignment of both media services
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ item }}.service", --property=Slice, --value]
+  loop: [plexmediaserver, jellyfin]
+  register: media30_cpu_player_slices
+  changed_when: false
+
+- name: Confirm both players use exactly the same budget
+  ansible.builtin.assert:
+    that:
+      - (media30_cpu_player_slices.results | map(attribute='stdout') | unique | list) == ['dhtranscode.slice']
+    fail_msg: MEDIA30_CPU_SHARED_SLICE_NOT_EFFECTIVE
+
+- name: Inspect actual kernel cgroup CPU quota
+  ansible.builtin.command:
+    argv: [cat, /sys/fs/cgroup/dhtranscode.slice/cpu.max]
+  register: media30_cpu_cgroup_max
+  changed_when: false
+
+- name: Confirm kernel enforces the selected percentage on the shared slice
+  ansible.builtin.assert:
+    that:
+      - media30_cpu_cgroup_max.stdout.split() | length == 2
+      - media30_cpu_cgroup_max.stdout.split()[0] is match('^[0-9]+$')
+      - media30_cpu_cgroup_max.stdout.split()[1] is match('^[0-9]+$')
+      - media30_cpu_cgroup_max.stdout.split()[1] | int > 0
+      - >-
+        (media30_cpu_cgroup_max.stdout.split()[0] | int * 100)
+        == (media30_transcode_cpu_percent | int * (media30_cpu_cgroup_max.stdout.split()[1] | int))
+    fail_msg: MEDIA30_CPU_SHARED_CGROUP_LIMIT_NOT_APPLIED

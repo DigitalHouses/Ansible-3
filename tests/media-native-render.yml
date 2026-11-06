@@ -1,0 +1,135 @@
+---
+# Read-only Ansible fixture. All rendered output stays in an isolated /tmp directory.
+- name: Media 80 native app templates, offline acceptance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vars/media-arr-releases.yml
+    - ../vars/media-app-artifacts.yml
+  vars:
+    media_site: {owner_slug: serzhan}
+    media_arr: {slug: radarr, name: Radarr, port: 7878}
+    media_arr_new_api_key:
+      stdout: abcdef1234567890abcdef1234567890abcdef12
+    media_filestash_secret:
+      stdout: abcdef1234567890
+    media_sambee_bind: 127.0.0.1
+    media_mqtt_username: fixture
+    media_mqtt_password: fake-fixture-only
+    media_spec:
+      name: mediaserver-serzhan
+      vmid: 2232
+      network: {ipv4: 192.168.11.232/24}
+      storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
+      downloads: {path: /serzhan-pool/media/downloads}
+      plex_agent:
+        mqtt: {host: 127.0.0.1, port: 1883}
+      discovery: {workgroup: WORKGROUP, netbios_name: server-serzhan}
+      file_access:
+        accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
+      applications:
+        jellyfin: true
+        radarr: true
+        sonarr: true
+        prowlarr: true
+        qbittorrent: true
+        filestash: true
+        sambee: true
+      portal: {show_admin_links: false, admin_links: []}
+    media_vm: "{{ media_spec }}"
+  tasks:
+    - name: Require one shared ZFS dataset for downloads and media libraries
+      ansible.builtin.assert:
+        that:
+          - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
+          - media_spec.downloads.path != '/' ~ media_spec.storage.pool_name ~ '/downloads'
+        fail_msg: MEDIA30_DOWNLOADS_MUST_STAY_INSIDE_MEDIA_DATASET
+
+    - name: Verify native release checksum shapes
+      ansible.builtin.assert:
+        that:
+          - item.source is match('^https://github[.]com/')
+          - item.sha256 is match('^[0-9a-f]{64}$')
+      loop: "{{ media_arr_releases }}"
+      loop_control:
+        label: "{{ item.slug }}"
+
+    - name: Create disposable render directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: media80-render-
+      register: media_test_dir
+
+    - name: Verify templates without provisioning any real service
+      block:
+        - name: Render firstboot and service templates
+          ansible.builtin.template:
+            src: "{{ playbook_dir | dirname }}/templates/{{ item.name }}"
+            dest: "{{ media_test_dir.path }}/{{ item.name }}"
+            mode: '0600'
+          loop:
+            - {name: media-arr-firstboot.xml.j2, slug: radarr, port: 7878}
+            - {name: media-arr.service.j2, slug: radarr, port: 7878}
+            - {name: media-qbittorrent-firstboot.conf.j2, slug: qbittorrent, port: 8080}
+            - {name: media-qbittorrent.service.j2, slug: qbittorrent, port: 8080}
+            - {name: media-filestash-firstboot.json.j2, slug: filestash, port: 8334}
+            - {name: media-filestash.service.j2, slug: filestash, port: 8334}
+            - {name: media-sambee-compose.yml.j2, slug: sambee, port: 8000}
+            - {name: media-sambee-config.toml.j2, slug: sambee, port: 8000}
+            - {name: media-portal.html.j2, slug: portal, port: 80}
+            - {name: media-smb.conf.j2, slug: samba, port: 445}
+            - {name: digitalhouses-plex-agent.conf.j2, slug: plex-agent, port: 1883}
+
+        - name: Inspect rendered native Filestash firstboot JSON
+          ansible.builtin.set_fact:
+            media_filestash_fixture: >-
+              {{ lookup('ansible.builtin.file',
+                 media_test_dir.path ~ '/media-filestash-firstboot.json.j2') | from_json }}
+
+        - name: Require loopback-only firstboot and expected media links
+          ansible.builtin.assert:
+            that:
+              - "'<BindAddress>127.0.0.1</BindAddress>' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-arr-firstboot.xml.j2')"
+              - "'WebUI' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
+              - "'127.0.0.1' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-qbittorrent-firstboot.conf.j2')"
+              - "'[DigitalHouses]' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-smb.conf.j2')"
+              - >-
+                'netbios name = server-serzhan' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-smb.conf.j2')
+              - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - >-
+                'topic_prefix = DigitalHouses/Global/digitalhouses_plex_agent'
+                in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
+              - >-
+                'username = fixture' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
+              - >-
+                'password = fake-fixture-only' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
+              - "'127.0.0.1:8000:8000' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-compose.yml.j2')"
+              - media_sambee_image is match('^ghcr\\.io/helgeklein/sambee:stable@sha256:[a-f0-9]{64}$')
+              - >-
+                ('image: ' ~ media_sambee_image) in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-sambee-compose.yml.j2')
+              - "'username = \"serzhan\"' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-sambee-config.toml.j2')"
+              - media_filestash_fixture.general.secret_key == 'abcdef1234567890'
+              - >-
+                media_filestash_fixture.connections
+                == [{'label': 'DigitalHouses SMB', 'type': 'samba'}]
+              - >-
+                (media_filestash_fixture.middleware.identity_provider.params | from_json)
+                == {'strategy': 'username_and_password'}
+              - >-
+                (media_filestash_fixture.middleware.attribute_mapping.params | from_json)
+                ['DigitalHouses SMB'].host == '127.0.0.1'
+              - >-
+                (media_filestash_fixture.middleware.attribute_mapping.params | from_json)
+                ['DigitalHouses SMB'].username == '{' ~ '{ .user }}'
+      always:
+        - name: Remove disposable test files
+          ansible.builtin.file:
+            path: "{{ media_test_dir.path }}"
+            state: absent

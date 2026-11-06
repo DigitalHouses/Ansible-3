@@ -1,0 +1,56 @@
+---
+# Prestage and checksum-verify Debian before any VM deletion or disk operation.
+# This is native Ansible; failures leave the existing VM untouched.
+- name: Ensure media image cache exists before VM lifecycle
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Fetch official Debian 13 image checksum before destructive VM operations
+  ansible.builtin.get_url:
+    url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
+    dest: /var/cache/digitalhouses/media/SHA512SUMS
+    mode: '0644'
+    force: true
+
+- name: Read Debian image checksum manifest
+  ansible.builtin.slurp:
+    src: /var/cache/digitalhouses/media/SHA512SUMS
+  register: media30_image_checksums_preflight
+
+- name: Extract exact SHA512 for Debian 13 generic cloud image
+  ansible.builtin.set_fact:
+    media30_image_sha512_preflight: >-
+      {{ ((media30_image_checksums_preflight.content | b64decode
+           | regex_findall('(?m)^([a-f0-9]{128})\s+\*?debian-13-generic-amd64\.qcow2\s*$'))
+          | first | default('')) }}
+
+- name: Reject missing or malformed image checksum before touching a VM
+  ansible.builtin.assert:
+    that:
+      - media30_image_sha512_preflight is match('^[a-f0-9]{128}$')
+    fail_msg: MEDIA30_RECREATE_DEBIAN_CHECKSUM_UNAVAILABLE
+
+- name: Download and verify exact Debian cloud image before VM lifecycle
+  ansible.builtin.get_url:
+    url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+    dest: /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2
+    checksum: "sha512:{{ media30_image_sha512_preflight }}"
+    mode: '0644'
+
+- name: Require a verified Debian image exists on PVE prior to VM removal
+  ansible.builtin.stat:
+    path: /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2
+    follow: false
+  register: media30_verified_debian_image
+
+- name: Reject absent, symlinked or empty staged image
+  ansible.builtin.assert:
+    that:
+      - media30_verified_debian_image.stat.isreg | default(false)
+      - not (media30_verified_debian_image.stat.islnk | default(false))
+      - media30_verified_debian_image.stat.size | default(0) | int > 0
+    fail_msg: MEDIA30_RECREATE_VERIFIED_DEBIAN_IMAGE_MISSING

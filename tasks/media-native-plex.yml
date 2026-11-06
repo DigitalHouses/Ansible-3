@@ -1,0 +1,68 @@
+---
+# Native Plex package. Claiming the Plex account remains a separate, protected
+# operation: a local install must never pretend that a library is commissioned.
+- name: Prepare Plex APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download upstream Plex package signing key
+  ansible.builtin.get_url:
+    url: https://downloads.plex.tv/plex-keys/PlexSign.v2.key
+    dest: /etc/apt/keyrings/plex-signing.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install official signed Plex package source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/plex.list
+    content: "deb [signed-by=/etc/apt/keyrings/plex-signing.asc] https://repo.plex.tv/deb/ public main\n"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install native Plex server
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    update_cache: true
+
+- name: Grant Plex group access to the ZFS library and Intel render device
+  ansible.builtin.user:
+    name: plex
+    groups: [media_group, video, render]
+    append: true
+  register: media_plex_groups
+
+- name: Start authenticated Plex native service
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    state: "{{ 'restarted' if media_plex_groups.changed else 'started' }}"
+    enabled: true
+
+- name: Verify local Plex server identity API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:32400/identity
+    status_code: 200
+    timeout: 15
+    return_content: false
+  register: media_plex_status
+  retries: 15
+  delay: 4
+  until: media_plex_status.status == 200
+  changed_when: false
+
+- name: Verify Plex account can traverse declared media library
+  ansible.builtin.command:
+    argv: [runuser, -u, plex, --, test, -r, "/{{ media_spec.storage.media_dataset }}/movies"]
+  changed_when: false
+
+- name: Configure native Plex automatic scanning and declared libraries
+  ansible.builtin.include_tasks: media-plex-library-scan.yml
+  vars:
+    media_plex_prefs: >-
+      /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml
+    media_plex_db: >-
+      /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db

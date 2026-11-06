@@ -1,0 +1,300 @@
+---
+# qBittorrent firstboot is loopback-only, then the native WebAPI installs
+# the existing owner password before enabling the LAN listener.
+- name: Require shared-ZFS download contract
+  ansible.builtin.assert:
+    that:
+      - media_spec.downloads.mode == 'shared-zfs'
+      - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
+    fail_msg: MEDIA80_DOWNLOAD_ROOT_MISMATCH
+
+- name: Inspect shared-media folders before any qBittorrent changes
+  ansible.builtin.stat:
+    path: "/{{ media_spec.storage.media_dataset }}/{{ item }}"
+    follow: false
+  loop: [movies, tvshows, downloads]
+  register: media_qbt_shared_roots
+
+- name: Refuse missing folders or symlinks in media library and downloads
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+      - not (item.stat.islnk | default(false))
+    fail_msg: MEDIA80_QBT_SHARED_MEDIA_ROOT_UNSAFE
+  loop: "{{ media_qbt_shared_roots.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read ZFS backing for downloads and both import destinations
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - SOURCE,FSTYPE
+      - -T
+      - "/{{ media_spec.storage.media_dataset }}/{{ item }}"
+  loop: [movies, tvshows, downloads]
+  register: media_qbt_shared_mounts
+  changed_when: false
+
+- name: Require one common media dataset for hardlink-safe imports
+  ansible.builtin.assert:
+    that:
+      - item.stdout.split() | length == 2
+      - item.stdout.split()[0] == media_spec.storage.media_dataset
+      - item.stdout.split()[1] == 'zfs'
+    fail_msg: MEDIA80_QBT_IMPORT_PATH_CROSSES_ZFS_DATASETS
+  loop: "{{ media_qbt_shared_mounts.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Install Debian native qBittorrent headless package
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: present
+
+- name: Create dedicated qBittorrent service user
+  ansible.builtin.user:
+    name: qbittorrent
+    group: media_group
+    groups: media_group
+    home: /var/lib/qbittorrent
+    create_home: true
+    shell: /usr/sbin/nologin
+    system: true
+    state: present
+
+- name: Create protected download paths on managed media ZFS
+  ansible.builtin.file:
+    path: "{{ media_spec.downloads.path }}/{{ item }}"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2770'
+  loop: [incomplete, complete, complete/movies, complete/series]
+
+- name: Create qBittorrent native preferences directory
+  ansible.builtin.file:
+    path: /var/lib/qbittorrent/.config/qBittorrent
+    owner: qbittorrent
+    group: media_group
+    state: directory
+    mode: '0750'
+
+- name: Inspect existing qBittorrent configuration without following symlinks
+  ansible.builtin.stat:
+    path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    follow: false
+  register: media_qbt_initial_config
+
+- name: Refuse unexpected qBittorrent configuration identities
+  ansible.builtin.assert:
+    that:
+      - not media_qbt_initial_config.stat.exists or media_qbt_initial_config.stat.isreg
+      - not (media_qbt_initial_config.stat.islnk | default(false))
+      - not media_qbt_initial_config.stat.exists or media_qbt_initial_config.stat.pw_name == 'qbittorrent'
+    fail_msg: MEDIA80_QBT_CONFIG_UNSAFE
+
+- name: Seed local-only qBittorrent defaults on the first installation
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-qbittorrent-firstboot.conf.j2"
+    dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+    force: false
+  when: not media_qbt_initial_config.stat.exists
+
+- name: Read qBittorrent native firstboot listener configuration
+  ansible.builtin.slurp:
+    src: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+  register: media_qbt_ini_raw
+  no_log: true
+
+- name: Require unclaimed qBittorrent instance to be loopback-only
+  ansible.builtin.assert:
+    that:
+      - >-
+        not media_qbt_initial_config.stat.exists
+        or ('WebUI\\Address=127.0.0.1' in (media_qbt_ini_raw.content | b64decode))
+        or ('WebUI\\Username=' ~ media_site.owner_slug) in (media_qbt_ini_raw.content | b64decode)
+    fail_msg: MEDIA80_QBT_UNCLAIMED_LAN_EXPOSURE
+  no_log: true
+
+- name: Render qBittorrent native systemd service
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-qbittorrent.service.j2"
+    dest: /etc/systemd/system/qbittorrent.service
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    media_vm: "{{ media_spec }}"
+  register: media_qbt_service_unit
+
+- name: Start qBittorrent native WebUI
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if media_qbt_service_unit.changed else 'started' }}"
+
+- name: Wait for loopback qBittorrent WebAPI
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8080
+    timeout: 120
+
+- name: Query official qBittorrent preferences on loopback
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_qbt_initial_prefs
+  changed_when: false
+  no_log: true
+
+- name: Refuse qBittorrent LAN authentication bypass and foreign owner
+  ansible.builtin.assert:
+    that:
+      - media_qbt_initial_prefs.json.bypass_local_auth | bool
+      - not media_qbt_initial_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+      - >-
+        (not media_qbt_initial_config.stat.exists
+          and media_qbt_initial_prefs.json.web_ui_address == '127.0.0.1')
+        or media_qbt_initial_prefs.json.web_ui_username == media_site.owner_slug
+    fail_msg: MEDIA80_QBT_PREEXISTING_AUTH_UNMANAGED
+  no_log: true
+
+- name: Commission owner login with the native qBittorrent WebAPI on firstboot
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/setPreferences
+    method: POST
+    body_format: form-urlencoded
+    body:
+      json: >-
+        {{ {
+          'web_ui_username': media_site.owner_slug,
+          'web_ui_password': media_owner_password,
+          'bypass_local_auth': true,
+          'bypass_auth_subnet_whitelist_enabled': false,
+          'bypass_auth_subnet_whitelist': ''
+        } | to_json }}
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    use_proxy: false
+  when: not media_qbt_initial_config.stat.exists
+  no_log: true
+
+- name: Verify qBittorrent owner password through its native login endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/auth/login
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_qbt_owner_login
+  retries: 8
+  delay: 3
+  until: media_qbt_owner_login.status == 200 and media_qbt_owner_login.content | trim == 'Ok.'
+  changed_when: false
+  no_log: true
+
+- name: Require verified qBittorrent native owner password
+  ansible.builtin.assert:
+    that: media_qbt_owner_login.content | trim == 'Ok.'
+    fail_msg: MEDIA80_QBT_OWNER_PASSWORD_NOT_VERIFIED
+  no_log: true
+
+- name: Read qBittorrent preferences after owner commissioning
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_qbt_auth_prefs
+  changed_when: false
+  no_log: true
+
+- name: Require authenticated LAN policy before enabling qBittorrent listener
+  ansible.builtin.assert:
+    that:
+      - media_qbt_auth_prefs.json.web_ui_username == media_site.owner_slug
+      - media_qbt_auth_prefs.json.bypass_local_auth | bool
+      - not media_qbt_auth_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+    fail_msg: MEDIA80_QBT_LAN_AUTH_NOT_READY
+  no_log: true
+
+- name: Publish qBittorrent on LAN only after verified owner credentials
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/setPreferences
+    method: POST
+    body_format: form-urlencoded
+    body:
+      json: "{{ {'web_ui_address': '*'} | to_json }}"
+    headers:
+      Origin: http://127.0.0.1:8080
+      Referer: http://127.0.0.1:8080/
+    status_code: 200
+    use_proxy: false
+  when: media_qbt_auth_prefs.json.web_ui_address != '*'
+  no_log: true
+
+- name: Reject anonymous LAN access to qBittorrent API
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/api/v2/app/preferences"
+    headers:
+      Origin: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080"
+      Referer: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/"
+    status_code: [401, 403]
+    use_proxy: false
+  register: media_qbt_lan_anonymous
+  retries: 15
+  delay: 3
+  until: media_qbt_lan_anonymous.status in [401, 403]
+  changed_when: false
+  no_log: true
+
+- name: Authenticate the actual owner over the non-loopback LAN WebUI
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/api/v2/auth/login"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ media_site.owner_slug }}"
+      password: "{{ media_owner_password }}"
+    headers:
+      Origin: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080"
+      Referer: "http://{{ media_spec.network.ipv4.split('/')[0] }}:8080/"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_qbt_lan_owner_login
+  retries: 8
+  delay: 3
+  until: media_qbt_lan_owner_login.status == 200 and media_qbt_lan_owner_login.content | trim == 'Ok.'
+  changed_when: false
+  no_log: true
+
+- name: Require real qBittorrent LAN owner login
+  ansible.builtin.assert:
+    that: media_qbt_lan_owner_login.content | trim == 'Ok.'
+    fail_msg: MEDIA80_QBITTORRENT_LAN_OWNER_LOGIN_FAILED
+  no_log: true

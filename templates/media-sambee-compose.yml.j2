@@ -1,0 +1,9 @@
+services:
+  sambee:
+    image: {{ media_sambee_image }}
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./config.toml:/app/config.toml:ro
+    ports:
+      - "{{ media_sambee_bind }}:8000:8000"

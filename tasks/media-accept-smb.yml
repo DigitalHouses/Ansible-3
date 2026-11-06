@@ -1,0 +1,91 @@
+---
+# Built-in task 81: owner/admin Samba authentication with no password in argv.
+- name: Read existing ZFS administrator credential under native Ansible no_log
+  ansible.builtin.slurp:
+    src: "/{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_site.owner_slug }}_admin.txt"
+  register: media80_accept_admin_record
+  no_log: true
+
+- name: Require valid administrator credential record
+  ansible.builtin.assert:
+    that:
+      - (media80_accept_admin_record.content | b64decode).splitlines() | length == 2
+      - (media80_accept_admin_record.content | b64decode).splitlines()[0] == 'username=' ~ media_site.owner_slug ~ '_admin'
+      - (media80_accept_admin_record.content | b64decode).splitlines()[1] is match('^password=[A-Za-z0-9]{6,8}$')
+    fail_msg: MEDIA80_ACCEPT_SMB_ADMIN_RECORD_INVALID
+  no_log: true
+
+- name: Check real owner and administrator Samba logins without exposing secrets
+  block:
+    - name: Allocate root-only owner auth file in volatile guest storage
+      ansible.builtin.tempfile:
+        state: file
+        path: /run
+        prefix: media80-owner-
+      register: media80_accept_owner_auth
+      no_log: true
+
+    - name: Allocate root-only admin auth file in volatile guest storage
+      ansible.builtin.tempfile:
+        state: file
+        path: /run
+        prefix: media80-admin-
+      register: media80_accept_admin_auth
+      no_log: true
+
+    - name: Write temporary owner authentication only under no_log
+      ansible.builtin.copy:
+        dest: "{{ media80_accept_owner_auth.path }}"
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          username = {{ media_site.owner_slug }}
+          password = {{ media_owner_password }}
+      no_log: true
+
+    - name: Write temporary admin authentication only under no_log
+      ansible.builtin.copy:
+        dest: "{{ media80_accept_admin_auth.path }}"
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          username = {{ media_site.owner_slug }}_admin
+          password = {{ (media80_accept_admin_record.content | b64decode).splitlines()[1][9:] }}
+      no_log: true
+
+    - name: Verify a real owner SMB login to approved non-admin shares
+      ansible.builtin.command:
+        argv:
+          - smbclient
+          - -A
+          - "{{ media80_accept_owner_auth.path }}"
+          - "//127.0.0.1/{{ item }}"
+          - -c
+          - ls
+      loop: [Media, Documents]
+      changed_when: false
+      no_log: true
+
+    - name: Verify a real admin SMB login to the protected shares
+      ansible.builtin.command:
+        argv:
+          - smbclient
+          - -A
+          - "{{ media80_accept_admin_auth.path }}"
+          - "//127.0.0.1/{{ item }}"
+          - -c
+          - ls
+      loop: [Backups, DigitalHouses]
+      changed_when: false
+      no_log: true
+  always:
+    - name: Immediately remove temporary owner and admin SMB credential files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ media80_accept_owner_auth.path | default('/run/media80-owner-unused') }}"
+        - "{{ media80_accept_admin_auth.path | default('/run/media80-admin-unused') }}"
+      no_log: true

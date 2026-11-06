@@ -1,0 +1,4 @@
+---
+# Verified GHCR OCI index digest for helgeklein/sambee:stable on 2026-11-06.
+# Deploy by digest so later tag moves cannot silently replace the image.
+media_sambee_image: ghcr.io/helgeklein/sambee:stable@sha256:f1d1312ccefc2307e9b3c5962c740647a011050c91b32bb57a6884a34864075c

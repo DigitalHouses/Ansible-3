@@ -122,6 +122,12 @@ CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/ansible-3 rev-parse HEAD)"
 [[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]] || { echo 'BLOCKED: invalid Git SHA' >&2; exit 2; }
 pct exec "$CTID" -- git -C /opt/ansible-3 checkout -q --detach "$CODE_RELEASE"
 
+# Install pinned native Ansible collections in a shared runner-readable path.
+# Required by the media task's upstream community.general.xml module.
+pct exec "$CTID" -- /opt/ansible/venv/bin/ansible-galaxy collection install \
+  -r /opt/ansible-3/bootstrap/collections.yml \
+  -p /usr/share/ansible/collections
+
 # Only a public trust certificate is copied; no private PVE key.
 pct exec "$CTID" -- install -d -m 0755 /etc/digitalhouses
 pct push "$CTID" "$PVE_ROOT_CA" /etc/digitalhouses/pve-root-ca.pem \

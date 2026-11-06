@@ -1,0 +1,218 @@
+---
+# Exactly one enabled Servarr application. Credentials and API keys never log.
+- name: Create dedicated Servarr service identity
+  ansible.builtin.user:
+    name: "{{ media_arr.slug }}"
+    group: media_group
+    system: true
+    home: "/var/lib/{{ media_arr.slug }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Create persistent Servarr application state
+  ansible.builtin.file:
+    path: "/var/lib/{{ media_arr.slug }}"
+    state: directory
+    owner: "{{ media_arr.slug }}"
+    group: media_group
+    mode: '0770'
+
+- name: Download checksum-pinned native Servarr release
+  ansible.builtin.get_url:
+    url: "{{ media_arr.source }}"
+    dest: "/var/cache/digitalhouses/media/{{ media_arr.archive }}"
+    checksum: "sha256:{{ media_arr.sha256 }}"
+    mode: '0644'
+    timeout: 120
+
+- name: Extract the pinned Servarr build once
+  ansible.builtin.unarchive:
+    src: "/var/cache/digitalhouses/media/{{ media_arr.archive }}"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/{{ media_arr.name }}/{{ media_arr.name }}"
+    owner: "{{ media_arr.slug }}"
+    group: root
+
+- name: Scope Servarr executable updates to their own installation
+  ansible.builtin.file:
+    path: "/opt/{{ media_arr.name }}"
+    state: directory
+    owner: "{{ media_arr.slug }}"
+    group: root
+    recurse: true
+
+- name: Inspect existing Servarr configuration before first boot
+  ansible.builtin.stat:
+    path: "/var/lib/{{ media_arr.slug }}/config.xml"
+    follow: false
+  register: media_arr_initial_config
+
+- name: Protect existing Servarr configuration identity
+  ansible.builtin.assert:
+    that:
+      - not media_arr_initial_config.stat.exists or media_arr_initial_config.stat.isreg
+      - not (media_arr_initial_config.stat.islnk | default(false))
+      - not media_arr_initial_config.stat.exists or media_arr_initial_config.stat.pw_name == media_arr.slug
+    fail_msg: MEDIA80_SERVARR_CONFIG_UNSAFE
+
+- name: Generate a native application API key for first boot
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '20']
+  register: media_arr_new_api_key
+  changed_when: false
+  when: not media_arr_initial_config.stat.exists
+  no_log: true
+
+- name: Seed a loopback-only Servarr firstboot configuration
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-arr-firstboot.xml.j2"
+    dest: "/var/lib/{{ media_arr.slug }}/config.xml"
+    owner: "{{ media_arr.slug }}"
+    group: media_group
+    mode: '0600'
+    force: false
+  when: not media_arr_initial_config.stat.exists
+  no_log: true
+
+- name: Read locally managed Servarr configuration
+  ansible.builtin.slurp:
+    src: "/var/lib/{{ media_arr.slug }}/config.xml"
+  register: media_arr_xml_raw
+  no_log: true
+
+- name: Extract exactly one Servarr API identity
+  ansible.builtin.set_fact:
+    media_arr_api_keys: >-
+      {{ (media_arr_xml_raw.content | b64decode)
+         | regex_findall('<ApiKey>([0-9a-fA-F]{24,})</ApiKey>') }}
+    media_arr_config_text: "{{ media_arr_xml_raw.content | b64decode }}"
+  no_log: true
+
+- name: Require managed authentication or private loopback before first API setup
+  ansible.builtin.assert:
+    that:
+      - media_arr_api_keys | length == 1
+      - >-
+        '<AuthenticationMethod>Forms</AuthenticationMethod>' in media_arr_config_text
+        or '<BindAddress>127.0.0.1</BindAddress>' in media_arr_config_text
+    fail_msg: MEDIA80_SERVARR_UNCLAIMED_LAN_EXPOSURE
+  no_log: true
+
+- name: Install native Servarr systemd unit
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-arr.service.j2"
+    dest: "/etc/systemd/system/{{ media_arr.slug }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    item: "{{ media_arr }}"
+  register: media_arr_unit
+
+- name: Start native Servarr service
+  ansible.builtin.systemd_service:
+    name: "{{ media_arr.slug }}.service"
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if media_arr_unit.changed else 'started' }}"
+
+- name: Wait for the local Servarr API
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ media_arr.port }}"
+    timeout: 150
+
+- name: Read official Servarr host configuration using native API key
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_arr.port }}/api/{{ media_arr.version }}/config/host"
+    headers:
+      X-Api-Key: "{{ media_arr_api_keys[0] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_arr_host
+  changed_when: false
+  no_log: true
+
+- name: Refuse to take ownership of another Servarr login
+  ansible.builtin.assert:
+    that:
+      - media_arr_host.json is mapping
+      - media_arr_host.json.id | int >= 1
+      - >-
+        (media_arr_host.json.authenticationMethod | default('') | lower == 'forms'
+         and media_arr_host.json.username | default('') == media_site.owner_slug)
+        or
+        (media_arr_host.json.authenticationMethod | default('') | lower in ['none', '0', '']
+         and media_arr_host.json.username | default('') == ''
+         and media_arr_host.json.bindAddress | default('') == '127.0.0.1')
+    fail_msg: MEDIA80_SERVARR_LOGIN_FOREIGN_OR_UNSAFE
+  no_log: true
+
+- name: Commission Forms credentials through native Servarr host API only once
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_arr.port }}/api/{{ media_arr.version }}/config/host/{{ media_arr_host.json.id }}"
+    method: PUT
+    headers:
+      X-Api-Key: "{{ media_arr_api_keys[0] }}"
+    body_format: json
+    body: >-
+      {{ media_arr_host.json | combine({
+        'authenticationMethod': 'forms',
+        'authenticationRequired': 'enabled',
+        'username': media_site.owner_slug,
+        'password': media_owner_password,
+        'passwordConfirmation': media_owner_password
+      }) }}
+    status_code: [200, 202]
+    use_proxy: false
+    timeout: 30
+  when: media_arr_host.json.authenticationMethod | default('') | lower != 'forms'
+  no_log: true
+
+- name: Re-read effective Servarr authentication
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_arr.port }}/api/{{ media_arr.version }}/config/host"
+    headers:
+      X-Api-Key: "{{ media_arr_api_keys[0] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_arr_auth_after
+  retries: 15
+  delay: 3
+  until: media_arr_auth_after.status == 200
+  changed_when: false
+  no_log: true
+
+- name: Require Forms login and enabled authentication before LAN binding
+  ansible.builtin.assert:
+    that:
+      - media_arr_auth_after.json.authenticationMethod | lower == 'forms'
+      - media_arr_auth_after.json.authenticationRequired | lower == 'enabled'
+      - media_arr_auth_after.json.username == media_site.owner_slug
+    fail_msg: MEDIA80_SERVARR_FORMS_AUTH_NOT_READY
+  no_log: true
+
+- name: Enable Servarr LAN listener only after verified Forms authentication
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_arr.port }}/api/{{ media_arr.version }}/config/host/{{ media_arr_auth_after.json.id }}"
+    method: PUT
+    headers:
+      X-Api-Key: "{{ media_arr_api_keys[0] }}"
+    body_format: json
+    body: "{{ media_arr_auth_after.json | combine({'bindAddress': '*'}) }}"
+    status_code: [200, 202]
+    use_proxy: false
+    timeout: 30
+  when: media_arr_auth_after.json.bindAddress != '*'
+  no_log: true
+
+- name: Verify Servarr service is active after authentication
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ media_arr.slug }}.service"]
+  register: media_arr_active
+  changed_when: false
+  failed_when: media_arr_active.stdout != 'active'

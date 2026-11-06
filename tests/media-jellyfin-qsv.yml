@@ -1,0 +1,85 @@
+---
+# Native Ansible-only fixture for Jellyfin factory QSV/HEVC conversion.
+- name: Verify factory QSV changes are valid and repeatable
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Create an isolated temporary encoding fixture
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: media80-jellyfin-qsv-
+      register: media_qsv_fixture
+
+    - name: Exercise the exact native Jellyfin XML replacement logic
+      block:
+        - name: Start with a representative Jellyfin factory profile
+          ansible.builtin.copy:
+            dest: "{{ media_qsv_fixture.path }}/encoding.xml"
+            mode: '0600'
+            content: |
+              <?xml version="1.0" encoding="utf-8"?>
+              <EncodingOptions>
+                <HardwareAccelerationType>none</HardwareAccelerationType>
+                <HardwareDecodingCodecs>
+                  <string>h264</string>
+                  <string>vc1</string>
+                </HardwareDecodingCodecs>
+                <TranscodingThreadCount>-1</TranscodingThreadCount>
+              </EncodingOptions>
+
+        - name: Select only the untouched native factory profile
+          ansible.builtin.slurp:
+            src: "{{ media_qsv_fixture.path }}/encoding.xml"
+          register: media_qsv_fixture_before
+
+        - name: Require exact factory profile and its unrelated preferences
+          ansible.builtin.assert:
+            that:
+              - >-
+                ((media_qsv_fixture_before.content | b64decode) |
+                regex_search('(?s)<HardwareDecodingCodecs>\s*<string>h264</string>\s*<string>vc1</string>\s*</HardwareDecodingCodecs>')) is not none
+              - "'<TranscodingThreadCount>-1</TranscodingThreadCount>' in (media_qsv_fixture_before.content | b64decode)"
+
+        - name: Apply native Ansible replacement for QSV
+          ansible.builtin.replace:
+            path: "{{ media_qsv_fixture.path }}/encoding.xml"
+            regexp: '(<HardwareAccelerationType>)none(</HardwareAccelerationType>)'
+            replace: '\1qsv\2'
+          register: media_qsv_fixture_switch
+
+        - name: Add the supported HEVC profile exactly once
+          ansible.builtin.replace:
+            path: "{{ media_qsv_fixture.path }}/encoding.xml"
+            regexp: '(<HardwareDecodingCodecs>\n)'
+            replace: '\1    <string>hevc</string>\n'
+          register: media_qsv_fixture_hevc
+
+        - name: Re-run the QSV replacement without a second change
+          ansible.builtin.replace:
+            path: "{{ media_qsv_fixture.path }}/encoding.xml"
+            regexp: '(<HardwareAccelerationType>)none(</HardwareAccelerationType>)'
+            replace: '\1qsv\2'
+          register: media_qsv_fixture_switch_again
+
+        - name: Check the final XML and preserved unrelated attributes
+          ansible.builtin.slurp:
+            src: "{{ media_qsv_fixture.path }}/encoding.xml"
+          register: media_qsv_fixture_after
+
+        - name: Require idempotence and valid final hardware codec policy
+          ansible.builtin.assert:
+            that:
+              - media_qsv_fixture_switch.changed
+              - media_qsv_fixture_hevc.changed
+              - not media_qsv_fixture_switch_again.changed
+              - "'<HardwareAccelerationType>qsv</HardwareAccelerationType>' in (media_qsv_fixture_after.content | b64decode)"
+              - "'<string>hevc</string>' in (media_qsv_fixture_after.content | b64decode)"
+              - "'<string>h264</string>' in (media_qsv_fixture_after.content | b64decode)"
+              - "'<string>vc1</string>' in (media_qsv_fixture_after.content | b64decode)"
+              - "'<TranscodingThreadCount>-1</TranscodingThreadCount>' in (media_qsv_fixture_after.content | b64decode)"
+      always:
+        - name: Remove only the temporary factory profile fixture
+          ansible.builtin.file:
+            path: "{{ media_qsv_fixture.path }}"
+            state: absent
