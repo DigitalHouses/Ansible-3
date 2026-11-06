@@ -6,7 +6,7 @@
     that:
       - sem_cf_token | length > 0
       - dev_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-      - sem_cf_hostname == dev_site_id ~ '-semaphore.digitalhouses.vip'
+      - sem_cf_hostname == dev_site_id ~ '-pve-semaphore.digitalhouses.vip'
     fail_msg: "Task 08: configure Cloudflare credential in task 05 before publishing Semaphore"
   no_log: true
 
@@ -241,6 +241,34 @@
             caPool: /etc/semaphore/tls.crt
             noTLSVerify: false
         - service: http_status:404
+  when: sem_cf_action == 'apply'
+
+- name: Migrate legacy Semaphore public hostname with verified Cloudflare Access
+  ansible.builtin.include_tasks: semaphore-cloudflare-hostname-migration.yml
+  when: sem_cf_action == 'apply'
+
+- name: Refresh existing Semaphore Tunnel configuration after hostname migration
+  ansible.builtin.uri:
+    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/configurations"
+    headers: "{{ sem_cf_headers }}"
+    use_proxy: false
+    status_code: [200, 404]
+    timeout: 20
+  register: sem_cf_existing_config
+  changed_when: false
+  no_log: true
+  when: sem_cf_action == 'apply'
+
+- name: Refresh Semaphore DNS state after any hostname migration
+  ansible.builtin.uri:
+    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
+    headers: "{{ sem_cf_headers }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 20
+  register: sem_cf_dns
+  changed_when: false
+  no_log: true
   when: sem_cf_action == 'apply'
 
 - name: Refuse pre-existing non-Semaphore routes or weakened TLS policy

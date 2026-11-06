@@ -121,3 +121,6 @@ tasks:
           - {name: "bcmxcp_usb — Eaton USB", value: bcmxcp_usb}
           - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
           - {name: "snmp-ups — сетевой", value: snmp-ups}
+  - name: "30-Медиасервер"
+    playbook: playbooks/media-server.yml
+    description: "Безопасный аудит VM, PCI SATA/GPU и manifest; применение пока не доступно"

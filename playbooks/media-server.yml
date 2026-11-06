@@ -1,0 +1,206 @@
+---
+# Task 30: deliberately read-only media inspection, shipped in main.
+# No apply branch, VM/disk mutation, service restart or credentials modification.
+- name: "30 | Resolve canonical media site declaration"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    media_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    media_github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
+    media_github_base: "https://api.github.com/repos/DigitalHouses/site-{{ media_site_id }}/contents/inventories/{{ media_site_id }}"
+  tasks:
+    - name: Require valid canonical site ID for read-only audit
+      ansible.builtin.assert:
+        that:
+          - media_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+        fail_msg: MEDIA30_SITE_ID_INVALID
+
+    - name: Require task 05 GitHub provisioning credential
+      ansible.builtin.assert:
+        that: media_github_token | length > 0
+        fail_msg: "Task 30 audit requires the GitHub credential from task 05"
+      no_log: true
+
+    - name: Read exact owner/site declaration from private site repository
+      ansible.builtin.uri:
+        url: "{{ media_github_base }}/site.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ media_github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: media_site_file
+      changed_when: false
+      no_log: true
+
+    - name: Read exact media declaration from private site repository
+      ansible.builtin.uri:
+        url: "{{ media_github_base }}/media_vm.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ media_github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: media_vm_file
+      changed_when: false
+      no_log: true
+
+    - name: Decode canonical site and media declarations
+      ansible.builtin.set_fact:
+        media_site: "{{ (media_site_file.json.content | b64decode | from_yaml).site }}"
+        media_spec: "{{ (media_vm_file.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
+
+    - name: Reject mismatched site, VM or PCI declaration
+      ansible.builtin.assert:
+        that:
+          - media_site.id == media_site_id
+          - media_site.owner_slug is match('^[a-z][a-z0-9-]*$')
+          - media_spec.name == 'mediaserver-' ~ media_site.owner_slug
+          - media_spec.vmid | int >= 100
+          - media_spec.network.bridge is match('^vmbr[0-9]+$')
+          - media_spec.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/[0-9]+$')
+          - media_spec.network.ipv4.endswith('/24')
+          - media_spec.network.static_ipv4_verified | bool
+          - >-
+            (media_spec.network.ipv4.split('/')[0].split('.')[3] | int)
+            < (media_spec.network.dhcp_pool.first_host | int)
+            or (media_spec.network.ipv4.split('/')[0].split('.')[3] | int)
+            > (media_spec.network.dhcp_pool.last_host | int)
+          - media_spec.network.ipv4.split('/')[0] != pve.ipv4
+          - media_spec.network.ipv4.split('/')[0] != media_spec.network.gateway
+          - media_spec.storage.pool_name == media_site.owner_slug ~ '-pool'
+          - media_spec.storage.media_dataset == media_spec.storage.pool_name ~ '/media'
+          - media_spec.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+          - media_spec.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+        fail_msg: MEDIA30_SITE_VM_DECLARATION_MISMATCH
+
+    - name: Register PVE using the previously pinned Semaphore SSH identity
+      ansible.builtin.add_host:
+        name: media_pve
+        groups: media30_pve
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          -o ConnectTimeout=10
+        media_site: "{{ media_site }}"
+        media_spec: "{{ media_spec }}"
+        media_site_blob: "{{ media_vm_file.json.sha }}"
+      changed_when: false
+      no_log: true
+
+- name: "30 | Observe actual media VM and selected PCI devices (read-only)"
+  hosts: media30_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Check requested VM definition on Proxmox
+      ansible.builtin.stat:
+        path: "/etc/pve/qemu-server/{{ media_spec.vmid }}.conf"
+        follow: false
+      register: media_vm_conf
+
+    - name: Read existing target VM configuration without changes
+      ansible.builtin.command:
+        argv: [qm, config, "{{ media_spec.vmid }}"]
+      register: media_vm_config
+      changed_when: false
+      no_log: true
+      when: media_vm_conf.stat.exists
+
+    - name: Parse the observed VM configuration
+      ansible.builtin.set_fact:
+        media_current_vm: >-
+          {{ dict((media_vm_config.stdout_lines | default([]))
+             | select('search', ': ') | map('split', ': ', 1)) }}
+      when: media_vm_conf.stat.exists
+
+    - name: Check whether selected PCI functions are present on this PVE
+      ansible.builtin.stat:
+        path: "/sys/bus/pci/devices/{{ item.value }}"
+        follow: false
+      loop:
+        - {name: gpu, value: "{{ media_spec.pci.gpu }}"}
+        - {name: sata, value: "{{ media_spec.pci.sata_controller }}"}
+      loop_control:
+        label: "{{ item.name }}"
+      register: media_pci
+
+    - name: List other QEMU VM definitions for exclusive SATA ownership
+      ansible.builtin.find:
+        paths: /etc/pve/qemu-server
+        patterns: '*.conf'
+        file_type: file
+      register: media_qemu_configs
+
+    - name: Read only other VM definitions to detect duplicate SATA passthrough
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ media_qemu_configs.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      when: item.path != '/etc/pve/qemu-server/' ~ (media_spec.vmid | string) ~ '.conf'
+      register: media_other_vm_configs
+      no_log: true
+
+    - name: Require no other VM to own the SATA controller
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_other_vm_configs.results
+             | selectattr('content', 'defined')
+             | map(attribute='content') | map('b64decode')
+             | select('search', media_spec.pci.sata_controller | regex_escape)
+             | list | length) == 0
+        fail_msg: MEDIA30_SATA_CONTROLLER_ASSIGNED_TO_OTHER_VM
+
+    - name: Verify existing VM belongs to the selected site
+      ansible.builtin.assert:
+        that:
+          - media_current_vm.name | default('') == media_spec.name
+        fail_msg: MEDIA30_VM_NAME_MISMATCH
+      when: media_vm_conf.stat.exists
+
+    - name: Observe power state only for the existing target VM
+      ansible.builtin.command:
+        argv: [qm, status, "{{ media_spec.vmid }}"]
+      register: media_vm_power
+      changed_when: false
+      when: media_vm_conf.stat.exists
+
+    - name: Inspect the running media guest with read-only QEMU Guest Agent calls
+      ansible.builtin.include_tasks: ../tasks/media30-guest-readonly.yml
+      when:
+        - media_vm_conf.stat.exists
+        - "media_vm_power.stdout | default('') == 'status: running'"
+
+    - name: Summarize read-only target inspection
+      ansible.builtin.debug:
+        msg:
+          result: MEDIA30_AUDIT_ONLY
+          site: "{{ media_site.id }}"
+          pve: "{{ ansible_host }}"
+          vmid: "{{ media_spec.vmid }}"
+          vm_name: "{{ media_spec.name }}"
+          vm_exists: "{{ media_vm_conf.stat.exists }}"
+          vm_state: "{{ media_vm_power.stdout | default('absent') }}"
+          gpu_pci_present: "{{ media_pci.results[0].stat.exists }}"
+          sata_pci_present: "{{ media_pci.results[1].stat.exists }}"
+          intended_pool: "{{ media_spec.storage.pool_name }}"
+          intended_guest_ipv4: "{{ media_spec.network.ipv4 }}"
+          manifest_blob: "{{ media_site_blob }}"
+          not_yet_verified: "guest ZFS, apps, SMB, media login, GPU transcoding"
+          changes_applied: false

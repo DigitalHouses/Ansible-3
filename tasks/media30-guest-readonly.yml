@@ -1,0 +1,113 @@
+---
+# Task 30 guest inspection uses only read-only QEMU Guest Agent commands.
+# No SSH trust changes, VM reboots, service restarts, disk writes or shell scripts.
+- name: Check QEMU Guest Agent responsiveness without changing the VM
+  ansible.builtin.command:
+    argv: [qm, agent, "{{ media_spec.vmid }}", ping]
+  register: media30_qga_ping
+  changed_when: false
+  failed_when: false
+
+- name: Observe existing ZFS pool through authenticated read-only QGA
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zpool
+      - status
+      - -x
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_qga_zpool
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Read current guest ZFS datasets without touching mounts
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zfs
+      - list
+      - -H
+      - -o
+      - name,mounted,mountpoint
+      - -r
+      - "{{ media_spec.storage.pool_name }}"
+  register: media30_qga_datasets
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Read active media services through guest systemd
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/systemctl
+      - is-active
+      - plexmediaserver.service
+      - jellyfin.service
+      - radarr.service
+      - sonarr.service
+      - prowlarr.service
+      - qbittorrent.service
+      - filestash.service
+      - smbd.service
+      - nginx.service
+  register: media30_qga_services
+  changed_when: false
+  failed_when: false
+  when: media30_qga_ping.rc == 0
+
+- name: Parse guest agent command completions instead of accepting CLI RC alone
+  ansible.builtin.set_fact:
+    media30_zpool_exec: "{{ media30_qga_zpool.stdout | from_json }}"
+    media30_datasets_exec: "{{ media30_qga_datasets.stdout | from_json }}"
+    media30_services_exec: "{{ media30_qga_services.stdout | from_json }}"
+  when:
+    - media30_qga_ping.rc == 0
+    - media30_qga_zpool.rc | default(1) == 0
+    - media30_qga_datasets.rc | default(1) == 0
+    - media30_qga_services.rc | default(1) == 0
+
+- name: Report actual guest disk health and individual service states
+  ansible.builtin.debug:
+    msg:
+      qga_reachable: "{{ media30_qga_ping.rc == 0 }}"
+      zpool_exitcode: "{{ media30_zpool_exec.exitcode | default('unknown') }}"
+      zpool_status: "{{ media30_zpool_exec['out-data'] | default('unavailable') | trim }}"
+      datasets_exitcode: "{{ media30_datasets_exec.exitcode | default('unknown') }}"
+      datasets: "{{ (media30_datasets_exec['out-data'] | default('')).splitlines() }}"
+      services_exitcode: "{{ media30_services_exec.exitcode | default('unknown') }}"
+      service_names:
+        - plexmediaserver
+        - jellyfin
+        - radarr
+        - sonarr
+        - prowlarr
+        - qbittorrent
+        - filestash
+        - smbd
+        - nginx
+      service_states: "{{ (media30_services_exec['out-data'] | default('')).splitlines() }}"
+      guest_changes_applied: false
+  when: media30_qga_ping.rc == 0
+
+- name: Check keep plus import and download paths without guest mutations
+  ansible.builtin.include_tasks: media30-storage-preflight.yml
+  when: media30_qga_ping.rc == 0
+
+- name: Report unavailable QGA without attempting guest modifications
+  ansible.builtin.debug:
+    msg: MEDIA30_GUEST_QGA_UNAVAILABLE; NO_CHANGES_APPLIED
+  when: media30_qga_ping.rc != 0
