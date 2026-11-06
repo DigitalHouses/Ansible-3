@@ -122,6 +122,52 @@
   changed_when: false
   failed_when: false
 
+- name: Probe whether either download root contains entries without exposing names
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/bin/find
+      - "{{ item }}"
+      - -mindepth
+      - '1'
+      - -maxdepth
+      - '1'
+      - -printf
+      - '.'
+      - -quit
+  loop:
+    - "{{ media_spec.downloads.path }}"
+    - "/{{ media_spec.storage.pool_name }}/downloads"
+  loop_control:
+    label: "{{ item }}"
+  register: media30_download_entries_raw
+  changed_when: false
+  failed_when: false
+
+- name: Observe quota policy for media and download datasets
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ media_spec.vmid }}"
+      - --
+      - /usr/sbin/zfs
+      - get
+      - -H
+      - -o
+      - name,property,value
+      - quota,refquota
+      - "{{ media_spec.storage.media_dataset }}"
+      - "{{ media_spec.storage.pool_name }}/downloads"
+  register: media30_download_quotas_raw
+  changed_when: false
+  failed_when: false
+
 - name: Decode native guest program exit codes and output
   ansible.builtin.set_fact:
     media30_pool_guid_result: "{{ media30_pool_guid_raw.stdout | from_json }}"
@@ -136,6 +182,10 @@
     media30_download_backing_mounts: >-
       {{ media30_download_mounts_raw.results
          | map(attribute='stdout') | map('from_json') | list }}
+    media30_download_entries: >-
+      {{ media30_download_entries_raw.results
+         | map(attribute='stdout') | map('from_json') | list }}
+    media30_download_quotas: "{{ media30_download_quotas_raw.stdout | from_json }}"
   when:
     - media30_pool_guid_raw.rc == 0
     - media30_pool_topology_raw.rc == 0
@@ -149,6 +199,10 @@
     - >-
       media30_download_mounts_raw.results
       | selectattr('rc', 'ne', 0) | list | length == 0
+    - >-
+      media30_download_entries_raw.results
+      | selectattr('rc', 'ne', 0) | list | length == 0
+    - media30_download_quotas_raw.rc == 0
 
 - name: Index actual download-folder checks by the examined path
   ansible.builtin.set_fact:
@@ -196,6 +250,11 @@
         {{ media30_download_realpaths | map(attribute='out-data') | list }}
       backing_mounts_for_both_paths: >-
         {{ media30_download_backing_mounts | map(attribute='out-data') | list }}
+      download_roots_have_entries: >-
+        {{ media30_download_entries
+           | map(attribute='out-data') | map('default', '')
+           | map('length') | map('int') | map('bool') | list }}
+      quota_policy: "{{ media30_download_quotas['out-data'] | default('unavailable') | trim }}"
       dedicated_dataset_mount: "{{ media30_download_mount_result['out-data'] | default('unavailable') | trim }}"
       import_executed: false
       guest_changes_applied: false
