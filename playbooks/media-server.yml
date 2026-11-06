@@ -181,6 +181,12 @@
       changed_when: false
       when: media_vm_conf.stat.exists
 
+    - name: Inspect the running media guest with read-only QEMU Guest Agent calls
+      ansible.builtin.include_tasks: ../tasks/media30-guest-readonly.yml
+      when:
+        - media_vm_conf.stat.exists
+        - "media_vm_power.stdout | default('') == 'status: running'"
+
     - name: Summarize read-only target inspection
       ansible.builtin.debug:
         msg:
