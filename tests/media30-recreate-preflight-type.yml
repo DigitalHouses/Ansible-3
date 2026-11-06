@@ -1,0 +1,20 @@
+---
+- name: Verify all preflight assert expressions are strings
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    preflight_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-recreate-preflight.yml') | from_yaml }}"
+  tasks:
+    - name: Check the running VM assertion is a valid expression
+      ansible.builtin.assert:
+        that:
+          - (preflight_tasks | selectattr('name', 'equalto', 'Require old VM running for import preflight') | first)['ansible.builtin.assert'].that[0] is string
+
+    - name: Exercise a successful running-state assertion offline
+      ansible.builtin.assert:
+        that:
+          - "media_vm_power.stdout | default('') == 'status: running'"
+      vars:
+        media_vm_power:
+          stdout: "status: running"

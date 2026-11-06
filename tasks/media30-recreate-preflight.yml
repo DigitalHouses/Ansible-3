@@ -23,7 +23,7 @@
 - name: Require old VM running for import preflight
   ansible.builtin.assert:
     that:
-      - media_vm_power.stdout | default('') == 'status: running'
+      - "media_vm_power.stdout | default('') == 'status: running'"
     fail_msg: MEDIA30_RECREATE_IMPORT_OLD_VM_NOT_RUNNING
   when: media_disk_action == 'import'
 
