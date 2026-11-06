@@ -123,4 +123,7 @@ tasks:
           - {name: "snmp-ups — сетевой", value: snmp-ups}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server.yml
-    description: "Безопасный аудит VM, PCI SATA/GPU и manifest; применение пока не доступно"
+    description: "Безопасный аудит VM, PCI SATA/GPU и manifest; CPU-параметры пока только отображаются"
+    survey_vars:
+      - {name: DH_MEDIA_VM_CPU_PERCENT, title: "CPU всей VM (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
+      - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "CPU Plex+Jellyfin общий (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
