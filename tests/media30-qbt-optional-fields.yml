@@ -1,0 +1,53 @@
+---
+# Native Ansible regression for an installed qBittorrent client with optional null fields.
+- name: Verify native Arr provider readback with optional fields
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_wire_managed_clients:
+      - implementation: QBittorrent
+        fields:
+          - {name: host, value: '127.0.0.1'}
+          - {name: port, value: 8080}
+          - {name: username, value: ''}
+          - {name: password, value: ''}
+          - {name: urlBase}
+          - {name: apiKey}
+    wanted:
+      host: '127.0.0.1'
+      port: 8080
+      username: ''
+      password: ''
+  tasks:
+    - name: Inspect native extraction task source
+      ansible.builtin.set_fact:
+        qbt_readback: >-
+          {{ (lookup('ansible.builtin.file',
+              playbook_dir ~ '/../tasks/media-arr-qbt-provider-one.yml') | from_yaml)
+             | selectattr('name', 'equalto',
+                 'Extract existing managed qBittorrent settings for drift detection')
+             | first }}
+
+    - name: Require native filter for only defined values
+      ansible.builtin.assert:
+        that:
+          - "'selectattr' in qbt_readback['ansible.builtin.set_fact'].media_wire_existing_qbt_fields"
+          - "'defined' in qbt_readback['ansible.builtin.set_fact'].media_wire_existing_qbt_fields"
+          - qbt_readback.no_log | bool
+
+    - name: Apply the same native filtering to a sparse provider response
+      ansible.builtin.set_fact:
+        existing: >-
+          {{ media_wire_managed_clients[0].fields
+             | selectattr('value', 'defined')
+             | items2dict(key_name='name', value_name='value') }}
+      no_log: true
+
+    - name: Require existing desired fields match and missing optional fields stay excluded
+      ansible.builtin.assert:
+        that:
+          - existing == wanted
+          - "'urlBase' not in existing"
+          - "'apiKey' not in existing"
+      no_log: true
