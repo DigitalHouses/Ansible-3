@@ -1,0 +1,32 @@
+---
+- name: Task 30 restarts only unresponsive kept QGA before final acceptance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') | from_yaml }}"
+  tasks:
+    - name: Identify recovered guest and final Proxmox acceptance stages
+      ansible.builtin.set_fact:
+        guest_stage: >-
+          {{ deploy | selectattr('name', 'equalto', '30 | Prepare native guest and ZFS (apply only)') | first }}
+        pve_accept_stage: >-
+          {{ deploy | selectattr('name', 'equalto',
+             '30 | Verify final PVE acceptance after guest QGA recovery') | first }}
+
+    - name: Find exact conditional native QGA recovery task
+      ansible.builtin.set_fact:
+        qga_recovery: >-
+          {{ guest_stage.tasks | selectattr('name', 'equalto',
+             'Recover unresponsive QGA in kept guest through pinned SSH access') | first }}
+
+    - name: Require idempotent installation and guarded recovery before strict acceptance
+      ansible.builtin.assert:
+        that:
+          - guest_stage.tasks[1].name == 'Install native Debian, ZFS and Intel GPU prerequisites'
+          - qga_recovery['ansible.builtin.systemd_service'].name == 'qemu-guest-agent.service'
+          - qga_recovery['ansible.builtin.systemd_service'].state == 'restarted'
+          - qga_recovery.when[0] == "media_vm_action == 'keep'"
+          - qga_recovery.when | join(' ') is search('media_keep_qga_probe.rc')
+          - pve_accept_stage.tasks[0]['ansible.builtin.include_tasks'] == '../tasks/media-accept-pve.yml'
+          - deploy[-1].name == '30 | Verify final PVE acceptance after guest QGA recovery'
