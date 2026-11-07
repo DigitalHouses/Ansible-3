@@ -10,6 +10,9 @@
     quantum_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-quantum-cloudflare.yml') }}"
     hostname_cutover_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-hostname-cutover.yml') }}"
     cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    media_cf_public_proof:
+      rc: 0
+      stdout: "302\nhttps://example.cloudflareaccess.com/cdn-cgi/access/login/test"
   tasks:
     - name: Check Webmin route is not published by default
       ansible.builtin.assert:
@@ -39,6 +42,9 @@
         cf_access: >-
           {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
              'Refuse anonymous bypass or unrestricted Webmin administration') | first }}
+        cf_redirect_check: >-
+          {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
+             'Require verified Cloudflare Access login redirect') | first }}
 
     - name: Require Access gate, no foreign ingress and mandatory post-apply proof
       ansible.builtin.assert:
@@ -47,11 +53,24 @@
           - cf_dns.when is search("request_action == 'apply'")
           - cf_dns['ansible.builtin.uri'].body.proxied | bool
           - cf_dns['ansible.builtin.uri'].body.type == 'CNAME'
-          - cf_proof['ansible.builtin.uri'].status_code == 302
-          - cf_proof['ansible.builtin.uri'].validate_certs | bool
+          - "'--resolve' in cf_proof['ansible.builtin.command'].argv"
+          - "'--insecure' not in cf_proof['ansible.builtin.command'].argv"
+          - "'--write-out' in cf_proof['ansible.builtin.command'].argv"
+          - cf_proof.no_log | bool
           - cf_proof.retries | int >= 1
           - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
           - "'current_cf_config.ingress | length in [2, 3, 4]' in pve_cf_source"
           - "'quantum_original_config.ingress | length in [2, 3, 4]' in quantum_cf_source"
           - "'current_cf_config.ingress | length in [3, 4, 5]' in hostname_cutover_source"
           - "'quantum_original_config.ingress[2:]' in quantum_cf_source"
+
+    - name: Verify HTTPS 302 and Cloudflare Access login pattern on fixture
+      ansible.builtin.assert:
+        that:
+          - media_cf_public_proof.rc == 0
+          - media_cf_public_proof.stdout is match('^302\\nhttps://')
+          - >-
+            media_cf_public_proof.stdout.splitlines()[1] is
+            match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
+          - cf_proof.until | length == 2
+          - cf_redirect_check['ansible.builtin.assert'].that | length == 2

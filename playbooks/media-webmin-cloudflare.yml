@@ -292,25 +292,73 @@
       no_log: true
       when: request_action == 'apply' and media_cf_dns.json.result | length == 0
 
-    - name: Verify public access requires Cloudflare Access challenge
+    - name: Resolve newly published Webmin through public DNS over HTTPS
       ansible.builtin.uri:
-        url: "https://{{ webmin_hostname }}/"
+        url: "https://cloudflare-dns.com/dns-query?name={{ webmin_hostname }}&type=A"
+        headers:
+          Accept: application/dns-json
         use_proxy: false
-        follow_redirects: none
         validate_certs: true
-        status_code: 302
+        status_code: 200
         timeout: 20
+      register: media_cf_public_dns
+      changed_when: false
+      retries: 6
+      delay: 3
+      until: media_cf_public_dns.status | default(-1) == 200
+      when: request_action == 'apply' or (media_cf_dns.json.result | length == 1 and media_cf_original.ingress | length == 4)
+
+    - name: Select a public Cloudflare Edge IPv4 without changing Runner DNS
+      ansible.builtin.set_fact:
+        media_cf_edge_ipv4s: >-
+          {{ media_cf_public_dns.json.Answer | default([])
+             | selectattr('type', 'equalto', 1)
+             | map(attribute='data')
+             | select('match', '^([0-9]{1,3}[.]){3}[0-9]{1,3}$') | list }}
+      when: media_cf_public_dns is not skipped
+
+    - name: Require the exact public hostname has a routable Edge address
+      ansible.builtin.assert:
+        that:
+          - media_cf_public_dns.json.Status == 0
+          - media_cf_edge_ipv4s | length > 0
+        fail_msg: MEDIA_WEBMIN_CF_PUBLIC_DNS_UNAVAILABLE
+      when: media_cf_public_dns is not skipped
+
+    - name: Verify public access requires Cloudflare Access challenge
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --connect-timeout
+          - '7'
+          - --max-time
+          - '20'
+          - --resolve
+          - "{{ webmin_hostname }}:443:{{ media_cf_edge_ipv4s[0] }}"
+          - --output
+          - /dev/null
+          - --write-out
+          - "%{http_code}\\n%{redirect_url}"
+          - "https://{{ webmin_hostname }}/"
       register: media_cf_public_proof
       changed_when: false
+      no_log: true
       retries: 9
       delay: 5
-      until: media_cf_public_proof.status | default(-1) == 302
-      when: request_action == 'apply' or (media_cf_dns.json.result | length == 1 and media_cf_original.ingress | length == 4)
+      until:
+        - media_cf_public_proof.rc | default(1) == 0
+        - media_cf_public_proof.stdout | default('') is match('^302\\nhttps://')
+      when: media_cf_edge_ipv4s is defined
 
     - name: Require verified Cloudflare Access login redirect
       ansible.builtin.assert:
         that:
-          - (media_cf_public_proof.location | default('')) is match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
+          - media_cf_public_proof.rc == 0
+          - >-
+            media_cf_public_proof.stdout.splitlines()[1] is
+            match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
         fail_msg: MEDIA_WEBMIN_CF_PUBLIC_ACCESS_NOT_PROTECTED
       when: media_cf_public_proof is not skipped
 
