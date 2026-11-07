@@ -155,3 +155,16 @@ tasks:
           - {name: "erase — СТЕРЕТЬ выбранный SATA-диск и создать ZFS заново", value: erase}
       - {name: DH_MEDIA_VM_CPU_PERCENT, title: "CPU всей VM (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
       - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "CPU Plex+Jellyfin общий (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
+  - name: "31-Сменить общий пароль медиасервера"
+    playbook: playbooks/media-password-rotate.yml
+    description: "Верификация либо защищённая native-ротация пароля SMB и медиаприложений; пароль не передаётся в Semaphore"
+    survey_vars:
+      - name: DH_MEDIA_ROTATION_MODE
+        title: "Режим смены общего пароля"
+        type: enum
+        target: ""
+        required: true
+        default_value: preflight
+        values:
+          - {name: "Проверить текущие логины — без смены пароля", value: preflight}
+          - {name: "Сменить пароль — только при наличии защищённого запроса на ZFS", value: apply}
