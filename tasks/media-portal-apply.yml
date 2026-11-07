@@ -15,6 +15,14 @@
     group: root
     mode: '0644'
 
+- name: Publish DigitalHouses media favicon
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/templates/media-portal-icon.svg"
+    dest: /var/www/dh-media-portal/favicon.svg
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Install minimal LAN-only nginx virtual host
   ansible.builtin.template:
     src: "{{ playbook_dir | dirname }}/templates/media-portal-nginx.conf.j2"
@@ -42,6 +50,23 @@
     status_code: 200
   register: media_portal_response
   changed_when: false
+
+- name: Verify published media favicon is served as SVG
+  ansible.builtin.uri:
+    url: http://127.0.0.1/favicon.svg
+    status_code: 200
+    return_content: true
+  register: media_portal_favicon
+  changed_when: false
+
+- name: Require the live portal favicon and protected password instructions
+  ansible.builtin.assert:
+    that:
+      - "'<svg' in media_portal_favicon.content"
+      - "'/favicon.svg' in media_portal_response.content"
+      - "'qm guest exec' in media_portal_response.content"
+      - "'Смена пароля' in media_portal_response.content"
+    fail_msg: MEDIA30_PORTAL_IDENTITY_OR_CREDENTIAL_GUIDE_MISSING
 
 - name: Verify portal lists every configured application
   ansible.builtin.assert:
