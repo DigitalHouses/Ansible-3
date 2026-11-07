@@ -178,25 +178,36 @@
   loop_control:
     label: "{{ item.path }}"
 
-- name: Verify persistent native Plex scan policy and local account claim marker
+- name: Verify persistent native Plex scan policy and account claim marker
   ansible.builtin.slurp:
     src: >-
       /var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml
   register: media80_accept_plex_preferences
   no_log: true
 
-- name: Refuse Plex without a persistent account token and scan policy
+- name: Require native Plex automatic and periodic scan policy
   ansible.builtin.assert:
     that:
-      - >-
-        (media80_accept_plex_preferences.content | b64decode
-         | regex_findall('PlexOnlineToken="[^"]{16,}"') | length) == 1
       - "'FSEventLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
       - "'FSEventLibraryPartialScanEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
       - "'ScheduledLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
       - "'ScheduledLibraryUpdateInterval=\"900\"' in (media80_accept_plex_preferences.content | b64decode)"
-    fail_msg: MEDIA80_ACCEPT_PLEX_ACCOUNT_CLAIM_OR_AUTO_SCAN_MISSING
+    fail_msg: MEDIA80_ACCEPT_PLEX_AUTO_SCAN_MISSING
   no_log: true
+
+- name: Read Plex account-token marker without disclosing its value
+  ansible.builtin.set_fact:
+    media80_accept_plex_account_token_present: >-
+      {{ (media80_accept_plex_preferences.content | b64decode
+          | regex_findall('PlexOnlineToken="[^"]{16,}"') | length) == 1 }}
+  no_log: true
+
+- name: Report Plex account claim as a separate owner action
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'MEDIA80_PLEX_ACCOUNT_TOKEN=UNVERIFIED_MARKER_PRESENT'
+         if media80_accept_plex_account_token_present
+         else 'MEDIA80_PLEX_ACCOUNT_CLAIM=OWNER_ACTION_REQUIRED' }}
 
 - name: Reject anonymous qBittorrent API access on the LAN IP
   ansible.builtin.uri:

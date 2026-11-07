@@ -1,0 +1,50 @@
+---
+# Plex native scan policy is mandatory; the online account claim is a separate owner action.
+- name: Verify Plex scanner acceptance without requiring account claim
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_xml: >-
+      <Preferences FSEventLibraryUpdatesEnabled="1"
+      FSEventLibraryPartialScanEnabled="1"
+      ScheduledLibraryUpdatesEnabled="1"
+      ScheduledLibraryUpdateInterval="900"/>
+  tasks:
+    - name: Inspect native guest acceptance task source
+      ansible.builtin.set_fact:
+        guest_accept: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') | from_yaml }}"
+        media80_accept_plex_preferences:
+          content: "{{ fixture_xml | b64encode }}"
+
+    - name: Locate scanner enforcement and account status tasks
+      ansible.builtin.set_fact:
+        scanner_task: >-
+          {{ guest_accept | selectattr('name', 'equalto',
+             'Require native Plex automatic and periodic scan policy') | first }}
+        marker_task: >-
+          {{ guest_accept | selectattr('name', 'equalto',
+             'Read Plex account-token marker without disclosing its value') | first }}
+        report_task: >-
+          {{ guest_accept | selectattr('name', 'equalto',
+             'Report Plex account claim as a separate owner action') | first }}
+
+    - name: Require scanner enforcement remains mandatory and claim is only informational
+      ansible.builtin.assert:
+        that:
+          - scanner_task['ansible.builtin.assert'].that | length == 4
+          - scanner_task.no_log | bool
+          - scanner_task['ansible.builtin.assert'].fail_msg == 'MEDIA80_ACCEPT_PLEX_AUTO_SCAN_MISSING'
+          - marker_task.no_log | bool
+          - "'PlexOnlineToken' in marker_task['ansible.builtin.set_fact'].media80_accept_plex_account_token_present"
+          - "'OWNER_ACTION_REQUIRED' in report_task['ansible.builtin.debug'].msg"
+          - "'PlexOnlineToken' not in (scanner_task['ansible.builtin.assert'].that | join(' '))"
+
+    - name: Verify the required scanner policy on unclaimed Plex fixture
+      ansible.builtin.assert:
+        that:
+          - "'FSEventLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+          - "'FSEventLibraryPartialScanEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+          - "'ScheduledLibraryUpdatesEnabled=\"1\"' in (media80_accept_plex_preferences.content | b64decode)"
+          - "'ScheduledLibraryUpdateInterval=\"900\"' in (media80_accept_plex_preferences.content | b64decode)"
+      no_log: true
