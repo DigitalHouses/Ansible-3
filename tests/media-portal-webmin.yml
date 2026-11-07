@@ -1,0 +1,65 @@
+---
+- name: Validate media portal external tabs, SMB paths and Webmin boundary
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    media_site: {id: serzhan-home, owner_slug: serzhan}
+    media_spec:
+      name: mediaserver-serzhan
+      vmid: 2232
+      discovery: {friendly_name: Медиасервер Serzhan, workgroup: WORKGROUP, netbios_name: server-serzhan}
+      network: {ipv4: 192.168.11.232/24}
+      storage: {pool_name: serzhan-pool, media_dataset: serzhan-pool/media}
+      file_access:
+        accounts: [{name: serzhan, role: owner}, {name: serzhan_admin, role: administrator}]
+      applications:
+        jellyfin: true
+        radarr: true
+        sonarr: true
+        prowlarr: true
+        qbittorrent: true
+        filestash: true
+        sambee: true
+      portal: {show_admin_links: false, admin_links: []}
+    media_vm: "{{ media_spec }}"
+  tasks:
+    - name: Create isolated render directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: dh-media-portal-test-
+      register: tmp
+
+    - name: Render approved portal and SMB policy without guest access
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/{{ item }}"
+        dest: "{{ tmp.path }}/{{ item }}"
+        mode: '0600'
+      loop: [media-portal.html.j2, media-smb.conf.j2]
+
+    - name: Read resulting HTML and Samba configuration
+      ansible.builtin.set_fact:
+        portal_markup: "{{ lookup('ansible.builtin.file', tmp.path ~ '/media-portal.html.j2') }}"
+        smb_markup: "{{ lookup('ansible.builtin.file', tmp.path ~ '/media-smb.conf.j2') }}"
+
+    - name: Require exact destination, native-group access and no same-tab cards
+      ansible.builtin.assert:
+        that:
+          - portal_markup is search('serzhan-home-pve-mediaserver-admin[.]digitalhouses[.]vip')
+          - "'target=\"_blank\" rel=\"noopener noreferrer\"' in portal_markup"
+          - "portal_markup.count('href=') == portal_markup.count('target=\"_blank\"') + 1"
+          - "'data-copy=' in portal_markup"
+          - "'Windows' in portal_markup and 'macOS' in portal_markup"
+          - "'\\\\\\\\192.168.11.232\\\\Media' in portal_markup"
+          - "'\\\\\\\\192.168.11.232\\\\Documents' in portal_markup"
+          - "'smb://192.168.11.232/Media' in portal_markup"
+          - "'smb://192.168.11.232/Documents' in portal_markup"
+          - "'valid users = @media_group' in smb_markup"
+          - "'valid users = @doc_group' in smb_markup"
+          - "'valid users = serzhan_admin' in smb_markup"
+          - "'guest ok = no' in smb_markup"
+
+    - name: Delete isolated fixture after checking
+      ansible.builtin.file:
+        path: "{{ tmp.path }}"
+        state: absent
