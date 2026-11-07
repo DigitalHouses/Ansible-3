@@ -152,7 +152,7 @@
   ansible.builtin.assert:
     that:
       - current_tunnel_configuration.json.success | bool
-      - current_cf_config.ingress | length in [2, 3]
+      - current_cf_config.ingress | length in [2, 3, 4]
       - current_cf_config.ingress[0].hostname in [public_hostname, 'dh-' ~ site_id ~ '-pve.' ~ cf_zone_name]
       - current_cf_config.ingress[0].service is match('^https://[0-9.]+:8006$')
       - current_cf_config.ingress[0].originRequest.caPool == expected_ca_pool
@@ -160,13 +160,24 @@
       - current_cf_config.ingress[-1].service == 'http_status:404'
       - current_cf_config.ingress[-1].hostname is not defined
       - >-
-        current_cf_config.ingress | length != 3 or
+        current_cf_config.ingress | length < 3 or
         current_cf_config.ingress[1].hostname in [quantum_public_hostname,
         'dh-' ~ site_id ~ '-pve-filebrowser.' ~ cf_zone_name]
       - >-
-        current_cf_config.ingress | length != 3 or
+        current_cf_config.ingress | length < 3 or
         current_cf_config.ingress[1].service in ['http://127.0.0.1:8090',
         'http://' ~ pve.ipv4 ~ ':8090']
+      - >-
+        current_cf_config.ingress | length != 4 or
+        current_cf_config.ingress[2].hostname == site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name
+      - >-
+        current_cf_config.ingress | length != 4 or
+        current_cf_config.ingress[2].service is match('^https://192[.]168[.][0-9.]+:10000$')
+      - >-
+        current_cf_config.ingress | length != 4 or
+        (current_cf_config.ingress[2].originRequest.noTLSVerify is sameas true and
+         current_cf_config.ingress[2].originRequest.httpHostHeader ==
+         site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name)
     fail_msg: "Dedicated tunnel drift detected: refusing to overwrite any foreign route or TLS policy"
 
 - name: Ensure DNS still routes public name to this dedicated tunnel

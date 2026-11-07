@@ -1,0 +1,321 @@
+---
+# Explicit Cloudflare task for administering users of a media VM.
+# Reuse the already commissioned site PVE Tunnel and its restricted Access.
+# Never create another tunnel or publish a hostname without verified protection.
+- name: "32 | Publish Webmin through the existing protected PVE Tunnel"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
+    github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
+    cf_api: https://api.cloudflare.com/client/v4
+    cf_zone_name: digitalhouses.vip
+    cf_headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Accept: application/json
+    request_action: "{{ DH_MEDIA_WEBMIN_CF_ACTION | default('audit', true) }}"
+    cf_tunnel_name: "{{ site_id }}-pve"
+    pve_public_hostname: "{{ site_id }}-pve.{{ cf_zone_name }}"
+    quantum_hostname: "{{ site_id }}-pve-filebrowser.{{ cf_zone_name }}"
+    webmin_hostname: "{{ site_id }}-pve-mediaserver-admin.{{ cf_zone_name }}"
+    private_media_url: >-
+      https://api.github.com/repos/DigitalHouses/site-{{ site_id
+      }}/contents/inventories/{{ site_id }}/media_vm.yml?ref=main
+  tasks:
+    - name: Validate Cloudflare action and independent site identity
+      ansible.builtin.assert:
+        that:
+          - request_action in ['audit', 'apply']
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - cf_token | length > 0
+          - github_token | length > 0
+        fail_msg: MEDIA_WEBMIN_CF_CREDENTIALS_OR_MODE_INVALID
+      no_log: true
+
+    - name: Read canonical media address from the existing private site repo
+      ansible.builtin.uri:
+        url: "{{ private_media_url }}"
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+        use_proxy: false
+        status_code: 200
+      register: media_site_manifest
+      changed_when: false
+      no_log: true
+
+    - name: Validate declared media IPv4 and exact Webmin origin
+      ansible.builtin.set_fact:
+        media_declared_vm: "{{ (media_site_manifest.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
+
+    - name: Validate media VM and host identity without route mutation
+      ansible.builtin.assert:
+        that:
+          - media_declared_vm.network.ipv4 is match('^[0-9.]+/24$')
+          - media_declared_vm.name is match('^mediaserver-[a-z0-9-]+$')
+          - pve.ipv4 != media_declared_vm.network.ipv4.split('/')[0]
+        fail_msg: MEDIA_WEBMIN_CF_ORIGIN_INVALID
+
+    - name: Check HTTPS Webmin is healthy before any public changes
+      ansible.builtin.uri:
+        url: "https://{{ media_declared_vm.network.ipv4.split('/')[0] }}:10000/"
+        validate_certs: false
+        use_proxy: false
+        timeout: 15
+        follow_redirects: none
+        status_code: [200, 302, 303]
+      register: media_webmin_origin
+      changed_when: false
+
+    - name: Find precisely one DigitalHouses Cloudflare DNS zone
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones?name={{ cf_zone_name }}&per_page=50"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_zone_result
+      changed_when: false
+      no_log: true
+
+    - name: Select exact existing Cloudflare zone
+      ansible.builtin.set_fact:
+        media_cf_zones: >-
+          {{ media_cf_zone_result.json.result
+             | selectattr('name', 'equalto', cf_zone_name) | list }}
+
+    - name: Require only one accessible Cloudflare zone
+      ansible.builtin.assert:
+        that:
+          - media_cf_zone_result.json.success | bool
+          - media_cf_zones | length == 1
+          - media_cf_zone_result.json.result_info.total_pages | default(1) | int == 1
+        fail_msg: MEDIA_WEBMIN_CF_ZONE_UNVERIFIED
+
+    - name: Derive zone and account IDs
+      ansible.builtin.set_fact:
+        media_cf_zone_id: "{{ media_cf_zones[0].id }}"
+        media_cf_account_id: "{{ media_cf_zones[0].account.id }}"
+
+    - name: Fetch established site PVE Tunnel
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ media_cf_account_id }}/cfd_tunnel?name={{ cf_tunnel_name }}&per_page=50"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_tunnels
+      changed_when: false
+      no_log: true
+
+    - name: Select precisely the existing remotely managed tunnel
+      ansible.builtin.set_fact:
+        media_existing_tunnels: >-
+          {{ media_cf_tunnels.json.result
+             | selectattr('name', 'equalto', cf_tunnel_name) | list }}
+
+    - name: Reject any foreign, unmanaged or unhealthy tunnel
+      ansible.builtin.assert:
+        that:
+          - media_cf_tunnels.json.success | bool
+          - media_existing_tunnels | length == 1
+          - media_existing_tunnels[0].config_src == 'cloudflare'
+          - media_existing_tunnels[0].status == 'healthy'
+        fail_msg: MEDIA_WEBMIN_CF_TUNNEL_UNVERIFIED
+
+    - name: Read full existing tunnel ingress
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ media_cf_account_id }}/cfd_tunnel/{{ media_existing_tunnels[0].id }}/configurations"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_current
+      changed_when: false
+      no_log: true
+
+    - name: Preserve existing ingress and construct exact media origin
+      ansible.builtin.set_fact:
+        media_cf_original: "{{ media_cf_current.json.result.config }}"
+        media_cf_expected_origin:
+          hostname: "{{ webmin_hostname }}"
+          service: "https://{{ media_declared_vm.network.ipv4.split('/')[0] }}:10000"
+          originRequest:
+            noTLSVerify: true
+            httpHostHeader: "{{ webmin_hostname }}"
+
+    - name: Ensure no foreign routes or unsafe PVE and FileBrowser changes
+      ansible.builtin.assert:
+        that:
+          - media_cf_current.json.success | bool
+          - media_cf_original.ingress | length in [3, 4]
+          - media_cf_original.ingress[0].hostname == pve_public_hostname
+          - media_cf_original.ingress[0].service == 'https://' ~ pve.ipv4 ~ ':8006'
+          - media_cf_original.ingress[0].originRequest.noTLSVerify is sameas false
+          - media_cf_original.ingress[1].hostname == quantum_hostname
+          - media_cf_original.ingress[1].service == 'http://' ~ pve.ipv4 ~ ':8090'
+          - media_cf_original.ingress[-1].service == 'http_status:404'
+          - media_cf_original.ingress[-1].hostname is not defined
+          - media_cf_original.ingress | length == 3 or media_cf_original.ingress[2] == media_cf_expected_origin
+        fail_msg: MEDIA_WEBMIN_CF_FOREIGN_OR_UNSAFE_INGRESS
+
+    - name: Read Cloudflare Access applications before any public change
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ media_cf_account_id }}/access/apps?per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_apps
+      changed_when: false
+      no_log: true
+
+    - name: Select pre-existing dedicated or wildcard Access policy
+      ansible.builtin.set_fact:
+        media_cf_exact_apps: >-
+          {{ media_cf_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+             | selectattr('domain', 'defined')
+             | selectattr('domain', 'equalto', webmin_hostname) | list }}
+        media_cf_wildcard_apps: >-
+          {{ media_cf_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+             | selectattr('domain', 'defined')
+             | selectattr('domain', 'equalto', '*.' ~ cf_zone_name) | list }}
+
+    - name: Require an existing matching Access application
+      ansible.builtin.assert:
+        that:
+          - media_cf_apps.json.success | bool
+          - media_cf_apps.json.result_info.total_pages | default(1) | int == 1
+          - media_cf_exact_apps | length <= 1
+          - media_cf_wildcard_apps | length <= 1
+          - media_cf_exact_apps | length == 1 or media_cf_wildcard_apps | length == 1
+        fail_msg: MEDIA_WEBMIN_CF_ACCESS_APP_NOT_VERIFIED
+
+    - name: Select exact Access app or validated wildcard
+      ansible.builtin.set_fact:
+        media_cf_access_app: >-
+          {{ (media_cf_exact_apps if media_cf_exact_apps | length > 0
+              else media_cf_wildcard_apps) | first }}
+
+    - name: Read self-hosted Access app policies
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ media_cf_account_id }}/access/apps/{{ media_cf_access_app.id }}/policies?per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_policies
+      changed_when: false
+      no_log: true
+
+    - name: Refuse anonymous bypass or unrestricted Webmin administration
+      ansible.builtin.assert:
+        that:
+          - media_cf_policies.json.success | bool
+          - media_cf_policies.json.result_info.total_pages | default(1) | int == 1
+          - media_cf_policies.json.result | selectattr('decision', 'equalto', 'bypass') | list | length == 0
+          - media_cf_policies.json.result | selectattr('decision', 'equalto', 'allow') | list | length > 0
+          - media_cf_policies.json.result | map(attribute='include') | flatten | selectattr('everyone', 'defined') | list | length == 0
+          - >-
+            media_cf_policies.json.result | selectattr('decision', 'equalto', 'allow')
+            | map(attribute='include') | flatten
+            | selectattr('email', 'defined') | list | length > 0
+        fail_msg: MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED
+
+    - name: Read any existing exact DNS record
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ media_cf_zone_id }}/dns_records?name={{ webmin_hostname }}&per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: media_cf_dns
+      changed_when: false
+      no_log: true
+
+    - name: Require empty or exactly owned proxied tunnel DNS
+      ansible.builtin.assert:
+        that:
+          - media_cf_dns.json.success | bool
+          - media_cf_dns.json.result_info.total_pages | default(1) | int == 1
+          - media_cf_dns.json.result | length <= 1
+          - >-
+            media_cf_dns.json.result | length == 0 or
+            (media_cf_dns.json.result[0].name == webmin_hostname and
+             media_cf_dns.json.result[0].type == 'CNAME' and
+             media_cf_dns.json.result[0].proxied | bool and
+             media_cf_dns.json.result[0].content | lower ==
+             (media_existing_tunnels[0].id ~ '.cfargotunnel.com') | lower)
+        fail_msg: MEDIA_WEBMIN_CF_DNS_CONFLICT
+
+    - name: Report security-gated Cloudflare publication plan
+      ansible.builtin.debug:
+        msg:
+          - "WEBMIN_CF={{ request_action }}"
+          - "WEBMIN_HOSTNAME={{ webmin_hostname }}"
+          - "WEBMIN_ORIGIN={{ media_cf_expected_origin.service }}"
+          - "ACCESS=RESTRICTED"
+          - "EXISTING_TUNNEL_ROUTES={{ media_cf_original.ingress | length }}"
+          - "EXISTING_DNS={{ media_cf_dns.json.result | length }}"
+
+    - name: Append Webmin ingress before the existing catch-all only
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ media_cf_account_id }}/cfd_tunnel/{{ media_existing_tunnels[0].id }}/configurations"
+        method: PUT
+        headers: "{{ cf_headers }}"
+        body_format: json
+        body:
+          config: >-
+            {{ media_cf_original | combine({'ingress':
+               media_cf_original.ingress[:-1] +
+               [media_cf_expected_origin, media_cf_original.ingress[-1]]}) }}
+        use_proxy: false
+        status_code: 200
+      changed_when: true
+      no_log: true
+      when: request_action == 'apply' and media_cf_original.ingress | length == 3
+
+    - name: Create CNAME pointing only to the existing protected tunnel
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ media_cf_zone_id }}/dns_records"
+        method: POST
+        headers: "{{ cf_headers }}"
+        body_format: json
+        body:
+          type: CNAME
+          name: "{{ webmin_hostname }}"
+          content: "{{ media_existing_tunnels[0].id }}.cfargotunnel.com"
+          proxied: true
+          ttl: 1
+        use_proxy: false
+        status_code: 200
+      changed_when: true
+      no_log: true
+      when: request_action == 'apply' and media_cf_dns.json.result | length == 0
+
+    - name: Verify public access requires Cloudflare Access challenge
+      ansible.builtin.uri:
+        url: "https://{{ webmin_hostname }}/"
+        use_proxy: false
+        follow_redirects: none
+        validate_certs: true
+        status_code: 302
+        timeout: 20
+      register: media_cf_public_proof
+      changed_when: false
+      retries: 9
+      delay: 5
+      until: media_cf_public_proof.status | default(-1) == 302
+      when: request_action == 'apply' or (media_cf_dns.json.result | length == 1 and media_cf_original.ingress | length == 4)
+
+    - name: Require verified Cloudflare Access login redirect
+      ansible.builtin.assert:
+        that:
+          - (media_cf_public_proof.location | default('')) is match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
+        fail_msg: MEDIA_WEBMIN_CF_PUBLIC_ACCESS_NOT_PROTECTED
+      when: media_cf_public_proof is not skipped
+
+    - name: Report Cloudflare admin readiness
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'WEBMIN_CF=PROTECTED https://' ~ webmin_hostname ~ '/'
+             if request_action == 'apply' else 'WEBMIN_CF=AUDIT_ONLY' }}

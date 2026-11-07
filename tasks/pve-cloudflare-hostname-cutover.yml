@@ -14,7 +14,7 @@
 - name: Validate current PVE tunnel is legacy, new or our exact staged cutover
   ansible.builtin.assert:
     that:
-      - current_cf_config.ingress | length in [3, 5]
+      - current_cf_config.ingress | length in [3, 4, 5]
       - current_cf_config.ingress[0].service == desired_origin
       - current_cf_config.ingress[0].originRequest.caPool == expected_ca_pool
       - current_cf_config.ingress[0].originRequest.noTLSVerify is sameas false
@@ -27,6 +27,15 @@
            current_cf_config.ingress[1].hostname == legacy_quantum_hostname) or
           (current_cf_config.ingress[0].hostname == public_hostname and
            current_cf_config.ingress[1].hostname == quantum_public_hostname))) or
+        (current_cf_config.ingress | length == 4 and
+         current_cf_config.ingress[0].hostname == public_hostname and
+         current_cf_config.ingress[1].hostname == quantum_public_hostname and
+         current_cf_config.ingress[2].hostname ==
+           site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name and
+         current_cf_config.ingress[2].service is match('^https://192[.]168[.][0-9.]+:10000$') and
+         current_cf_config.ingress[2].originRequest.noTLSVerify is sameas true and
+         current_cf_config.ingress[2].originRequest.httpHostHeader ==
+           site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name) or
         (current_cf_config.ingress | length == 5 and
          current_cf_config.ingress[0].hostname == legacy_pve_hostname and
          current_cf_config.ingress[1].hostname == legacy_quantum_hostname and
