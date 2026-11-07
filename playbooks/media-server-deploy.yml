@@ -413,6 +413,9 @@
         media_vm: "{{ media_spec }}"
         media_raw_disk_action: "{{ media_disk_action }}"
 
+    - name: Block ordinary media apply while owner-password rotation is pending
+      ansible.builtin.include_tasks: ../tasks/media31-password-pending-guard.yml
+
     - name: Reconcile authenticated SMB shares and accounts
       ansible.builtin.include_tasks: ../tasks/media-smb-apply.yml
 
