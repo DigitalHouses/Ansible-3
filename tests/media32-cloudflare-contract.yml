@@ -1,0 +1,57 @@
+---
+- name: Offline acceptance for Webmin Cloudflare route and task 10 compatibility
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    cf_playbook: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml') | from_yaml }}"
+    pve_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
+    quantum_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-quantum-cloudflare.yml') }}"
+    hostname_cutover_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-hostname-cutover.yml') }}"
+    cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+  tasks:
+    - name: Check Webmin route is not published by default
+      ansible.builtin.assert:
+        that:
+          - cf_playbook | length == 1
+          - cf_playbook[0].vars.request_action is search("default\('audit'")
+          - cf_playbook[0].vars.webmin_hostname is search("-pve-mediaserver-admin")
+          - >-
+            cat.tasks | selectattr('name', 'equalto', '32-Cloudflare Webmin')
+            | selectattr('playbook', 'equalto', 'playbooks/media-webmin-cloudflare.yml')
+            | list | length == 1
+          - "'default_value' in (cat.tasks | selectattr('name', 'equalto', '32-Cloudflare Webmin') | first).survey_vars[0]"
+          - "(cat.tasks | selectattr('name', 'equalto', '32-Cloudflare Webmin') | first).survey_vars[0].default_value == 'audit'"
+
+    - name: Inspect the read-only security checks and protected publication
+      ansible.builtin.set_fact:
+        cf_tasks: "{{ cf_playbook[0].tasks }}"
+        cf_append: >-
+          {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
+             'Append Webmin ingress before the existing catch-all only') | first }}
+        cf_dns: >-
+          {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
+             'Create CNAME pointing only to the existing protected tunnel') | first }}
+        cf_proof: >-
+          {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
+             'Verify public access requires Cloudflare Access challenge') | first }}
+        cf_access: >-
+          {{ cf_playbook[0].tasks | selectattr('name', 'equalto',
+             'Refuse anonymous bypass or unrestricted Webmin administration') | first }}
+
+    - name: Require Access gate, no foreign ingress and mandatory post-apply proof
+      ansible.builtin.assert:
+        that:
+          - cf_append.when is search("request_action == 'apply'")
+          - cf_dns.when is search("request_action == 'apply'")
+          - cf_dns['ansible.builtin.uri'].body.proxied | bool
+          - cf_dns['ansible.builtin.uri'].body.type == 'CNAME'
+          - cf_proof['ansible.builtin.uri'].status_code == 302
+          - cf_proof['ansible.builtin.uri'].validate_certs | bool
+          - cf_proof.retries | int >= 1
+          - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
+          - "'current_cf_config.ingress | length in [2, 3, 4]' in pve_cf_source"
+          - "'quantum_original_config.ingress | length in [2, 3, 4]' in quantum_cf_source"
+          - "'current_cf_config.ingress | length in [3, 4, 5]' in hostname_cutover_source"
+          - "'quantum_original_config.ingress[2:]' in quantum_cf_source"

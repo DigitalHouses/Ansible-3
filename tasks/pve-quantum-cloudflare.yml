@@ -108,17 +108,28 @@
   ansible.builtin.assert:
     that:
       - quantum_current_tunnel.json.success | bool
-      - quantum_original_config.ingress | length in [2, 3]
+      - quantum_original_config.ingress | length in [2, 3, 4]
       - quantum_original_config.ingress[0].hostname == public_hostname
       - quantum_original_config.ingress[0].service == desired_origin
       - quantum_original_config.ingress[0].originRequest.caPool == expected_ca_pool
       - quantum_original_config.ingress[0].originRequest.noTLSVerify is sameas false
       - quantum_original_config.ingress[-1].service == 'http_status:404'
       - quantum_original_config.ingress[-1].hostname is not defined
-      - quantum_original_config.ingress | length != 3 or quantum_original_config.ingress[1].hostname == quantum_public_hostname
+      - quantum_original_config.ingress | length < 3 or quantum_original_config.ingress[1].hostname == quantum_public_hostname
       - >-
-        quantum_original_config.ingress | length != 3 or
+        quantum_original_config.ingress | length < 3 or
         quantum_original_config.ingress[1].service in ['http://127.0.0.1:8090', quantum_expected_route.service]
+      - >-
+        quantum_original_config.ingress | length != 4 or
+        quantum_original_config.ingress[2].hostname == site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name
+      - >-
+        quantum_original_config.ingress | length != 4 or
+        quantum_original_config.ingress[2].service is match('^https://192[.]168[.][0-9.]+:10000$')
+      - >-
+        quantum_original_config.ingress | length != 4 or
+        (quantum_original_config.ingress[2].originRequest.noTLSVerify is sameas true and
+         quantum_original_config.ingress[2].originRequest.httpHostHeader ==
+         site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name)
     fail_msg: "PVE Tunnel drift, foreign Quantum route or stale PVE origin: refusing route changes"
 
 - name: Fetch exact Quantum DNS name, including conflicting record types
@@ -151,7 +162,7 @@
   ansible.builtin.debug:
     msg:
       - "QUANTUM_URL=https://{{ quantum_public_hostname }}/"
-      - "QUANTUM_TUNNEL_INGRESS_EXISTS={{ quantum_original_config.ingress | length == 3 }}"
+      - "QUANTUM_TUNNEL_INGRESS_EXISTS={{ quantum_original_config.ingress | length >= 3 }}"
       - "QUANTUM_DNS_EXISTS={{ quantum_dns_existing.json.result | length == 1 }}"
       - "QUANTUM_ACCESS=RESTRICTED"
       - "QUANTUM_CF_MODE={{ requested_mode }}"
@@ -185,8 +196,8 @@
     body:
       config: >-
         {{ quantum_original_config | combine({'ingress':
-           [quantum_original_config.ingress[0], quantum_expected_route,
-            quantum_original_config.ingress[-1]]}) }}
+           [quantum_original_config.ingress[0], quantum_expected_route] +
+           quantum_original_config.ingress[2:]}) }}
     use_proxy: false
     status_code: 200
     timeout: 30
@@ -194,7 +205,7 @@
   no_log: true
   when:
     - requested_mode == 'apply'
-    - quantum_original_config.ingress | length == 3
+    - quantum_original_config.ingress | length >= 3
     - quantum_original_config.ingress[1].service != quantum_expected_route.service
 
 - name: Create only the missing protected Quantum DNS CNAME

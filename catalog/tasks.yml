@@ -168,3 +168,16 @@ tasks:
         values:
           - {name: "Проверить текущие логины — без смены пароля", value: preflight}
           - {name: "Сменить пароль — только при наличии защищённого запроса на ZFS", value: apply}
+  - name: "32-Cloudflare Webmin"
+    playbook: playbooks/media-webmin-cloudflare.yml
+    description: "Защищённая публикация Webmin медиасервера через существующий PVE Tunnel и Cloudflare Access"
+    survey_vars:
+      - name: DH_MEDIA_WEBMIN_CF_ACTION
+        title: "Cloudflare Webmin — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить без изменений", value: audit}
+          - {name: "Опубликовать Webmin через защищённый Tunnel", value: apply}
