@@ -64,7 +64,6 @@ footer{border-top:1px solid #28394b;margin-top:37px;padding-top:22px;color:#93ab
 </head>
 <body>
 {% set host = media_spec.network.ipv4.split('/')[0] %}
-{% set admin_hostname = media_site.id ~ '-pve-mediaserver-admin.digitalhouses.vip' %}
 <div class="wrap">
 <header class="top">
 <div class="brand"><img src="/favicon.svg" alt="" width="40" height="40"> <div>DigitalHouses<small>MEDIA CENTER</small></div></div>
@@ -149,9 +148,9 @@ footer{border-top:1px solid #28394b;margin-top:37px;padding-top:22px;color:#93ab
 <p class="sub">Смена пароля владельца и администрирование пользователей сервера.</p>
 <div class="grid">
 <a class="card admin-card" href="https://{{ host }}/account/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">🔒</span><span class="name">Сменить пароль</span></div><p class="desc">Защищённая форма смены общего пароля владельца для медиаприложений и SMB.</p><span class="action">Открыть HTTPS <span>↗</span></span></a>
-<a class="card admin-card" href="https://{{ admin_hostname | e }}/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">♙</span><span class="name">Пользователи и группы</span></div><p class="desc">Webmin: создание, изменение и удаление пользователей, управление группами Linux и Samba.</p><div class="domain">Cloudflare Access · DigitalHouses Admin</div><span class="action">Открыть Webmin <span>↗</span></span></a>
+<a class="card admin-card" href="https://{{ host }}:10000/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">♙</span><span class="name">Пользователи и группы</span></div><p class="desc">Webmin: создание, изменение и удаление пользователей, управление группами Linux и Samba.</p><div class="domain">Локальная сеть · Администратор</div><span class="action">Открыть Webmin <span>↗</span></span></a>
 </div>
-<div class="note">Доступ к Webmin разрешён только администраторам DigitalHouses после авторизации через Cloudflare Access.</div>
+<div class="note">Управление пользователями и группами требует входа администратора Webmin.</div>
 </section>
 </main>
 <footer>

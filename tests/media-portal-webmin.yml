@@ -45,7 +45,9 @@
     - name: Require exact destination, native-group access and no same-tab cards
       ansible.builtin.assert:
         that:
-          - portal_markup is search('serzhan-home-pve-mediaserver-admin[.]digitalhouses[.]vip')
+          - "'href=\"https://192.168.11.232:10000/\" target=\"_blank\"' in portal_markup"
+          - "'serzhan-home-pve-mediaserver-admin.digitalhouses.vip' not in portal_markup"
+          - "'Cloudflare Access' not in portal_markup"
           - "'target=\"_blank\" rel=\"noopener noreferrer\"' in portal_markup"
           - "portal_markup.count('href=') == portal_markup.count('target=\"_blank\"') + 1"
           - "'data-copy=' in portal_markup"
