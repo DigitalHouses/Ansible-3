@@ -1,0 +1,16 @@
+---
+- name: Verify native Servarr accepted naming response
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the actual naming API tasks
+      ansible.builtin.set_fact:
+        media_naming_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-arr-naming-one.yml') | from_yaml }}"
+
+    - name: Require accepted 202 and strict readback validation
+      ansible.builtin.assert:
+        that:
+          - media_naming_tasks[3]['ansible.builtin.uri'].status_code == [200, 202]
+          - media_naming_tasks[4].name == 'Read back future-import naming policy without changing existing files'
+          - media_naming_tasks[5].name == "Require only the switch changed, not the user's naming template"
