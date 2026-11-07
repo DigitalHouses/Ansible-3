@@ -81,6 +81,20 @@
             - {name: media-smb.conf.j2, slug: samba, port: 445}
             - {name: digitalhouses-plex-agent.conf.j2, slug: plex-agent, port: 1883}
 
+        - name: Require exact Qt INI keys with one backslash (not escaped twice)
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -Fx
+              - "{{ item }}"
+              - "{{ media_test_dir.path }}/media-qbittorrent-firstboot.conf.j2"
+          loop:
+            - 'WebUI\Address=127.0.0.1'
+            - 'WebUI\LocalHostAuth=false'
+            - 'WebUI\AuthSubnetWhitelistEnabled=false'
+            - 'Session\TempPathEnabled=true'
+          changed_when: false
+
         - name: Inspect rendered native Filestash firstboot JSON
           ansible.builtin.set_fact:
             media_filestash_fixture: >-
