@@ -369,9 +369,6 @@
             fail_msg: MEDIA80_QGA_GUEST_SSH_HOSTKEY_UNTRUSTED
           when: not media_reuse_pinned_ssh | bool
 
-        - name: Verify Proxmox portion of built-in task 81 acceptance
-          ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
-
 - name: "30 | Pin the exact guest SSH identity (apply only)"
   hosts: runner
   connection: local
@@ -452,6 +449,14 @@
     - name: Install native Debian, ZFS and Intel GPU prerequisites
       ansible.builtin.include_tasks: ../tasks/media-guest-prereqs.yml
 
+    - name: Recover unresponsive QGA in kept guest through pinned SSH access
+      ansible.builtin.systemd_service:
+        name: qemu-guest-agent.service
+        state: restarted
+      when:
+        - media_vm_action == 'keep'
+        - hostvars['media_pve'].media_keep_qga_probe.rc | default(0) != 0
+
     - name: Enable native Debian serial and virtual VGA login consoles
       ansible.builtin.include_tasks: ../tasks/media30-console-apply.yml
 
@@ -507,3 +512,10 @@
       ansible.builtin.command:
         argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, up, -d]
       changed_when: true
+
+- name: "30 | Verify final PVE acceptance after guest QGA recovery"
+  hosts: media80_pve
+  gather_facts: false
+  tasks:
+    - name: Run read-only PVE acceptance after guest setup
+      ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
