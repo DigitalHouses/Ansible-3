@@ -208,9 +208,9 @@
 - name: Parse a single upstream firstboot credential block in Ansible memory
   ansible.builtin.set_fact:
     media_sambee_first_user: >-
-      {{ (media_sambee_initial_logs.stdout | regex_findall('Username:\\s*([A-Za-z0-9_]+)')) }}
+      {{ (media_sambee_initial_logs.stdout | regex_findall('Username:\s*([A-Za-z0-9_]+)')) }}
     media_sambee_first_passwords: >-
-      {{ (media_sambee_initial_logs.stdout | regex_findall('Password:\\s*(\\S+)')) }}
+      {{ (media_sambee_initial_logs.stdout | regex_findall('Password:\s*(\S+)')) }}
   when: media_sambee_owner_initial_login.status != 200
   no_log: true
 
