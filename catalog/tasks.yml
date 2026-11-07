@@ -9,6 +9,7 @@ tasks:
     description: "Ввод и замена credentials объекта, проверка доступных сервисов"
     survey_vars:
       - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "PVE — пароль root@pam (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Media VM — пароль Linux root (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT — адрес брокера (пусто = сохранить)", type: "", target: env, required: false, values: []}
