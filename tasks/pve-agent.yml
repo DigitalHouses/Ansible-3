@@ -10,6 +10,25 @@
   register: agent_build
   when: agent_build_stat.stat.exists
 
+- name: Parse installed agent version without assuming a release downgrade
+  ansible.builtin.set_fact:
+    agent_current_version: >-
+      {{ (agent_build.content | default('') | b64decode
+         | regex_findall('(?m)^version = ([0-9]+[.][0-9]+[.][0-9]+)$')
+         | first | default('0.0.0')) }}
+
+- name: Require a readable version in an existing canonical agent build
+  ansible.builtin.assert:
+    that:
+      - not agent_build_stat.stat.exists or agent_current_version != '0.0.0'
+    fail_msg: PVE_AGENT_EXISTING_BUILD_VERSION_UNREADABLE
+
+- name: Upgrade agent only when the pinned canonical release is newer
+  ansible.builtin.set_fact:
+    agent_upgrade_required: >-
+      {{ not agent_build_stat.stat.exists or
+         agent_current_version is version('0.5.73', '<') }}
+
 - name: Check for an existing local PVE Agent configuration
   ansible.builtin.stat:
     path: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
@@ -38,27 +57,41 @@
 
 - name: Download pinned canonical release installer
   ansible.builtin.get_url:
-    url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_pve_agent-v0.5.72/digitalhouses_pve_agent/install.sh
+    url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_pve_agent-v0.5.73/digitalhouses_pve_agent/install.sh
     dest: /root/.digitalhouses-pve-agent-install.sh
-    checksum: sha256:a25b0e19ec8b01c1e5b720b27969ceef23c5ffc6cc1ac16b05e9246ffd790f10
+    checksum: sha256:619fa66e5080f4b47c7f7912630bfbb3a36538f3e13a588743990642b29bdc4c
     owner: root
     group: root
     mode: '0700'
   when:
     - requested_mqtt_host | length > 0
-    - not agent_build_stat.stat.exists
+    - agent_upgrade_required
 
 - name: Install or update PVE Agent to the canonical release
   ansible.builtin.command:
     argv: [/usr/bin/bash, /root/.digitalhouses-pve-agent-install.sh]
   environment:
-    DIGITALHOUSES_SOURCE_REF: digitalhouses_pve_agent-v0.5.72
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_pve_agent-v0.5.73
     DIGITALHOUSES_INSTALL_MODE: production
   when:
     - requested_mqtt_host | length > 0
-    - not agent_build_stat.stat.exists
+    - agent_upgrade_required
   no_log: true
   changed_when: true
+
+- name: Verify canonical upgraded PVE Agent BUILD_INFO
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_upgrade_build
+  when: agent_upgrade_required and requested_mqtt_host | length > 0
+
+- name: Require pinned release after install or upgrade
+  ansible.builtin.assert:
+    that:
+      - "'version = 0.5.73' in (agent_upgrade_build.content | b64decode)"
+      - "'source = digitalhouses_pve_agent-v0.5.73' in (agent_upgrade_build.content | b64decode)"
+    fail_msg: PVE_AGENT_RELEASE_MISMATCH_AFTER_UPDATE
+  when: agent_upgrade_required and requested_mqtt_host | length > 0
 
 - name: Confirm agent is enabled and started
   ansible.builtin.systemd_service:

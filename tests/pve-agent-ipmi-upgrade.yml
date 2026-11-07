@@ -1,0 +1,42 @@
+---
+- name: Validate canonical PVE Agent IPMI release upgrade policy
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    agent_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/pve-agent.yml') | from_yaml }}"
+    installed_version_text: |
+      version = 0.5.72
+      source = digitalhouses_pve_agent-v0.5.72
+      commit = b34c72f5555087b01cad2e31a96507d85fe82ed9
+  tasks:
+    - name: Parse actual installed BUILD_INFO release
+      ansible.builtin.set_fact:
+        parsed_version: >-
+          {{ (installed_version_text
+             | regex_findall('(?m)^version = ([0-9]+[.][0-9]+[.][0-9]+)$')
+             | first | default('0.0.0')) }}
+        upgrade_step: >-
+          {{ agent_tasks | selectattr('name', 'equalto',
+             'Upgrade agent only when the pinned canonical release is newer') | first }}
+        download_step: >-
+          {{ agent_tasks | selectattr('name', 'equalto',
+             'Download pinned canonical release installer') | first }}
+        install_step: >-
+          {{ agent_tasks | selectattr('name', 'equalto',
+             'Install or update PVE Agent to the canonical release') | first }}
+
+    - name: Require exact checksum release and safe upgrade-only gating
+      ansible.builtin.assert:
+        that:
+          - parsed_version == '0.5.72'
+          - parsed_version is version('0.5.73', '<')
+          - "'0.5.73' is version('0.5.73', '==')"
+          - "'0.5.74' is version('0.5.73', '>')"
+          - "'agent_current_version is version(' in upgrade_step['ansible.builtin.set_fact'].agent_upgrade_required"
+          - download_step['ansible.builtin.get_url'].url is search('digitalhouses_pve_agent-v0.5.73')
+          - download_step['ansible.builtin.get_url'].checksum == 'sha256:619fa66e5080f4b47c7f7912630bfbb3a36538f3e13a588743990642b29bdc4c'
+          - "'agent_upgrade_required' in download_step.when"
+          - "'agent_upgrade_required' in install_step.when"
+          - install_step.environment.DIGITALHOUSES_SOURCE_REF == 'digitalhouses_pve_agent-v0.5.73'
+          - install_step.no_log | bool
