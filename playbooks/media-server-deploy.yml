@@ -431,6 +431,9 @@
     - name: Publish protected HTTPS owner password self-service
       ansible.builtin.include_tasks: ../tasks/media30-account-portal-apply.yml
 
+    - name: Install Webmin user and group administration for the media guest
+      ansible.builtin.include_tasks: ../tasks/media30-webmin-apply.yml
+
     - name: Run built-in task 81 read-only guest acceptance
       ansible.builtin.include_tasks: ../tasks/media-accept-guest.yml
 

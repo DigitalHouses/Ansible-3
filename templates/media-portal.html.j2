@@ -3,89 +3,185 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }}</title>
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<title>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }} — DigitalHouses</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
-:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#e9f2fc;background:#121b28}
-body{max-width:960px;padding:28px 20px 64px;margin:auto}
-h1{font-size:clamp(2rem,5vw,3rem);margin:16px 0}
-.brand{display:flex;align-items:center;gap:16px}
-.brand img{width:54px;height:54px;flex:none}
-@media(max-width:500px){.brand{align-items:flex-start}.brand img{width:42px;height:42px}}
-p,small{color:#b5c4d5;line-height:1.55}
-h2{font-size:1.25rem;margin:28px 0 12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
-a.card{display:block;padding:18px 20px;background:#1c2c3e;border:1px solid #354b66;
-border-radius:12px;color:#e9f2fc;text-decoration:none}
-a.card:hover,a.card:focus{border-color:#9acdf2;outline-offset:3px}
-a.card strong{display:block;margin-bottom:6px}
-code{color:#cce8fc;overflow-wrap:anywhere}
-.note{background:#1d3248;border-radius:10px;padding:14px 16px}
-pre{padding:16px;overflow-x:auto;background:#0c1623;border:1px solid #354b66;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}
-.account{margin-top:32px;padding-top:8px;border-top:1px solid #354b66}
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark;color:#eef5fe;background:#0d1521;--surface:#172538;--line:#2e4359;--muted:#a6b9ce;--mint:#83e5d8}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh}
+.wrap{max-width:1060px;padding:0 26px 45px;margin:auto}
+.top{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:20px 0;border-bottom:1px solid #28384b}
+.brand{display:flex;align-items:center;gap:12px;font-size:17px;font-weight:800;letter-spacing:-.4px}
+.brand img{height:40px;width:40px;border:1px solid #467d82;border-radius:10px;padding:5px;background:#1d3c47}
+.brand small{display:block;font-size:10px;letter-spacing:1.35px;color:#93a9bd;font-weight:650}
+.host{font-size:12px;color:#9db5c9}
+.hero{padding:35px 0 23px}
+.eyebrow{color:var(--mint);font-size:11px;font-weight:750;letter-spacing:1.65px;text-transform:uppercase}
+h1{font-size:clamp(2rem,4.5vw,2.65rem);letter-spacing:-1.1px;line-height:1.15;margin:8px 0 12px}
+.hero p{max-width:650px;line-height:1.7;font-size:14px;color:#b3c4d5;margin:0}
+.notice{border:1px solid #305762;background:#15313c;border-radius:10px;padding:12px 16px;color:#c1e5e4;font-size:13px;line-height:1.5}
+.notice strong{color:#f0ffff}
+section{margin-top:34px}
+h2{font-size:19px;font-weight:750;letter-spacing:-.3px;margin:0 0 4px}
+.sub{font-size:13px;color:#9bafc4;margin:0 0 15px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:13px;color:#eef5fe;text-decoration:none;padding:19px;display:flex;flex-direction:column;min-height:152px;transition:background .15s,border-color .15s,transform .15s}
+.card:hover,.card:focus-visible{outline:2px solid #83e5d8;outline-offset:2px;background:#21364b;transform:translateY(-1px)}
+.head{display:flex;align-items:center;gap:12px}
+.logo{display:grid;place-items:center;flex:none;width:41px;height:41px;border-radius:11px;font-size:22px;font-weight:800}
+.plex{background:#43341e;color:#efbf58}.jellyfin{background:#362849;color:#c9a7ff}
+.filestash{background:#223d55;color:#91cdff}.sambee{background:#423321;color:#eac07c}
+.radarr{background:#442f42;color:#f0bcdc}.sonarr{background:#253d48;color:#95d3e7}
+.prowlarr{background:#352e4a;color:#c9b3fa}.qb{background:#203e5a;color:#85bcff}
+.security{background:#254b4c;color:#95f0dd}
+.name{font-weight:750;font-size:15px}.desc{color:#a5b7cb;font-size:13px;line-height:1.6;margin:11px 0;flex:1}
+.action{font-size:12px;font-weight:650;color:#8eddd8;display:flex;justify-content:space-between;gap:8px;margin-top:auto}
+.admin-card{background:linear-gradient(125deg,#1b343e,#192a3e);border-color:#38656d}
+.domain{font-size:11px;color:#93e9d9;overflow-wrap:anywhere;margin-bottom:11px}
+.shares{background:#121f2e;border:1px solid #2d4358;border-radius:12px;padding:16px;margin-top:14px}
+.shares-title{font-size:13px;font-weight:700;color:#bfd3e2;margin:0 0 13px}
+.platforms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.platform-title{display:flex;align-items:center;gap:8px;color:#d6e7fa;font-weight:700;font-size:13px;margin-bottom:9px}
+.platform-title svg{width:19px;height:19px;stroke:#94cce3;fill:none;stroke-width:1.75}
+.share-row{background:#1c2e41;border:1px solid #30465c;border-radius:8px;padding:9px 10px;margin-bottom:8px}
+.share-name{font-size:11px;color:#a9bed3;margin-bottom:5px}
+.share-value{display:flex;align-items:center;gap:5px}
+.share-value code{color:#e1effb;font-family:Consolas,ui-monospace,monospace;font-size:11px;white-space:nowrap;overflow-x:auto;flex:1;min-width:0;scrollbar-width:thin}
+.copy{flex:none;display:inline-flex;align-items:center;justify-content:center;border:1px solid #3d5970;background:#263e55;color:#d6eafa;border-radius:7px;min-width:33px;height:31px;cursor:pointer}
+.copy:hover,.copy:focus-visible{outline:2px solid #83e5d8;outline-offset:1px}
+.copy svg{height:16px;width:16px;stroke:currentColor;stroke-width:1.9;fill:none}
+.feedback{min-height:15px;color:#83e5d8;font-size:11px}
+.note{padding:12px 14px;border-left:3px solid #568d96;background:#132632;border-radius:0 8px 8px 0;font-size:12px;color:#b3c9d0;margin-top:13px}
+footer{border-top:1px solid #28394b;margin-top:37px;padding-top:22px;color:#93abc1;font-size:12px;line-height:1.6}
+.footer-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.admin-cli{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:14px}
+.admin-cli span{font-weight:650;font-size:11px}
+.admin-cli code{min-width:0;flex:1;background:#142234;border:1px solid #2c4257;border-radius:7px;color:#c7d9eb;font-size:11px;line-height:1.5;padding:9px;white-space:nowrap;overflow-x:auto}
+@media(max-width:670px){.wrap{padding:0 16px 35px}.top{padding:15px 0}.host{font-size:10px}.grid,.platforms{grid-template-columns:1fr}.card{min-height:132px}.hero{padding:26px 0 21px}.shares{padding:12px}.admin-cli span{width:100%}}
 </style>
 </head>
 <body>
 {% set host = media_spec.network.ipv4.split('/')[0] %}
-<header>
-<small>DigitalHouses · медиасервер</small>
-<div class="brand"><img src="/favicon.svg" alt="" width="54" height="54"><h1>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }}</h1></div>
-<p>Сервисы домашней медиатеки. Каждое приложение использует собственную авторизацию.</p>
-<p class="note">Сохраните <code>http://{{ host }}/</code> в закладки. Пароли здесь не отображаются.</p>
+{% set admin_hostname = media_site.id ~ '-pve-mediaserver-admin.digitalhouses.vip' %}
+<div class="wrap">
+<header class="top">
+<div class="brand"><img src="/favicon.svg" alt="" width="40" height="40"> <div>DigitalHouses<small>MEDIA CENTER</small></div></div>
+<div class="host">{{ host | e }} · LAN</div>
 </header>
-<section>
-<h2>Просмотр и прослушивание</h2>
+<div class="hero">
+<div class="eyebrow">Домашний медиацентр</div>
+<h1>{{ media_spec.discovery.friendly_name | default(media_spec.name) | e }}</h1>
+<p>Фильмы, сериалы, музыка, файлы и документы вашего дома. Выберите нужный сервис.</p>
+</div>
+<div class="notice"><strong>Сохраните страницу в закладки.</strong> Все приложения и настройки открываются в новой вкладке браузера.</div>
+<main>
+<section aria-labelledby="watch">
+<h2 id="watch">Смотреть фильмы и слушать музыку</h2>
+<p class="sub">Ваша медиатека на телевизоре, компьютере и телефоне.</p>
 <div class="grid">
-<a class="card" href="http://{{ host }}:32400/web/"><strong>Plex</strong><small>Основная медиатека (отдельный Plex-аккаунт).</small></a>
-{% if media_spec.applications.jellyfin | default(false) %}
-<a class="card" href="http://{{ host }}:8096/"><strong>Jellyfin</strong><small>Фильмы, сериалы, музыка.</small></a>
+<a class="card" href="http://{{ host }}:32400/web/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo plex">❯</span><span class="name">Plex</span></div><p class="desc">Основная медиатека: фильмы, сериалы, музыка и продолжение просмотра на других устройствах.</p><span class="action">Открыть Plex <span>↗</span></span></a>
+{% if media_spec.applications.jellyfin | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8096/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo jellyfin">◆</span><span class="name">Jellyfin</span></div><p class="desc">Альтернативный проигрыватель фильмов, сериалов и музыки.</p><span class="action">Открыть Jellyfin <span>↗</span></span></a>
 {% endif %}
 </div>
 </section>
-<section>
-<h2>Доступ к файлам</h2>
+<section aria-labelledby="files">
+<h2 id="files">Файлы и документы</h2>
+<p class="sub">Работа с папками через браузер или напрямую по SMB.</p>
 <div class="grid">
-{% if media_spec.applications.filestash | default(false) %}
-<a class="card" href="http://{{ host }}:8334/"><strong>Filestash</strong><small>Работа с файлами из браузера.</small></a>
+{% if media_spec.applications.filestash | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8334/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo filestash">▣</span><span class="name">Filestash</span></div><p class="desc">Просмотр папок, загрузка и скачивание файлов прямо в браузере.</p><span class="action">Открыть Filestash <span>↗</span></span></a>
 {% endif %}
-{% if media_spec.applications.sambee | default(false) %}
-<a class="card" href="http://{{ host }}:8000/"><strong>Sambee</strong><small>Веб-файловый менеджер.</small></a>
+{% if media_spec.applications.sambee | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8000/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo sambee">⬡</span><span class="name">Sambee</span></div><p class="desc">Альтернативный файловый менеджер для общих файлов.</p><span class="action">Открыть Sambee <span>↗</span></span></a>
 {% endif %}
 </div>
-<p class="note">Windows: <code>\\{{ host }}\Media</code>. macOS: <code>smb://{{ host }}/Media</code>.<br>
-Для доступа нужны выданные учётные данные.</p>
+<div class="shares">
+<p class="shares-title">Сетевые папки · вход по личному логину</p>
+<div class="platforms">
+<div>
+<div class="platform-title"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>Windows</div>
+{% for share in ['Media','Documents'] %}
+<div class="share-row"><div class="share-name">{{ 'Медиа' if share == 'Media' else 'Документы' }}</div><div class="share-value"><code>\\{{ host }}\{{ share }}</code><button class="copy" type="button" data-copy="\\{{ host }}\{{ share }}" aria-label="Скопировать адрес {{ share }} для Windows" title="Копировать адрес"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div></div>
+{% endfor %}
+</div>
+<div>
+<div class="platform-title"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="15" rx="2"/><path d="M2 21h20M8 12h8"/></svg>macOS</div>
+{% for share in ['Media','Documents'] %}
+<div class="share-row"><div class="share-name">{{ 'Медиа' if share == 'Media' else 'Документы' }}</div><div class="share-value"><code>smb://{{ host }}/{{ share }}</code><button class="copy" type="button" data-copy="smb://{{ host }}/{{ share }}" aria-label="Скопировать адрес {{ share }} для macOS" title="Копировать адрес"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div></div>
+{% endfor %}
+</div>
+</div>
+<div id="copy-feedback" class="feedback" role="status" aria-live="polite"></div>
+</div>
 </section>
-<section>
-<h2>Загрузки и автоматизация</h2>
+<section aria-labelledby="media-control">
+<h2 id="media-control">Загрузки и управление медиатекой</h2>
+<p class="sub">Поиск, добавление и отслеживание фильмов и сериалов.</p>
 <div class="grid">
-{% if media_spec.applications.radarr | default(false) %}
-<a class="card" href="http://{{ host }}:7878/"><strong>Radarr</strong><small>Библиотека фильмов.</small></a>
+{% if media_spec.applications.radarr | default(false) | bool %}
+<a class="card" href="http://{{ host }}:7878/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo radarr">▣</span><span class="name">Radarr</span></div><p class="desc">Добавление фильмов, управление качеством и отслеживание загрузок.</p><span class="action">Управление фильмами <span>↗</span></span></a>
 {% endif %}
-{% if media_spec.applications.sonarr | default(false) %}
-<a class="card" href="http://{{ host }}:8989/"><strong>Sonarr</strong><small>Библиотека сериалов.</small></a>
+{% if media_spec.applications.sonarr | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8989/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo sonarr">▤</span><span class="name">Sonarr</span></div><p class="desc">Управление сериалами, сезонами и новыми сериями.</p><span class="action">Управление сериалами <span>↗</span></span></a>
 {% endif %}
-{% if media_spec.applications.prowlarr | default(false) %}
-<a class="card" href="http://{{ host }}:9696/"><strong>Prowlarr</strong><small>Источники поиска.</small></a>
+{% if media_spec.applications.prowlarr | default(false) | bool %}
+<a class="card" href="http://{{ host }}:9696/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo prowlarr">⌕</span><span class="name">Prowlarr</span></div><p class="desc">Настройка источников поиска для Radarr и Sonarr.</p><span class="action">Источники поиска <span>↗</span></span></a>
 {% endif %}
-{% if media_spec.applications.qbittorrent | default(false) %}
-<a class="card" href="http://{{ host }}:8080/"><strong>qBittorrent</strong><small>Очередь загрузок.</small></a>
+{% if media_spec.applications.qbittorrent | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8080/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo qb">↓</span><span class="name">qBittorrent</span></div><p class="desc">Очередь загрузок, текущая скорость и завершённые файлы.</p><span class="action">Открыть загрузки <span>↗</span></span></a>
 {% endif %}
 </div>
 </section>
-{% if media_spec.portal.show_admin_links | default(false) and media_spec.portal.admin_links | default([]) | length > 0 %}
-<section><h2>Инфраструктура</h2><div class="grid">
+{% if media_spec.portal.show_admin_links | default(false) | bool and media_spec.portal.admin_links | default([]) | length > 0 %}
+<section aria-labelledby="infra"><h2 id="infra">Инфраструктура</h2><p class="sub">Инструменты обслуживания этого дома.</p><div class="grid">
 {% for link in media_spec.portal.admin_links %}
-<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Сервис') | e }}</small></a>
+{% if link.url.startswith('https://') or link.url.startswith('http://') %}
+<a class="card" href="{{ link.url | e }}" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">⚙</span><span class="name">{{ link.label | e }}</span></div><p class="desc">{{ link.description | default('Системное управление') | e }}</p><span class="action">Открыть <span>↗</span></span></a>
+{% endif %}
 {% endfor %}
 </div></section>
 {% endif %}
-<section class="account" id="credentials">
-<h2>Управление общим паролем</h2>
-<p>Текущий пароль хранится только в защищённом файле на ZFS. Страница его не загружает и не отображает.</p>
-<p>Чтобы посмотреть пароль владельца, выполните в <strong>Shell узла Proxmox</strong>:</p>
-<pre><code>qm guest exec {{ media_spec.vmid }} -- /bin/sh -c 'sed -n "s/^password=//p" /{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_site.owner_slug }}.txt'</code></pre>
-<p><strong>Смена пароля:</strong> <a href="https://{{ host }}/account/">Открыть защищённую страницу HTTPS</a>. Укажите действующий пароль, новый пароль и повторите его. Смена выполняется сразу для Samba и медиаприложений через отдельную задачу Ansible; Plex и администратор SMB не затрагиваются. Для локального сертификата может потребоваться доверить CA на вашем компьютере.</p>
+<section aria-labelledby="accounts">
+<h2 id="accounts">Управление доступом</h2>
+<p class="sub">Смена пароля владельца и администрирование пользователей сервера.</p>
+<div class="grid">
+<a class="card admin-card" href="https://{{ host }}/account/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">🔒</span><span class="name">Сменить пароль</span></div><p class="desc">Защищённая форма смены общего пароля владельца для медиаприложений и SMB.</p><span class="action">Открыть HTTPS <span>↗</span></span></a>
+<a class="card admin-card" href="https://{{ admin_hostname | e }}/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo security">♙</span><span class="name">Пользователи и группы</span></div><p class="desc">Webmin: создание, изменение и удаление пользователей, управление группами Linux и Samba.</p><div class="domain">Cloudflare Access · DigitalHouses Admin</div><span class="action">Открыть Webmin <span>↗</span></span></a>
+</div>
+<div class="note">Доступ к Webmin разрешён только администраторам DigitalHouses после авторизации через Cloudflare Access.</div>
 </section>
-<footer><small>Локальная стартовая страница; не предоставляет единый вход и не открывает доступ из Интернета.</small></footer>
+</main>
+<footer>
+<div class="footer-top"><span>DigitalHouses Media · Локальная стартовая страница</span><span>{{ host | e }}</span></div>
+<div class="admin-cli"><span>Для администратора · PVE root</span><code id="pve-command">qm guest exec {{ media_spec.vmid }} -- cat /{{ media_spec.storage.pool_name }}/digitalhouses/credentials/{{ media_site.owner_slug }}.txt</code><button class="copy" type="button" data-copy-source="pve-command" aria-label="Скопировать команду для PVE" title="Копировать команду"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></div>
+</footer>
+</div>
+<script>
+(function(){
+"use strict";
+var status=document.getElementById("copy-feedback");
+document.querySelectorAll("button.copy").forEach(function(button){
+button.addEventListener("click",async function(){
+var id=button.getAttribute("data-copy-source");
+var value=id?document.getElementById(id).textContent:button.getAttribute("data-copy");
+var ok=false;
+if(navigator.clipboard&&window.isSecureContext){
+try{await navigator.clipboard.writeText(value);ok=true;}catch(_){}
+}
+if(!ok){
+var input=document.createElement("textarea");
+input.value=value;input.setAttribute("readonly","");input.style.position="fixed";input.style.opacity="0";
+document.body.appendChild(input);input.focus();input.select();
+try{ok=document.execCommand("copy");}catch(_){}
+input.remove();
+}
+if(status){status.textContent=ok?"Адрес скопирован":"Копирование недоступно. Выделите адрес вручную.";}
+});
+});
+}());
+</script>
 </body>
 </html>

@@ -1,0 +1,197 @@
+---
+# Install the upstream Webmin administrative UI, without adding custom
+# user-management code. Access from the internet is provisioned separately
+# by Cloudflare Access + the existing site PVE Tunnel.
+- name: Require the canonical media site identifier
+  ansible.builtin.assert:
+    that:
+      - media_site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+      - media_spec.network.ipv4 is match('^[0-9.]+/24$')
+    fail_msg: MEDIA_WEBMIN_SITE_INVALID
+
+- name: Install Webmin repository prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, gnupg, python3-debian]
+    state: present
+
+- name: Download SHA256-pinned official Webmin developer signing key
+  ansible.builtin.get_url:
+    url: https://download.webmin.com/developers-key.asc
+    dest: /usr/local/share/webmin-developers-key.asc
+    checksum: sha256:a611327d7aec27e3696651a0a3d3220c55bf3e0173d28f76be75832ea1f84441
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Read exact upstream Webmin developer key fingerprint
+  ansible.builtin.command:
+    argv: [gpg, --show-keys, --with-colons, /usr/local/share/webmin-developers-key.asc]
+  register: media_webmin_gpg
+  changed_when: false
+
+- name: Verify pinned Webmin developer signing identity
+  ansible.builtin.assert:
+    that:
+      - "'fpr:::::::::7D1AE915F3DCFADA344A4FCB2D223B918916F2A2:' in media_webmin_gpg.stdout"
+    fail_msg: MEDIA_WEBMIN_GPG_FINGERPRINT_MISMATCH
+
+- name: Inspect Webmin APT keyring
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/dh-webmin-developers.gpg
+  register: media_webmin_keyring
+
+- name: Convert verified upstream signing key into the dedicated APT keyring
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --yes
+      - --dearmor
+      - --output
+      - /usr/share/keyrings/dh-webmin-developers.gpg
+      - /usr/local/share/webmin-developers-key.asc
+  when: not media_webmin_keyring.stat.exists
+  changed_when: true
+
+- name: Register the signed stable Webmin repository
+  ansible.builtin.apt_repository:
+    repo: deb [signed-by=/usr/share/keyrings/dh-webmin-developers.gpg] https://download.webmin.com/download/newkey/repository stable contrib
+    filename: dh-webmin-stable
+    state: present
+    update_cache: true
+
+- name: Install the official Webmin package without upgrading other packages
+  ansible.builtin.apt:
+    name: webmin
+    state: present
+    install_recommends: false
+
+- name: Configure Webmin to trust only the canonical external hostname
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/config
+    regexp: '^referers='
+    line: "referers={{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip"
+    create: false
+  register: media_webmin_referers
+
+- name: Use the canonical external hostname for redirects
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/miniserv.conf
+    regexp: '^redirect_host='
+    line: "redirect_host={{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip"
+  register: media_webmin_redirect_host
+
+- name: Keep HTTPS enabled at the private origin
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/miniserv.conf
+    regexp: '^ssl='
+    line: ssl=1
+  register: media_webmin_tls
+
+- name: Keep root Webmin administration limited to Unix users and Samba modules
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/webmin.acl
+    regexp: '^root:'
+    line: 'root: useradmin samba'
+  register: media_webmin_modules
+
+- name: Enable Webmin automatic Unix account updates in Samba
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/samba/config
+    regexp: '^{{ item }}='
+    line: "{{ item }}=1"
+    create: true
+    owner: root
+    group: root
+    mode: '0640'
+  loop: [sync_add, sync_change, sync_delete]
+  register: media_webmin_samba_sync
+
+- name: Enable module synchronization on account create, modify and delete
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/useradmin/config
+    regexp: '^default_other='
+    line: default_other=1
+    create: true
+    owner: root
+    group: root
+    mode: '0640'
+  register: media_webmin_unix_sync
+
+- name: Prohibit deleting Unix system identities through the Webmin module
+  ansible.builtin.lineinfile:
+    path: /etc/webmin/useradmin/config
+    regexp: '^delete_root='
+    line: delete_root=0
+    create: true
+    owner: root
+    group: root
+    mode: '0640'
+  register: media_webmin_system_protection
+
+- name: Check whether a Webmin-only administrator password was provisioned
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/webmin-admin-password
+  register: media_webmin_password_file
+  no_log: true
+
+- name: Generate a separate Webmin-only password on first install
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '18']
+  register: media_webmin_generated_password
+  when: not media_webmin_password_file.stat.exists
+  changed_when: false
+  no_log: true
+
+- name: Retain Webmin administrative password as a protected root-only secret
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/webmin-admin-password
+    content: "{{ media_webmin_generated_password.stdout ~ '\n' }}"
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  when: not media_webmin_password_file.stat.exists
+  no_log: true
+
+- name: Initialize a Webmin-only credential instead of unlocking Unix root
+  ansible.builtin.command:
+    argv:
+      - webmin
+      - passwd
+      - --user
+      - root
+      - --webmin-only
+      - --password
+      - "{{ media_webmin_generated_password.stdout }}"
+  when: not media_webmin_password_file.stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Start or restart Webmin after configuration changes
+  ansible.builtin.systemd_service:
+    name: webmin.service
+    enabled: true
+    state: >-
+      {{ 'restarted' if
+         (media_webmin_referers.changed or media_webmin_redirect_host.changed or
+          media_webmin_tls.changed or media_webmin_modules.changed or
+          media_webmin_samba_sync.changed or media_webmin_unix_sync.changed or
+          media_webmin_system_protection.changed) else 'started' }}
+
+- name: Verify Webmin responds locally using its own HTTPS transport
+  ansible.builtin.uri:
+    url: https://127.0.0.1:10000/
+    validate_certs: false
+    use_proxy: false
+    status_code: [200, 301, 302, 303, 401, 403]
+    timeout: 15
+    follow_redirects: none
+  register: media_webmin_local_check
+  changed_when: false
+
+- name: Report separate Cloudflare commissioning requirement
+  ansible.builtin.debug:
+    msg: >-
+      WEBMIN=INSTALLED; Cloudflare Access/Tunnel must be commissioned and verified
+      separately before public URL {{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip

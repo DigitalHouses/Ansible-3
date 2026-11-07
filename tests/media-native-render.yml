@@ -8,7 +8,7 @@
     - ../vars/media-arr-releases.yml
     - ../vars/media-app-artifacts.yml
   vars:
-    media_site: {owner_slug: serzhan}
+    media_site: {id: serzhan-home, owner_slug: serzhan}
     media_arr: {slug: radarr, name: Radarr, port: 7878}
     media_arr_new_api_key:
       stdout: abcdef1234567890abcdef1234567890abcdef12

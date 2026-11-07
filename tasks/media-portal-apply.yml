@@ -66,6 +66,11 @@
       - "'/favicon.svg' in media_portal_response.content"
       - "'qm guest exec' in media_portal_response.content"
       - "'Смена пароля' in media_portal_response.content"
+      - "'target=\"_blank\" rel=\"noopener noreferrer\"' in media_portal_response.content"
+      - "'Windows' in media_portal_response.content"
+      - "'macOS' in media_portal_response.content"
+      - "'Documents' in media_portal_response.content"
+      - "media_site.id ~ '-pve-mediaserver-admin.digitalhouses.vip' in media_portal_response.content"
     fail_msg: MEDIA30_PORTAL_IDENTITY_OR_CREDENTIAL_GUIDE_MISSING
 
 - name: Verify portal lists every configured application
