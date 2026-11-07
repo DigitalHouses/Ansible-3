@@ -1,0 +1,36 @@
+---
+- name: Verify Plex Agent is always managed by task 30
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-native-plex-agent.yml') | from_yaml }}"
+    native_apps: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-native-apps.yml') | from_yaml }}"
+    acceptance: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') | from_yaml }}"
+  tasks:
+    - name: Locate upstream deployment and read-only checks
+      ansible.builtin.set_fact:
+        agent_install: >-
+          {{ native_apps | selectattr('name', 'equalto',
+             'Install the existing release-pinned DigitalHouses Plex Agent product') | first }}
+        enabled_check: >-
+          {{ acceptance | selectattr('name', 'equalto',
+             'Verify Plex Agent and GPU helper start automatically after reboot') | first }}
+        build_check: >-
+          {{ acceptance | selectattr('name', 'equalto',
+             'Require deployed Plex Agent to match the pinned upstream release') | first }}
+        service_start: >-
+          {{ role | selectattr('name', 'equalto',
+             'Start existing Plex Agent product with protected site MQTT settings') | first }}
+
+    - name: Require native installation, enabled service and strict release checks
+      ansible.builtin.assert:
+        that:
+          - agent_install['ansible.builtin.include_tasks'] == 'media-native-plex-agent.yml'
+          - service_start['ansible.builtin.systemd_service'].enabled | bool
+          - enabled_check['ansible.builtin.command'].argv[1] == 'is-enabled'
+          - enabled_check.changed_when is sameas false
+          - enabled_check.loop | length == 2
+          - "'digitalhouses_plex_agent.service' in enabled_check.loop"
+          - "'digitalhouses_plex_agent_gpu_helper.service' in enabled_check.loop"
+          - build_check['ansible.builtin.assert'].fail_msg == 'MEDIA80_ACCEPT_PLEX_AGENT_RELEASE_MISMATCH'

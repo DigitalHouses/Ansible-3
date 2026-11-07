@@ -75,6 +75,32 @@
     - digitalhouses_plex_agent.service
     - digitalhouses_plex_agent_gpu_helper.service
 
+- name: Verify Plex Agent and GPU helper start automatically after reboot
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, "{{ item }}"]
+  register: media80_accept_plex_agent_enabled
+  changed_when: false
+  failed_when: >-
+    media80_accept_plex_agent_enabled.rc != 0 or
+    media80_accept_plex_agent_enabled.stdout | trim != 'enabled'
+  loop:
+    - digitalhouses_plex_agent.service
+    - digitalhouses_plex_agent_gpu_helper.service
+
+- name: Read Plex Agent installed release information without modifying it
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+  register: media80_accept_plex_agent_build
+
+- name: Require deployed Plex Agent to match the pinned upstream release
+  ansible.builtin.assert:
+    that:
+      - "'version = 0.8.5' in (media80_accept_plex_agent_build.content | b64decode).splitlines()"
+      - >-
+        'source = digitalhouses_plex_agent-v0.8.5'
+        in (media80_accept_plex_agent_build.content | b64decode).splitlines()
+    fail_msg: MEDIA80_ACCEPT_PLEX_AGENT_RELEASE_MISMATCH
+
 - name: Verify every published user-facing local TCP port
   ansible.builtin.wait_for:
     host: "{{ media_spec.network.ipv4.split('/')[0] }}"
