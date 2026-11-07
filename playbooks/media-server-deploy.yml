@@ -15,6 +15,8 @@
       {{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}
     media_mqtt_password: >-
       {{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}
+    media_root_password: >-
+      {{ DH_MEDIA_ROOT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD'), true) }}
     media_mode: "{{ DH_MEDIA_MODE | default('audit', true) }}"
     media_vm_action: "{{ DH_MEDIA_VM_ACTION | default('', true) }}"
     media_disk_action: "{{ DH_MEDIA_DISK_ACTION | default('', true) }}"
@@ -124,6 +126,7 @@
         media30_transcode_cpu_percent: "{{ media30_transcode_cpu_percent }}"
         media_mqtt_username: "{{ media_mqtt_username }}"
         media_mqtt_password: "{{ media_mqtt_password }}"
+        media_root_password: "{{ media_root_password }}"
         media_site_blob: "{{ media_vm_file.json.sha }}"
       changed_when: false
       no_log: true
@@ -430,6 +433,7 @@
             media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
             media_mqtt_username: "{{ hostvars['media_pve'].media_mqtt_username }}"
             media_mqtt_password: "{{ hostvars['media_pve'].media_mqtt_password }}"
+            media_root_password: "{{ hostvars['media_pve'].media_root_password }}"
           changed_when: false
           no_log: true
 
@@ -448,6 +452,9 @@
 
     - name: Install native Debian, ZFS and Intel GPU prerequisites
       ansible.builtin.include_tasks: ../tasks/media-guest-prereqs.yml
+
+    - name: Apply optional root password stored in task 05 without touching other users
+      ansible.builtin.include_tasks: ../tasks/media30-root-password.yml
 
     - name: Recover unresponsive QGA in kept guest through pinned SSH access
       ansible.builtin.systemd_service:
