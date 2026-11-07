@@ -1,0 +1,40 @@
+---
+# Offline regression: Sambee firstboot log parser must use regex escapes, not literal backslashes.
+- name: Verify Sambee vendor firstboot credential parsing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sample_log: "sambee | Username: serzhan\nsambee | Password: fixture-only"
+    backslash: "\\"
+  tasks:
+    - name: Inspect the exact native Sambee parsing task
+      ansible.builtin.set_fact:
+        sambee_parser: >-
+          {{ (lookup('ansible.builtin.file',
+              playbook_dir ~ '/../tasks/media-native-sambee.yml') | from_yaml)
+             | selectattr('name', 'equalto',
+                 'Parse a single upstream firstboot credential block in Ansible memory')
+             | first }}
+
+    - name: Assert native regexes contain the expected number of escapes
+      ansible.builtin.assert:
+        that:
+          - sambee_parser['ansible.builtin.set_fact'].media_sambee_first_user.count(backslash) == 1
+          - sambee_parser['ansible.builtin.set_fact'].media_sambee_first_passwords.count(backslash) == 2
+          - sambee_parser.no_log | bool
+
+    - name: Prove vendor firstboot log shape matches corrected patterns
+      ansible.builtin.set_fact:
+        sambee_users: >-
+          {{ sample_log | regex_findall('Username:\s*([A-Za-z0-9_]+)') }}
+        sambee_passwords: >-
+          {{ sample_log | regex_findall('Password:\s*(\S+)') }}
+      no_log: true
+
+    - name: Require unique fixture credentials
+      ansible.builtin.assert:
+        that:
+          - sambee_users == ['serzhan']
+          - sambee_passwords == ['fixture-only']
+      no_log: true
