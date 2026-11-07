@@ -1,0 +1,101 @@
+---
+# Offline end-to-end render contract for the old-style HTTPS /account/ workflow.
+- name: Verify native media HTTPS account portal without changing user credentials
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_site: {owner_slug: fixture}
+    media_spec:
+      vmid: 2232
+      network: {ipv4: 192.168.11.232/24}
+      storage: {pool_name: fixture-pool}
+      applications:
+        jellyfin: true
+        radarr: true
+        sonarr: true
+        prowlarr: true
+        qbittorrent: true
+        filestash: true
+        sambee: true
+    account_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-account-portal-apply.yml') | from_yaml }}"
+  tasks:
+    - name: Create disposable account portal rendering directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: media30-account-render-
+      register: account_fixture_dir
+
+    - name: Render public site and protected local playbook templates
+      block:
+        - name: Render both nginx sites and the owner self-service form
+          ansible.builtin.template:
+            src: "{{ playbook_dir | dirname }}/templates/{{ item }}"
+            dest: "{{ account_fixture_dir.path }}/{{ item }}"
+            mode: '0600'
+          loop:
+            - media-portal-nginx.conf.j2
+            - media-account-nginx.conf.j2
+            - media-account.html.j2
+
+        - name: Render guest-native Ansible apply and preflight playbooks
+          ansible.builtin.template:
+            src: "{{ playbook_dir | dirname }}/templates/media31-local.yml.j2"
+            dest: "{{ account_fixture_dir.path }}/media31-{{ item }}.yml"
+            mode: '0600'
+          loop: [preflight, apply]
+          vars:
+            media31_local_mode: "{{ item }}"
+
+        - name: Load rendered account form and HTTP/TLS sites
+          ansible.builtin.set_fact:
+            account_http: "{{ lookup('ansible.builtin.file', account_fixture_dir.path ~ '/media-portal-nginx.conf.j2') }}"
+            account_https: "{{ lookup('ansible.builtin.file', account_fixture_dir.path ~ '/media-account-nginx.conf.j2') }}"
+            account_page: "{{ lookup('ansible.builtin.file', account_fixture_dir.path ~ '/media-account.html.j2') }}"
+            account_preflight: "{{ lookup('ansible.builtin.file', account_fixture_dir.path ~ '/media31-preflight.yml') | from_yaml }}"
+            account_apply_local: "{{ lookup('ansible.builtin.file', account_fixture_dir.path ~ '/media31-apply.yml') | from_yaml }}"
+
+        - name: Verify the old-style account page and HTTPS-only authentication boundary
+          ansible.builtin.assert:
+            that:
+              - "'https://192.168.11.232' in account_https or '192.168.11.232' in account_https"
+              - "'listen 443 ssl' in account_https"
+              - "'proxy_pass http://unix:/run/dh-media-account/service.sock:' in account_https"
+              - "'proxy_set_header X-Forwarded-Proto https' in account_https"
+              - "'access_log off' in account_https"
+              - "'allow 192.168.11.232/24' in account_https"
+              - "'return 404' in account_http"
+              - "'return 308 https://192.168.11.232' in account_http"
+              - "'Сменить общий пароль' in account_page"
+              - "'Действующий пароль' in account_page"
+              - "'Повторите новый пароль' in account_page"
+              - "'/account/api/session' in account_page"
+              - "'/account/api/change' in account_page"
+              - "('{' ~ '{') not in account_page"
+              - account_preflight[0].vars.media_rotation_mode == 'preflight'
+              - account_apply_local[0].vars.media_rotation_mode == 'apply'
+              - account_apply_local[0].vars.media_site.owner_slug == 'fixture'
+              - account_apply_local[0].vars.media_spec.applications.jellyfin | bool
+
+        - name: Require pinned backend source, protective file access, and local Ansible preflight
+          ansible.builtin.assert:
+            that:
+              - >-
+                (account_apply | selectattr('name', 'equalto',
+                'Retrieve checksum-pinned first-party HTTPS transport from its separate repository') | first)
+                ['ansible.builtin.get_url'].checksum
+                == 'sha256:8585ee426ee2131bb217d3570add71f58afc5f1f9a516c66877c3a86921ded83'
+              - >-
+                account_apply | selectattr('name', 'equalto',
+                'Require all existing owner logins work before exposing the HTTPS change form') | list | length == 1
+              - >-
+                account_apply | selectattr('name', 'equalto',
+                'Verify CSRF session from HTTPS nginx to Unix-socket API') | list | length == 1
+              - >-
+                account_apply | selectattr('name', 'equalto',
+                'Enable native automatic HTTPS certificate renewal') | list | length == 1
+      always:
+        - name: Remove disposable account portal fixtures
+          ansible.builtin.file:
+            path: "{{ account_fixture_dir.path }}"
+            state: absent

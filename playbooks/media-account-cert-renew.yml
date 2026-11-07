@@ -1,0 +1,59 @@
+---
+- name: Rotate the local HTTPS leaf before expiry through native Ansible
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check local account HTTPS certificate validity for 30 more days
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -in
+          - /etc/digitalhouses/media-account-pki/server.crt
+          - -checkend
+          - '2592000'
+          - -noout
+      register: media_account_cert_expiry
+      changed_when: false
+      failed_when: media_account_cert_expiry.rc not in [0, 1]
+
+    - name: Renew local CA-signed leaf certificate when needed
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - /etc/digitalhouses/media-account-pki/server.csr
+          - -CA
+          - /etc/digitalhouses/media-account-pki/ca.crt
+          - -CAkey
+          - /etc/digitalhouses/media-account-pki/ca.key
+          - -CAcreateserial
+          - -out
+          - /etc/digitalhouses/media-account-pki/server.crt
+          - -days
+          - '397'
+          - -sha256
+          - -extfile
+          - /etc/digitalhouses/media-account-pki/server.ext
+      when: media_account_cert_expiry.rc == 1
+      changed_when: true
+      no_log: true
+
+    - name: Verify regenerated chain against the retained local CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - verify
+          - -CAfile
+          - /etc/digitalhouses/media-account-pki/ca.crt
+          - /etc/digitalhouses/media-account-pki/server.crt
+      changed_when: false
+
+    - name: Reload nginx to serve the renewed certificate
+      ansible.builtin.systemd_service:
+        name: nginx.service
+        state: reloaded
+      when: media_account_cert_expiry.rc == 1

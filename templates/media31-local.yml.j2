@@ -1,0 +1,28 @@
+---
+# Root-owned guest-local execution of exactly the same native task-31 adapters.
+# No current or proposed password is inserted into this file.
+- name: "{{ '31 | Local owner password preflight' if media31_local_mode == 'preflight' else '31 | Local protected owner rotation' }}"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    media_rotation_mode: "{{ media31_local_mode }}"
+    media_site:
+      owner_slug: "{{ media_site.owner_slug }}"
+    media_spec:
+      storage:
+        pool_name: "{{ media_spec.storage.pool_name }}"
+      network:
+        ipv4: "{{ media_spec.network.ipv4 }}"
+      applications:
+        jellyfin: {{ media_spec.applications.jellyfin | bool | to_json }}
+        radarr: {{ media_spec.applications.radarr | bool | to_json }}
+        sonarr: {{ media_spec.applications.sonarr | bool | to_json }}
+        prowlarr: {{ media_spec.applications.prowlarr | bool | to_json }}
+        qbittorrent: {{ media_spec.applications.qbittorrent | bool | to_json }}
+        filestash: {{ media_spec.applications.filestash | bool | to_json }}
+        sambee: {{ media_spec.applications.sambee | bool | to_json }}
+  tasks:
+    - name: Execute pinned native owner-credential transaction tasks
+      ansible.builtin.include_tasks: tasks/media31-password-rotation.yml

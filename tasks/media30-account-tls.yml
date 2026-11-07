@@ -1,0 +1,140 @@
+---
+# Native Ansible OpenSSL provisioning. No custom renewal script.
+- name: Install local HTTPS certificate prerequisites
+  ansible.builtin.apt:
+    name: openssl
+    state: present
+
+- name: Restrict account-management CA directory to root
+  ansible.builtin.file:
+    path: /etc/digitalhouses/media-account-pki
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Inspect current CA and HTTPS identity
+  ansible.builtin.stat:
+    path: "/etc/digitalhouses/media-account-pki/{{ item }}"
+    follow: false
+  loop: [ca.key, ca.crt, server.key, server.crt]
+  register: media_account_tls_files
+  no_log: true
+
+- name: Require paired CA and server identities without automatic replacement
+  ansible.builtin.assert:
+    that:
+      - media_account_tls_files.results[0].stat.exists == media_account_tls_files.results[1].stat.exists
+      - media_account_tls_files.results[2].stat.exists == media_account_tls_files.results[3].stat.exists
+      - >-
+        media_account_tls_files.results |
+        selectattr('stat.exists') | selectattr('stat.isreg', 'equalto', false) |
+        list | length == 0
+    fail_msg: MEDIA_ACCOUNT_TLS_PARTIAL_OR_UNSAFE
+  no_log: true
+
+- name: Create persistent local media CA only when absent
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -newkey
+      - rsa:3072
+      - -nodes
+      - -sha256
+      - -days
+      - '3650'
+      - -subj
+      - /CN=DigitalHouses Media Local CA
+      - -keyout
+      - /etc/digitalhouses/media-account-pki/ca.key
+      - -out
+      - /etc/digitalhouses/media-account-pki/ca.crt
+  when: not media_account_tls_files.results[0].stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Issue initial media HTTPS key and CSR
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -newkey
+      - rsa:3072
+      - -nodes
+      - -keyout
+      - /etc/digitalhouses/media-account-pki/server.key
+      - -out
+      - /etc/digitalhouses/media-account-pki/server.csr
+      - -subj
+      - "/CN={{ media_spec.network.ipv4.split('/')[0] }}"
+  when: not media_account_tls_files.results[2].stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Persist exact account HTTPS IP certificate extensions
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/media-account-pki/server.ext
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      basicConstraints=CA:FALSE
+      keyUsage=digitalSignature,keyEncipherment
+      extendedKeyUsage=serverAuth
+      subjectAltName=IP:{{ media_spec.network.ipv4.split('/')[0] }}
+
+- name: Sign first local HTTPS server certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -req
+      - -in
+      - /etc/digitalhouses/media-account-pki/server.csr
+      - -CA
+      - /etc/digitalhouses/media-account-pki/ca.crt
+      - -CAkey
+      - /etc/digitalhouses/media-account-pki/ca.key
+      - -CAcreateserial
+      - -out
+      - /etc/digitalhouses/media-account-pki/server.crt
+      - -days
+      - '397'
+      - -sha256
+      - -extfile
+      - /etc/digitalhouses/media-account-pki/server.ext
+  when: not media_account_tls_files.results[3].stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Restrict HTTPS and CA private keys
+  ansible.builtin.file:
+    path: "/etc/digitalhouses/media-account-pki/{{ item }}"
+    owner: root
+    group: root
+    mode: '0600'
+  loop: [ca.key, server.key, server.csr]
+
+- name: Verify local HTTPS certificate is signed by the retained CA
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - /etc/digitalhouses/media-account-pki/ca.crt
+      - /etc/digitalhouses/media-account-pki/server.crt
+  changed_when: false
+
+- name: Require correct server IP SAN in the signed certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - /etc/digitalhouses/media-account-pki/server.crt
+      - -noout
+      - -checkip
+      - "{{ media_spec.network.ipv4.split('/')[0] }}"
+  changed_when: false

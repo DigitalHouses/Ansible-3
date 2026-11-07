@@ -1,0 +1,297 @@
+---
+# Task 30: provision the old /account/ user experience using a separate pinned
+# Node.js HTTPS transport. All password changes are native task-31 Ansible.
+- name: Require exact managed guest IP for HTTPS identity
+  ansible.builtin.assert:
+    that:
+      - media_spec.network.ipv4 is match('^[0-9.]+/24$')
+      - media_spec.network.ipv4.split('/')[0] == ansible_host
+      - media_site.owner_slug is match('^[a-z][a-z0-9_]*$')
+    fail_msg: MEDIA_ACCOUNT_MANAGED_GUEST_REQUIRED
+
+- name: Install distro-native web transport and Ansible execution prerequisites
+  ansible.builtin.apt:
+    name: [nodejs, ansible-core]
+    state: present
+
+- name: Provision retained local HTTPS identity
+  ansible.builtin.include_tasks: media30-account-tls.yml
+
+- name: Create protected native account transport directory
+  ansible.builtin.file:
+    path: /opt/dh-media-account
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create native Ansible password-adapter directory
+  ansible.builtin.file:
+    path: /opt/dh-media-account/tasks
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Retrieve checksum-pinned first-party HTTPS transport from its separate repository
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/DigitalHouses/dh-media-account/f4cfdf3aeffb9c143d16f93ca8090a5524d04918/server.mjs
+    dest: /opt/dh-media-account/server.mjs
+    checksum: sha256:8585ee426ee2131bb217d3570add71f58afc5f1f9a516c66877c3a86921ded83
+    owner: root
+    group: root
+    mode: '0600'
+  register: media_account_backend_source
+
+- name: Install exactly the native Ansible owner transaction and its adapters
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/tasks/{{ item }}"
+    dest: "/opt/dh-media-account/tasks/{{ item }}"
+    owner: root
+    group: root
+    mode: '0600'
+  loop:
+    - media31-password-rotation.yml
+    - media31-password-samba.yml
+    - media31-password-jellyfin.yml
+    - media31-password-sambee.yml
+    - media31-password-servarr.yml
+    - media31-password-qbittorrent.yml
+    - media31-password-filestash.yml
+  register: media_account_adapter_files
+  no_log: true
+
+- name: Install guest-local native password preflight and apply playbooks
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media31-local.yml.j2"
+    dest: "/opt/dh-media-account/media31-{{ item }}.yml"
+    owner: root
+    group: root
+    mode: '0600'
+  loop: [preflight, apply]
+  vars:
+    media31_local_mode: "{{ item }}"
+  register: media_account_playbooks
+  no_log: true
+
+- name: Install native Ansible HTTPS certificate renewal playbook
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/playbooks/media-account-cert-renew.yml"
+    dest: /opt/dh-media-account/media-account-cert-renew.yml
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Validate native guest-local password playbook syntax before enabling API
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - localhost,
+      - -c
+      - local
+      - --syntax-check
+      - "/opt/dh-media-account/media31-{{ item }}.yml"
+  loop: [preflight, apply]
+  changed_when: false
+  no_log: true
+
+- name: Require all existing owner logins work before exposing the HTTPS change form
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - localhost,
+      - -c
+      - local
+      - /opt/dh-media-account/media31-preflight.yml
+  changed_when: false
+  no_log: true
+
+- name: Persist root-only HTTPS account transport configuration without secrets
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/media-account-portal.json
+    content: >-
+      {{ {'ipv4': media_spec.network.ipv4.split('/')[0],
+          'owner': media_site.owner_slug,
+          'socket': '/run/dh-media-account/service.sock',
+          'passport': '/' ~ media_spec.storage.pool_name ~ '/digitalhouses/credentials/' ~ media_site.owner_slug ~ '.txt',
+          'request': '/' ~ media_spec.storage.pool_name ~ '/digitalhouses/credentials/.dh-media-password-request',
+          'journal': '/' ~ media_spec.storage.pool_name ~ '/digitalhouses/credentials/.dh-media-password-rotation.json',
+          'lock': '/' ~ media_spec.storage.pool_name ~ '/digitalhouses/credentials/.dh-media-password-rotation.lock',
+          'playbook': '/opt/dh-media-account/media31-apply.yml'}
+         | to_json }}
+    owner: root
+    group: root
+    mode: '0600'
+  register: media_account_backend_config
+  no_log: true
+
+- name: Install native systemd-managed root-only account API
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dh-media-account.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses local media account HTTPS transport
+      Wants=network-online.target
+      After=network-online.target
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      UMask=0077
+      RuntimeDirectory=dh-media-account
+      RuntimeDirectoryMode=0755
+      ExecStart=/usr/bin/node /opt/dh-media-account/server.mjs
+      Restart=on-failure
+      RestartSec=3
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      [Install]
+      WantedBy=multi-user.target
+  register: media_account_api_unit
+
+- name: Check whether protected account API code or native tasks changed
+  ansible.builtin.set_fact:
+    media_account_restart_required: >-
+      {{ media_account_backend_source.changed or
+         media_account_backend_config.changed or
+         media_account_api_unit.changed or
+         (media_account_adapter_files.results | selectattr('changed') | list | length > 0) or
+         (media_account_playbooks.results | selectattr('changed') | list | length > 0) }}
+
+- name: Start or restart the protected Unix-socket API after configuration changes
+  ansible.builtin.systemd_service:
+    name: dh-media-account.service
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if media_account_restart_required else 'started' }}"
+
+- name: Require local account API Unix socket before opening HTTPS
+  ansible.builtin.wait_for:
+    path: /run/dh-media-account/service.sock
+    state: present
+    timeout: 30
+
+- name: Create HTTPS account page directory
+  ansible.builtin.file:
+    path: /var/www/dh-media-portal/account
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Publish the original account self-service page with site owner identity
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-account.html.j2"
+    dest: /var/www/dh-media-portal/account/index.html
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install HTTPS-only nginx account site
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media-account-nginx.conf.j2"
+    dest: /etc/nginx/sites-enabled/dh-media-account-https.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_account_https_nginx
+
+- name: Reject invalid nginx HTTPS configuration before reload
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false
+
+- name: Reload nginx to expose verified local HTTPS account interface
+  ansible.builtin.systemd_service:
+    name: nginx.service
+    state: "{{ 'reloaded' if media_account_https_nginx.changed else 'started' }}"
+
+- name: Install local certificate renewal systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dh-media-account-cert-renew.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Renew DigitalHouses local media HTTPS certificate
+      [Service]
+      Type=oneshot
+      User=root
+      ExecStart=/usr/bin/ansible-playbook -i localhost, -c local /opt/dh-media-account/media-account-cert-renew.yml
+
+- name: Install daily local certificate renewal timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dh-media-account-cert-renew.timer
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Check DigitalHouses media HTTPS certificate daily
+      [Timer]
+      OnCalendar=daily
+      Persistent=true
+      Unit=dh-media-account-cert-renew.service
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable native automatic HTTPS certificate renewal
+  ansible.builtin.systemd_service:
+    name: dh-media-account-cert-renew.timer
+    enabled: true
+    daemon_reload: true
+    state: started
+
+- name: Verify real trusted HTTPS password form
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - --max-time
+      - '15'
+      - --cacert
+      - /etc/digitalhouses/media-account-pki/ca.crt
+      - "https://{{ media_spec.network.ipv4.split('/')[0] }}/account/"
+  register: media_account_https_form
+  changed_when: false
+
+- name: Require current password, requested password and confirmation fields
+  ansible.builtin.assert:
+    that:
+      - "'Сменить общий пароль' in media_account_https_form.stdout"
+      - "'Действующий пароль' in media_account_https_form.stdout"
+      - "'Повторите новый пароль' in media_account_https_form.stdout"
+    fail_msg: MEDIA_ACCOUNT_HTTPS_FORM_MISSING
+
+- name: Verify CSRF session from HTTPS nginx to Unix-socket API
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - --max-time
+      - '10'
+      - --cacert
+      - /etc/digitalhouses/media-account-pki/ca.crt
+      - "https://{{ media_spec.network.ipv4.split('/')[0] }}/account/api/session"
+  register: media_account_session_check
+  changed_when: false
+  no_log: true
+
+- name: Require a real CSRF token from the account service
+  ansible.builtin.assert:
+    that:
+      - (media_account_session_check.stdout | from_json).csrf | length >= 32
+    fail_msg: MEDIA_ACCOUNT_HTTPS_API_SESSION_MISSING
+  no_log: true

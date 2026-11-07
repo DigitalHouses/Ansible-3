@@ -7,7 +7,7 @@
 
 В режиме `apply` обновляются только: Samba owner, Jellyfin owner, Sambee owner, Radarr/Sonarr/Prowlarr Forms owner, qBittorrent owner, Filestash configuration-admin bcrypt. Filestash SMB passthrough работает через новый пароль Samba. Пароль `serzhan_admin`, Plex.com, MQTT, API-ключи интеграций не трогаются.
 
-**Веб-форма HTTPS не входит в этот этап**. Никогда не вводите пароль в портальный HTTP 80 или Semaphore Survey. Отдельная HTTPS-задача может вызывать проверенный механизм после независимого теста безопасности.
+HTTPS-форма `/account/` устанавливается задачей №30 отдельно от логики ротации: изолированный `dh-media-account` на Node.js только проверяет HTTP/CSRF/текущий пароль, формирует root-only запрос и запускает **те же нативные Ansible tasks №31 локально на госте**. Старые Python-скрипты не используются. Никогда не вводите пароль в HTTP 80 или Semaphore Survey. До успешного live E2E ротации требуется отдельная проверка всех адаптеров; наличие формы само по себе не доказывает завершённую смену.
 
 ## Модель секретов
 
