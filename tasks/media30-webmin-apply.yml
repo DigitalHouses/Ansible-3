@@ -189,6 +189,9 @@
     follow_redirects: none
   register: media_webmin_local_check
   changed_when: false
+  retries: 15
+  delay: 2
+  until: media_webmin_local_check.status | default(-1) in [200, 301, 302, 303, 401, 403]
 
 - name: Report separate Cloudflare commissioning requirement
   ansible.builtin.debug:
