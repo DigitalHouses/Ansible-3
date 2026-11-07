@@ -286,6 +286,54 @@
           vars:
             media_vm: "{{ media_spec }}"
 
+        - name: Inspect previously QGA-verified media SSH identity on Runner for keep
+          ansible.builtin.stat:
+            path: /var/lib/semaphore/.ssh/media80_known_hosts
+            follow: false
+          delegate_to: runner
+          register: media_prior_known_host
+          when: media_vm_action == 'keep'
+
+        - name: Select previously pinned identity only for existing unchanged VM
+          ansible.builtin.set_fact:
+            media_reuse_pinned_ssh: >-
+              {{ media_vm_action == 'keep' and
+                 (media_prior_known_host.stat.exists | default(false)) }}
+
+        - name: Validate stored trust anchor is private, regular, and owned by Semaphore
+          ansible.builtin.assert:
+            that:
+              - media_prior_known_host.stat.isreg | bool
+              - media_prior_known_host.stat.mode == '0600'
+              - media_prior_known_host.stat.pw_name == 'semaphore'
+              - media_prior_known_host.stat.size | int < 300
+            fail_msg: MEDIA30_PRIOR_SSH_TRUST_ANCHOR_INVALID
+          when: media_reuse_pinned_ssh | bool
+
+        - name: Read previously QGA-pinned host key for unchanged VM
+          ansible.builtin.slurp:
+            src: /var/lib/semaphore/.ssh/media80_known_hosts
+          delegate_to: runner
+          register: media_prior_key_contents
+          when: media_reuse_pinned_ssh | bool
+
+        - name: Reuse previously authenticated ED25519 identity for keep
+          ansible.builtin.set_fact:
+            media_guest_hostkey: >-
+              {{ (media_prior_key_contents.content | b64decode | trim)
+                 .split(' ', 1)[1] }}
+          when: media_reuse_pinned_ssh | bool
+
+        - name: Verify stored guest key is a single exact-IP ED25519 pin
+          ansible.builtin.assert:
+            that:
+              - media_guest_hostkey is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}$')
+              - >-
+                (media_prior_key_contents.content | b64decode | trim) ==
+                (media_spec.network.ipv4.split('/')[0] ~ ' ' ~ media_guest_hostkey)
+            fail_msg: MEDIA30_PRIOR_SSH_PIN_MISMATCH
+          when: media_reuse_pinned_ssh | bool
+
         - name: Read guest ED25519 host key through authenticated QGA
           ansible.builtin.command:
             argv:
@@ -298,6 +346,7 @@
               - /etc/ssh/ssh_host_ed25519_key.pub
           register: media_guest_qga_hostkey
           changed_when: false
+          when: not media_reuse_pinned_ssh | bool
           retries: 60
           delay: 5
           until: >-
@@ -310,6 +359,7 @@
             media_guest_hostkey: >-
               {{ ((media_guest_qga_hostkey.stdout | from_json)['out-data'] | trim)
                  .split()[:2] | join(' ') }}
+          when: not media_reuse_pinned_ssh | bool
 
         - name: Require a valid non-truncated guest host key
           ansible.builtin.assert:
@@ -317,6 +367,7 @@
               - media_guest_hostkey is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}$')
               - not ((media_guest_qga_hostkey.stdout | from_json)['out-truncated'] | default(false) | bool)
             fail_msg: MEDIA80_QGA_GUEST_SSH_HOSTKEY_UNTRUSTED
+          when: not media_reuse_pinned_ssh | bool
 
         - name: Verify Proxmox portion of built-in task 81 acceptance
           ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml

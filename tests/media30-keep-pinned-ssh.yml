@@ -1,0 +1,44 @@
+---
+- name: Task 30 reuses only a previously authenticated guest identity on keep
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') | from_yaml }}"
+  tasks:
+    - name: Locate the existing guest trust and SSH verification stages
+      ansible.builtin.set_fact:
+        vm_stage: "{{ deploy | selectattr('name', 'equalto', '30 | Stage native VM lifecycle (apply only)') | first }}"
+        ssh_stage: "{{ deploy | selectattr('name', 'equalto', '30 | Pin the exact guest SSH identity (apply only)') | first }}"
+
+    - name: Extract only native Ansible host-key tasks
+      ansible.builtin.set_fact:
+        operations: "{{ vm_stage.tasks[0].block }}"
+        ssh_operations: "{{ ssh_stage.tasks[0].block }}"
+
+    - name: Confirm previously pinned SSH trust is used only for keep
+      ansible.builtin.set_fact:
+        pin_stat: >-
+          {{ operations | selectattr('name', 'equalto',
+             'Inspect previously QGA-verified media SSH identity on Runner for keep') | first }}
+        pin_condition: "{{ operations | selectattr('name', 'equalto', 'Select previously pinned identity only for existing unchanged VM') | first }}"
+        trusted_file_check: >-
+          {{ operations | selectattr('name', 'equalto',
+             'Validate stored trust anchor is private, regular, and owned by Semaphore') | first }}
+        pin_check: "{{ operations | selectattr('name', 'equalto', 'Verify stored guest key is a single exact-IP ED25519 pin') | first }}"
+        qga_read: "{{ operations | selectattr('name', 'equalto', 'Read guest ED25519 host key through authenticated QGA') | first }}"
+        ssh_scan: "{{ ssh_operations | selectattr('name', 'equalto', 'Read guest SSH advertised key from the media IP') | first }}"
+
+    - name: Require no bypass on new VMs and preserved exact-key verification
+      ansible.builtin.assert:
+        that:
+          - pin_stat.delegate_to == 'runner'
+          - pin_stat.when == "media_vm_action == 'keep'"
+          - pin_stat['ansible.builtin.stat'].follow is sameas false
+          - pin_condition['ansible.builtin.set_fact'].media_reuse_pinned_ssh is search("media_vm_action == 'keep'")
+          - trusted_file_check.when is search('media_reuse_pinned_ssh')
+          - pin_check.when is search('media_reuse_pinned_ssh')
+          - qga_read.when is search('not media_reuse_pinned_ssh')
+          - qga_read.retries | int == 60
+          - ssh_scan.retries | int >= 1
+          - ssh_scan.until is search('media_guest_hostkey')
