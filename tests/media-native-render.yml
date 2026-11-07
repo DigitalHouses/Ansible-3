@@ -114,6 +114,20 @@
               - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - >-
+                '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
+                in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-portal.html.j2')
+              - >-
+                'qm guest exec 2232' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-portal.html.j2')
+              - >-
+                '/serzhan-pool/digitalhouses/credentials/serzhan.txt'
+                in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-portal.html.j2')
+              - >-
+                'Смена пароля' in lookup('ansible.builtin.file',
+                  media_test_dir.path ~ '/media-portal.html.j2')
+              - >-
                 'topic_prefix = DigitalHouses/Global/digitalhouses_plex_agent'
                 in lookup('ansible.builtin.file',
                   media_test_dir.path ~ '/digitalhouses-plex-agent.conf.j2')
