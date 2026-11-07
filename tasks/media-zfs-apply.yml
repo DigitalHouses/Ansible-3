@@ -165,6 +165,8 @@
   when:
     - media_raw_disk_action == 'erase'
     - item in ansible_facts.services
+    # service_facts can report dangling systemd units as status=not-found.
+    - ansible_facts.services[item].status | default('not-found') != 'not-found'
 
 - name: Destroy only an active single-disk ZFS pool on the selected SATA drive
   ansible.builtin.command:
