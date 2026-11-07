@@ -33,3 +33,25 @@
           - "'zpool, destroy' in zfs_apply"
           - "'media_vm.storage.import_pool_guid' not in zfs_apply"
           - "'media30-erase-guest-identity.yml' not in zfs_apply"
+          - "\"ansible_facts.services[item].status | default('not-found') != 'not-found'\" in zfs_apply"
+
+    - name: Simulate service facts containing installed, dangling and absent units
+      ansible.builtin.set_fact:
+        media30_stoppable_units: "{{ (media30_stoppable_units | default([])) + [item] }}"
+      loop:
+        - nginx.service
+        - nfs-server.service
+        - absent.service
+      vars:
+        ansible_facts:
+          services:
+            nginx.service: {status: enabled}
+            nfs-server.service: {status: not-found}
+      when:
+        - item in ansible_facts.services
+        - ansible_facts.services[item].status | default('not-found') != 'not-found'
+
+    - name: Require only installed service to be selected for stopping
+      ansible.builtin.assert:
+        that:
+          - media30_stoppable_units == ['nginx.service']
