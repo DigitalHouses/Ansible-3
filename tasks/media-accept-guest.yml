@@ -1,6 +1,15 @@
 ---
 # Built-in task 81: read-only acceptance after the native app phase.
 # No formatting, provisioning or storage lifecycle operations are permitted here.
+- name: Verify rclone is installed and can report its version
+  ansible.builtin.command:
+    argv: [rclone, version]
+  register: media80_accept_rclone
+  changed_when: false
+  failed_when: >-
+    media80_accept_rclone.rc != 0 or
+    not media80_accept_rclone.stdout.startswith('rclone v')
+
 - name: Observe selected media ZFS pool health
   ansible.builtin.command:
     argv: [zpool, status, -x, "{{ media_spec.storage.pool_name }}"]
