@@ -485,6 +485,9 @@
     - name: Commission native media applications with protected firstboot
       ansible.builtin.include_tasks: ../tasks/media-native-apps.yml
 
+    - name: Install official rclone and enable authenticated LAN Web GUI
+      ansible.builtin.include_tasks: ../tasks/media30-rclone-apply.yml
+
     - name: Enforce one shared CPU budget for Plex and Jellyfin
       ansible.builtin.include_tasks: ../tasks/media30-cpu-shared-apply.yml
 
