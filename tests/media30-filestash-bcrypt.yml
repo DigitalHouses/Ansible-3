@@ -1,0 +1,24 @@
+---
+# Offline regression: stdin for htpasswd must not contain an unintended newline.
+- name: Verify Filestash firstboot bcrypt input
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Inspect native Ansible firstboot hash task
+      ansible.builtin.set_fact:
+        media_filestash_hash_task: >-
+          {{ (lookup('ansible.builtin.file',
+              playbook_dir ~ '/../tasks/media-native-filestash.yml') | from_yaml)
+             | selectattr('name', 'equalto',
+                 'Generate native bcrypt hash for first Filestash admin login')
+             | first }}
+
+    - name: Require exact bcrypt stdin without extra linefeeds
+      ansible.builtin.assert:
+        that:
+          - media_filestash_hash_task['ansible.builtin.command'].argv == ['htpasswd', '-niB', '-C', '12', '']
+          - media_filestash_hash_task['ansible.builtin.command'].stdin_add_newline == false
+          - "'media_owner_password' in media_filestash_hash_task['ansible.builtin.command'].stdin"
+          - media_filestash_hash_task['ansible.builtin.command'].stdin == (media_filestash_hash_task['ansible.builtin.command'].stdin | trim)
+          - media_filestash_hash_task.no_log | bool
