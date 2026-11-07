@@ -46,7 +46,7 @@
     body: >-
       {{ media_wire_naming_before.json
          | combine({media_wire_name_switch: true}) }}
-    status_code: 200
+    status_code: [200, 202]
     use_proxy: false
   when: not media_wire_naming_before.json[media_wire_name_switch] | bool
   no_log: true
