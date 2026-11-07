@@ -210,6 +210,49 @@
   when: media_arr_auth_after.json.bindAddress != '*'
   no_log: true
 
+- name: Read saved Servarr LAN policy after native API update
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_arr.port }}/api/{{ media_arr.version }}/config/host"
+    headers:
+      X-Api-Key: "{{ media_arr_api_keys[0] }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  register: media_arr_lan_config
+  retries: 10
+  delay: 2
+  until: >-
+    media_arr_lan_config.status == 200
+    and media_arr_lan_config.json.bindAddress == '*'
+    and media_arr_lan_config.json.authenticationMethod | lower == 'forms'
+    and media_arr_lan_config.json.authenticationRequired | lower == 'enabled'
+  changed_when: false
+  no_log: true
+
+- name: Check whether the authenticated Servarr LAN listener is effective
+  ansible.builtin.wait_for:
+    host: "{{ media_spec.network.ipv4.split('/')[0] }}"
+    port: "{{ media_arr.port }}"
+    state: started
+    timeout: 2
+  register: media_arr_lan_probe
+  changed_when: false
+  failed_when: false
+
+- name: Restart Servarr only if its saved LAN binding is not yet active
+  ansible.builtin.systemd_service:
+    name: "{{ media_arr.slug }}.service"
+    state: restarted
+  when: media_arr_lan_probe.msg is defined
+
+- name: Require the authenticated native Servarr LAN listener to respond
+  ansible.builtin.wait_for:
+    host: "{{ media_spec.network.ipv4.split('/')[0] }}"
+    port: "{{ media_arr.port }}"
+    state: started
+    timeout: 60
+  changed_when: false
+
 - name: Verify Servarr service is active after authentication
   ansible.builtin.command:
     argv: [systemctl, is-active, "{{ media_arr.slug }}.service"]

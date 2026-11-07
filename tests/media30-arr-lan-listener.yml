@@ -1,0 +1,60 @@
+---
+# Offline native Ansible regression: authenticated Servarr LAN bind needs one targeted restart.
+- name: Verify Servarr LAN listener convergence
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read actual native Servarr task ordering
+      ansible.builtin.set_fact:
+        media_arr_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-native-arr-one.yml') | from_yaml }}"
+
+    - name: Locate the probe and targeted restart tasks
+      ansible.builtin.set_fact:
+        media_arr_task_names: "{{ media_arr_tasks | map(attribute='name') | list }}"
+        media_arr_probe_task: >-
+          {{ media_arr_tasks
+             | selectattr('name', 'equalto',
+                 'Check whether the authenticated Servarr LAN listener is effective')
+             | first }}
+        media_arr_restart_task: >-
+          {{ media_arr_tasks
+             | selectattr('name', 'equalto',
+                 'Restart Servarr only if its saved LAN binding is not yet active')
+             | first }}
+
+    - name: Require authentication verification before any conditional restart
+      ansible.builtin.assert:
+        that:
+          - >-
+            media_arr_task_names.index(
+              'Require Forms login and enabled authentication before LAN binding')
+            < media_arr_task_names.index(
+              'Enable Servarr LAN listener only after verified Forms authentication')
+          - >-
+            media_arr_task_names.index('Read saved Servarr LAN policy after native API update')
+            < media_arr_task_names.index(
+              'Restart Servarr only if its saved LAN binding is not yet active')
+          - media_arr_probe_task.failed_when == false
+          - media_arr_restart_task.when == 'media_arr_lan_probe.msg is defined'
+          - >-
+            media_arr_task_names.index(
+              'Require the authenticated native Servarr LAN listener to respond')
+            > media_arr_task_names.index(
+              'Restart Servarr only if its saved LAN binding is not yet active')
+
+    - name: Probe a closed local port without failing the play
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 65534
+        state: started
+        timeout: 1
+      register: offline_lan_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Require timeout result signals an absent listener for the guarded restart
+      ansible.builtin.assert:
+        that:
+          - offline_lan_probe.msg is defined
+          - offline_lan_probe.msg is search('Timeout')
