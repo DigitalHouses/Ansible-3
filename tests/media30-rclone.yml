@@ -1,0 +1,25 @@
+---
+- name: Task 30 rclone native installation and read-only acceptance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    prereqs: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-guest-prereqs.yml') | from_yaml }}"
+    acceptance: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') | from_yaml }}"
+  tasks:
+    - name: Locate canonical APT install and acceptance tasks
+      ansible.builtin.set_fact:
+        install_task: >-
+          {{ prereqs | selectattr('name', 'equalto',
+             'Install native Debian media storage prerequisites') | first }}
+        check_task: >-
+          {{ acceptance | selectattr('name', 'equalto',
+             'Verify rclone is installed and can report its version') | first }}
+
+    - name: Require idempotent native package installation and read-only version check
+      ansible.builtin.assert:
+        that:
+          - "'rclone' in install_task['ansible.builtin.apt'].name"
+          - install_task['ansible.builtin.apt'].state == 'present'
+          - check_task['ansible.builtin.command'].argv == ['rclone', 'version']
+          - check_task.changed_when is sameas false
