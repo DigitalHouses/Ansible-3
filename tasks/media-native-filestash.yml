@@ -67,7 +67,8 @@
 - name: Generate native bcrypt hash for first Filestash admin login
   ansible.builtin.command:
     argv: [htpasswd, -niB, -C, '12', '']
-    stdin: "{{ media_owner_password }}\n"
+    stdin: "{{ media_owner_password }}"
+    stdin_add_newline: false
   register: media_filestash_new_bcrypt
   changed_when: false
   when: not media_filestash_env_stat.stat.exists
