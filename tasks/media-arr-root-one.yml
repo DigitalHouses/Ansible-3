@@ -1,5 +1,17 @@
 ---
 # Reconcile one actual Radarr/Sonarr root folder through its official API.
+- name: Allow native Servarr group to write only its managed library directory
+  ansible.builtin.file:
+    path: "{{ media_wire_arr.path }}"
+    state: directory
+    group: media_group
+    mode: '2775'
+
+- name: Require effective Servarr service can write its declared library root
+  ansible.builtin.command:
+    argv: [runuser, -u, "{{ media_wire_arr.slug }}", --, test, -w, "{{ media_wire_arr.path }}"]
+  changed_when: false
+
 - name: List current native Servarr library roots
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/rootfolder"
