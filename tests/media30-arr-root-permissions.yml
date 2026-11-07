@@ -1,0 +1,22 @@
+---
+# Offline regression for native Radarr/Sonarr ZFS root access before the API call.
+- name: Verify media Arr root permission reconciliation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Inspect the actual native Servarr root task list
+      ansible.builtin.set_fact:
+        media_arr_root_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-arr-root-one.yml') | from_yaml }}"
+
+    - name: Require non-recursive media group access before API reconciliation
+      ansible.builtin.assert:
+        that:
+          - media_arr_root_tasks[0].name == 'Allow native Servarr group to write only its managed library directory'
+          - media_arr_root_tasks[0]['ansible.builtin.file'].group == 'media_group'
+          - media_arr_root_tasks[0]['ansible.builtin.file'].mode == '2775'
+          - "'recurse' not in media_arr_root_tasks[0]['ansible.builtin.file']"
+          - "'media_wire_arr.path' in media_arr_root_tasks[0]['ansible.builtin.file'].path"
+          - media_arr_root_tasks[1].name == 'Require effective Servarr service can write its declared library root'
+          - media_arr_root_tasks[1].changed_when == false
+          - media_arr_root_tasks[2].name == 'List current native Servarr library roots'
