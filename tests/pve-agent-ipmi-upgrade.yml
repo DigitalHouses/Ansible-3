@@ -30,13 +30,13 @@
       ansible.builtin.assert:
         that:
           - parsed_version == '0.5.72'
-          - parsed_version is version('0.5.73', '<')
-          - "'0.5.73' is version('0.5.73', '==')"
-          - "'0.5.74' is version('0.5.73', '>')"
+          - parsed_version is version('0.5.74', '<')
+          - "'0.5.74' is version('0.5.74', '==')"
+          - "'0.5.75' is version('0.5.74', '>')"
           - "'agent_current_version is version(' in upgrade_step['ansible.builtin.set_fact'].agent_upgrade_required"
-          - download_step['ansible.builtin.get_url'].url is search('digitalhouses_pve_agent-v0.5.73')
+          - download_step['ansible.builtin.get_url'].url is search('digitalhouses_pve_agent-v0.5.74')
           - download_step['ansible.builtin.get_url'].checksum == 'sha256:619fa66e5080f4b47c7f7912630bfbb3a36538f3e13a588743990642b29bdc4c'
           - "'agent_upgrade_required' in download_step.when"
           - "'agent_upgrade_required' in install_step.when"
-          - install_step.environment.DIGITALHOUSES_SOURCE_REF == 'digitalhouses_pve_agent-v0.5.73'
+          - install_step.environment.DIGITALHOUSES_SOURCE_REF == 'digitalhouses_pve_agent-v0.5.74'
           - install_step.no_log | bool
