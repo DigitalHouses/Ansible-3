@@ -66,19 +66,21 @@
     state: present
     install_recommends: false
 
-- name: Configure Webmin to trust only the canonical external hostname
+- name: Trust both the LAN IP and existing public Webmin hostname for browser referers
   ansible.builtin.lineinfile:
     path: /etc/webmin/config
     regexp: '^referers='
-    line: "referers={{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip"
+    line: >-
+      referers={{ media_spec.network.ipv4.split('/')[0] }}
+      {{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip
     create: false
   register: media_webmin_referers
 
-- name: Use the canonical external hostname for redirects
+- name: Do not force LAN Webmin logins to the Cloudflare hostname
   ansible.builtin.lineinfile:
     path: /etc/webmin/miniserv.conf
     regexp: '^redirect_host='
-    line: "redirect_host={{ media_site.id }}-pve-mediaserver-admin.digitalhouses.vip"
+    state: absent
   register: media_webmin_redirect_host
 
 - name: Keep HTTPS enabled at the private origin
