@@ -184,4 +184,4 @@ tasks:
           - {name: "Опубликовать Webmin через защищённый Tunnel", value: apply}
   - name: "33-rclone Web GUI"
     playbook: playbooks/media-rclone-gui.yml
-    description: "Точечное обновление rclone v1.76 и штатного Web GUI на существующей медиа VM без изменения VM/ZFS/Plex"
+    description: "Штатный rclone Web GUI v1.76.0 и Restic 0.19.1 (только бинарник); без изменений VM/ZFS/Plex и без заданий backup"
