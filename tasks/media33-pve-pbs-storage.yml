@@ -61,25 +61,26 @@
          media33_pve_existing_storages[0].content == 'backup')
     fail_msg: MEDIA33_PVE_PBS_STORAGE_ID_CONFLICT
 
-- name: Add the local PBS datastore to PVE with native storage CLI
+- name: Add local PBS storage with password prompt fed through a private pseudo-TTY
   ansible.builtin.command:
     argv:
-      - pvesm
-      - add
-      - pbs
-      - "{{ media33_pve_storage_id }}"
-      - --server
-      - "{{ media33_pve_pbs_ip }}"
-      - --datastore
-      - "{{ media33_pve_storage_id }}"
-      - --username
-      - "{{ media33_pve_auth_id }}"
-      - --fingerprint
-      - "{{ media33_pve_fingerprint }}"
-      - --content
-      - backup
+      - script
+      - -q
+      - -e
+      - -c
+      - >-
+        pvesm add pbs {{ media33_pve_storage_id }}
+        --server {{ media33_pve_pbs_ip }}
+        --datastore {{ media33_pve_storage_id }}
+        --username {{ media33_pve_auth_id }}
+        --fingerprint {{ media33_pve_fingerprint }}
+        --content backup --password
+      - /dev/null
+    stdin: "{{ hostvars['media33_guest'].media33_pve_token_secret }}"
+    stdin_add_newline: true
   when: media33_pve_existing_storages | length == 0
   changed_when: true
+  no_log: true
 
 - name: Verify the existing or newly registered PBS storage configuration
   ansible.builtin.command:
