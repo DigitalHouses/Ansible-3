@@ -1,0 +1,173 @@
+---
+# Official version-pinned rclone; GUI runs as the non-login media owner,
+# never as root. The LAN RC API is password-protected and is not published by CF.
+- name: Require amd64 for the pinned upstream rclone release
+  ansible.builtin.command:
+    argv: [dpkg, --print-architecture]
+  register: media_rclone_arch
+  changed_when: false
+  failed_when: media_rclone_arch.stdout | trim != 'amd64'
+
+- name: Prepare upstream rclone package cache
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/rclone
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Fetch checksum-verified official rclone v1.76.0 package
+  ansible.builtin.get_url:
+    url: https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-linux-amd64.deb
+    dest: /var/cache/digitalhouses/rclone/rclone-v1.76.0-linux-amd64.deb
+    checksum: sha256:9db7ee9b725bce7cdd195b9183449a4c6fb93cad3e6578e70b87c0bc7f6062e9
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_rclone_download
+
+- name: Install pinned upstream rclone Debian package
+  ansible.builtin.apt:
+    deb: /var/cache/digitalhouses/rclone/rclone-v1.76.0-linux-amd64.deb
+  register: media_rclone_package
+
+- name: Observe existing DigitalHouses media state directory
+  ansible.builtin.stat:
+    path: /var/lib/digitalhouses
+    follow: false
+  register: media_rclone_state_parent
+
+- name: Create media state parent only when missing
+  ansible.builtin.file:
+    path: /var/lib/digitalhouses
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: not media_rclone_state_parent.stat.exists
+
+- name: Create restricted persistent rclone configuration directory
+  ansible.builtin.file:
+    path: /var/lib/digitalhouses/rclone
+    state: directory
+    owner: "{{ media_site.owner_slug }}"
+    group: media_group
+    mode: '0700'
+
+- name: Observe existing DigitalHouses guest configuration directory
+  ansible.builtin.stat:
+    path: /etc/digitalhouses
+    follow: false
+  register: media_rclone_config_parent
+
+- name: Create protected guest configuration parent only when missing
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  when: not media_rclone_config_parent.stat.exists
+
+- name: Inspect existing rclone Web GUI login secret
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/rclone-gui.env
+    follow: false
+  register: media_rclone_secret_stat
+  no_log: true
+
+- name: Reject unsafe existing rclone login secret
+  ansible.builtin.assert:
+    that:
+      - not media_rclone_secret_stat.stat.exists or media_rclone_secret_stat.stat.isreg
+      - not (media_rclone_secret_stat.stat.islnk | default(false))
+      - not media_rclone_secret_stat.stat.exists or media_rclone_secret_stat.stat.pw_name == 'root'
+      - not media_rclone_secret_stat.stat.exists or media_rclone_secret_stat.stat.mode == '0600'
+    fail_msg: MEDIA30_RCLONE_SECRET_UNSAFE
+  no_log: true
+
+- name: Generate long, independent GUI password once
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '24']
+  register: media_rclone_random
+  changed_when: false
+  when: not media_rclone_secret_stat.stat.exists
+  no_log: true
+
+- name: Persist rclone GUI credentials only inside the VM
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/rclone-gui.env
+    content: "RCLONE_RC_USER=mediaadmin\nRCLONE_RC_PASS={{ media_rclone_random.stdout }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  when: not media_rclone_secret_stat.stat.exists
+  register: media_rclone_secret_copy
+  no_log: true
+
+- name: Read preserved rclone GUI credentials for validation and health checks
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/rclone-gui.env
+  register: media_rclone_secret
+  no_log: true
+
+- name: Require exact, protected rclone GUI credential format
+  ansible.builtin.assert:
+    that:
+      - (media_rclone_secret.content | b64decode).splitlines() | length == 2
+      - (media_rclone_secret.content | b64decode).splitlines()[0] == 'RCLONE_RC_USER=mediaadmin'
+      - (media_rclone_secret.content | b64decode).splitlines()[1] is match('^RCLONE_RC_PASS=[0-9a-f]{48}$')
+    fail_msg: MEDIA30_RCLONE_SECRET_INVALID
+  no_log: true
+
+- name: Install least-privileged persistent rclone GUI service
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/media30-rclone-gui.service.j2"
+    dest: /etc/systemd/system/dh-rclone-gui.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_rclone_unit
+
+- name: Enable authenticated rclone GUI at the declared LAN address
+  ansible.builtin.systemd_service:
+    name: dh-rclone-gui.service
+    daemon_reload: true
+    enabled: true
+    state: >-
+      {{ 'restarted' if media_rclone_package.changed or
+         (media_rclone_secret_copy.changed | default(false)) or
+         media_rclone_unit.changed else 'started' }}
+
+- name: Verify GUI responds on its separate LAN port
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/login"
+    status_code: 200
+  register: media_rclone_gui_health
+  until: media_rclone_gui_health.status | default(0) == 200
+  retries: 5
+  delay: 2
+  changed_when: false
+
+- name: Verify rclone API rejects unauthenticated clients
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/core/version"
+    method: POST
+    status_code: 401
+  changed_when: false
+
+- name: Verify authorized rclone API can report its version
+  ansible.builtin.uri:
+    url: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/core/version"
+    method: POST
+    url_username: mediaadmin
+    url_password: "{{ (media_rclone_secret.content | b64decode).splitlines()[1][15:] }}"
+    force_basic_auth: true
+    status_code: 200
+  register: media_rclone_api_health
+  failed_when: >-
+    media_rclone_api_health.status | default(0) != 200 or
+    media_rclone_api_health.json.version | default('') != 'v1.76.0'
+  changed_when: false
+  no_log: true

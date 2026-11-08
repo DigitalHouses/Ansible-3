@@ -30,7 +30,6 @@
       - util-linux
       - pciutils
       - smartmontools
-      - rclone
     state: present
     update_cache: true
     # Fresh cloud images may already have a recent main-only APT cache.

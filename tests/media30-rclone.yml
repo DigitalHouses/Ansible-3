@@ -1,25 +1,68 @@
 ---
-- name: Task 30 rclone native installation and read-only acceptance
+- name: Verify upstream-pinned rclone and protected native GUI contract
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     prereqs: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-guest-prereqs.yml') | from_yaml }}"
+    setup: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-rclone-apply.yml') | from_yaml }}"
     acceptance: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') | from_yaml }}"
+    media_site: {id: serzhan-home, owner_slug: serzhan}
+    media_spec: {network: {ipv4: '192.168.11.232/24'}}
   tasks:
-    - name: Locate canonical APT install and acceptance tasks
+    - name: Select exact package, secret and readiness tasks
       ansible.builtin.set_fact:
-        install_task: >-
-          {{ prereqs | selectattr('name', 'equalto',
-             'Install native Debian media storage prerequisites') | first }}
-        check_task: >-
-          {{ acceptance | selectattr('name', 'equalto',
-             'Verify rclone is installed and can report its version') | first }}
+        prereq_task: "{{ prereqs | selectattr('name', 'equalto', 'Install native Debian media storage prerequisites') | first }}"
+        package_task: "{{ setup | selectattr('name', 'equalto', 'Fetch checksum-verified official rclone v1.76.0 package') | first }}"
+        apt_task: "{{ setup | selectattr('name', 'equalto', 'Install pinned upstream rclone Debian package') | first }}"
+        secret_task: "{{ setup | selectattr('name', 'equalto', 'Persist rclone GUI credentials only inside the VM') | first }}"
+        auth_task: "{{ setup | selectattr('name', 'equalto', 'Verify authorized rclone API can report its version') | first }}"
+        version_task: "{{ acceptance | selectattr('name', 'equalto', 'Verify rclone is installed and can report its version') | first }}"
 
-    - name: Require idempotent native package installation and read-only version check
+    - name: Require pinned official artifact, single generated secret and exact version
       ansible.builtin.assert:
         that:
-          - "'rclone' in install_task['ansible.builtin.apt'].name"
-          - install_task['ansible.builtin.apt'].state == 'present'
-          - check_task['ansible.builtin.command'].argv == ['rclone', 'version']
-          - check_task.changed_when is sameas false
+          - "'rclone' not in prereq_task['ansible.builtin.apt'].name"
+          - package_task['ansible.builtin.get_url'].url == 'https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-linux-amd64.deb'
+          - package_task['ansible.builtin.get_url'].checksum == 'sha256:9db7ee9b725bce7cdd195b9183449a4c6fb93cad3e6578e70b87c0bc7f6062e9'
+          - apt_task['ansible.builtin.apt'].deb.endswith('rclone-v1.76.0-linux-amd64.deb')
+          - secret_task['ansible.builtin.copy'].force is sameas false
+          - secret_task.no_log is sameas true
+          - auth_task.no_log is sameas true
+          - version_task['ansible.builtin.command'].argv == ['rclone', 'version']
+          - "'v1.76.0' in version_task.failed_when"
+          - version_task.changed_when is sameas false
+
+    - name: Create ephemeral location for unit rendering
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: dh-rclone-test-
+      register: tmp
+
+    - name: Render owner-scoped LAN systemd service
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/media30-rclone-gui.service.j2"
+        dest: "{{ tmp.path }}/dh-rclone-gui.service"
+        mode: '0600'
+
+    - name: Read rendered unit
+      ansible.builtin.set_fact:
+        unit: "{{ lookup('ansible.builtin.file', tmp.path ~ '/dh-rclone-gui.service') }}"
+
+    - name: Require official GUI, two LAN ports and no exposed secret or root execution
+      ansible.builtin.assert:
+        that:
+          - "'User=serzhan' in unit"
+          - "'User=root' not in unit"
+          - "'EnvironmentFile=/etc/digitalhouses/rclone-gui.env' in unit"
+          - "'--addr 192.168.11.232:5580' in unit"
+          - "'--api-addr 192.168.11.232:5572' in unit"
+          - "'--no-open-browser' in unit"
+          - "'--log-level ERROR' in unit"
+          - "'--pass ' not in unit"
+          - "'--no-auth' not in unit"
+
+    - name: Delete isolated render fixture
+      ansible.builtin.file:
+        path: "{{ tmp.path }}"
+        state: absent

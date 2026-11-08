@@ -71,6 +71,7 @@
       - "'macOS' in media_portal_response.content"
       - "'Documents' in media_portal_response.content"
       - "'https://' ~ media_spec.network.ipv4.split('/')[0] ~ ':10000/' in media_portal_response.content"
+      - "'http://' ~ media_spec.network.ipv4.split('/')[0] ~ ':5580/login?url=' in media_portal_response.content"
       - "'-pve-mediaserver-admin.digitalhouses.vip' not in media_portal_response.content"
     fail_msg: MEDIA30_PORTAL_IDENTITY_OR_CREDENTIAL_GUIDE_MISSING
 

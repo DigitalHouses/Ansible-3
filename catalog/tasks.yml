@@ -182,3 +182,6 @@ tasks:
         values:
           - {name: "Проверить без изменений", value: audit}
           - {name: "Опубликовать Webmin через защищённый Tunnel", value: apply}
+  - name: "33-rclone Web GUI"
+    playbook: playbooks/media-rclone-gui.yml
+    description: "Точечное обновление rclone v1.76 и штатного Web GUI на существующей медиа VM без изменения VM/ZFS/Plex"

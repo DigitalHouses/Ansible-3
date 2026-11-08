@@ -1,0 +1,22 @@
+[Unit]
+Description=DigitalHouses rclone Web GUI (LAN administrators)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ media_site.owner_slug }}
+Group=media_group
+WorkingDirectory=/var/lib/digitalhouses/rclone
+Environment=HOME=/var/lib/digitalhouses/rclone
+EnvironmentFile=/etc/digitalhouses/rclone-gui.env
+ExecStart=/usr/bin/rclone gui --config /var/lib/digitalhouses/rclone/rclone.conf --addr {{ media_spec.network.ipv4.split('/')[0] }}:5580 --api-addr {{ media_spec.network.ipv4.split('/')[0] }}:5572 --no-open-browser --log-level ERROR
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

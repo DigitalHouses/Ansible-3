@@ -8,7 +8,7 @@
   changed_when: false
   failed_when: >-
     media80_accept_rclone.rc != 0 or
-    not media80_accept_rclone.stdout.startswith('rclone v')
+    not media80_accept_rclone.stdout.startswith('rclone v1.76.0')
 
 - name: Observe selected media ZFS pool health
   ansible.builtin.command:
