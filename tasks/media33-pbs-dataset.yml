@@ -1,0 +1,88 @@
+---
+# Task 33: create only the named PBS ZFS filesystem inside the existing media
+# pool. Never import, destroy, reformat, rename or adjust an existing dataset.
+# PBS datastore registration and quotas are separate, explicit tasks.
+- name: Derive the one permitted owner-specific PBS dataset
+  ansible.builtin.set_fact:
+    media33_pbs_dataset: "{{ media_spec.storage.pool_name }}/pbs-{{ media_site.owner_slug }}"
+    media33_pbs_path: "/{{ media_spec.storage.pool_name }}/pbs-{{ media_site.owner_slug }}"
+
+- name: Validate canonical owner and exact target ZFS path
+  ansible.builtin.assert:
+    that:
+      - media_site.owner_slug is match('^[a-z][a-z0-9-]*$')
+      - media_spec.storage.pool_name == media_site.owner_slug ~ '-pool'
+      - media33_pbs_dataset == media_spec.storage.pool_name ~ '/pbs-' ~ media_site.owner_slug
+      - media33_pbs_path == '/' ~ media33_pbs_dataset
+    fail_msg: MEDIA33_PBS_DATASET_IDENTITY_MISMATCH
+
+- name: Require the existing owner-specific ZFS pool to be imported and online
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, 'name,health', "{{ media_spec.storage.pool_name }}"]
+  register: media33_pbs_pool
+  changed_when: false
+  failed_when: >-
+    media33_pbs_pool.rc != 0 or
+    media33_pbs_pool.stdout.split() != [media_spec.storage.pool_name, 'ONLINE']
+
+- name: Read existing media pool mountpoint without altering it
+  ansible.builtin.command:
+    argv: [zfs, get, -H, -o, value, mountpoint, "{{ media_spec.storage.pool_name }}"]
+  register: media33_pbs_pool_mountpoint
+  changed_when: false
+  failed_when: >-
+    media33_pbs_pool_mountpoint.rc != 0 or
+    media33_pbs_pool_mountpoint.stdout | trim != '/' ~ media_spec.storage.pool_name
+
+- name: Inspect only the expected PBS dataset name
+  ansible.builtin.command:
+    argv: [zfs, list, -H, -o, type, "{{ media33_pbs_dataset }}"]
+  register: media33_pbs_existing
+  changed_when: false
+  failed_when: media33_pbs_existing.rc not in [0, 1]
+
+- name: Reject a conflicting ZFS volume or snapshot at the PBS name
+  ansible.builtin.assert:
+    that:
+      - media33_pbs_existing.rc != 0 or media33_pbs_existing.stdout | trim == 'filesystem'
+    fail_msg: MEDIA33_PBS_DATASET_NAME_OCCUPIED
+
+- name: Observe the intended directory before creating a mount
+  ansible.builtin.stat:
+    path: "{{ media33_pbs_path }}"
+    follow: false
+  register: media33_pbs_mount_path
+
+- name: Never mount a new ZFS dataset over an existing directory or symlink
+  ansible.builtin.assert:
+    that:
+      - media33_pbs_existing.rc == 0 or not media33_pbs_mount_path.stat.exists
+    fail_msg: MEDIA33_PBS_DATASET_MOUNTPOINT_OCCUPIED
+
+- name: Create only the missing PBS filesystem with no quota or reservations
+  ansible.builtin.command:
+    argv: [zfs, create, -o, atime=off, "{{ media33_pbs_dataset }}"]
+  when: media33_pbs_existing.rc != 0
+  changed_when: true
+
+- name: Read back the named ZFS filesystem and its actual mountpoint
+  ansible.builtin.command:
+    argv: [zfs, list, -H, -o, 'name,mountpoint,mounted', -t, filesystem, "{{ media33_pbs_dataset }}"]
+  register: media33_pbs_readback
+  changed_when: false
+
+- name: Require the PBS ZFS filesystem is mounted at the intended exact path
+  ansible.builtin.assert:
+    that:
+      - media33_pbs_readback.rc == 0
+      - media33_pbs_readback.stdout.split() == [media33_pbs_dataset, media33_pbs_path, 'yes']
+    fail_msg: MEDIA33_PBS_DATASET_READBACK_MISMATCH
+
+- name: Confirm the PBS path is backed by the exact ZFS filesystem
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, SOURCE, -T, "{{ media33_pbs_path }}"]
+  register: media33_pbs_findmnt
+  changed_when: false
+  failed_when: >-
+    media33_pbs_findmnt.rc != 0 or
+    media33_pbs_findmnt.stdout | trim != media33_pbs_dataset
