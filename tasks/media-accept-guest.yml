@@ -10,6 +10,25 @@
     media80_accept_rclone.rc != 0 or
     not media80_accept_rclone.stdout.startswith('rclone v1.76.0')
 
+- name: Read installed Proxmox Backup Server package version
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Version}', proxmox-backup-server]
+  register: media80_accept_pbs_version
+  changed_when: false
+  failed_when: >-
+    media80_accept_pbs_version.rc != 0 or
+    not (media80_accept_pbs_version.stdout | trim is version('4.2', '>='))
+
+- name: Require PBS HTTPS proxy and backup API are active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  register: media80_accept_pbs_units
+  changed_when: false
+  failed_when: media80_accept_pbs_units.rc != 0 or media80_accept_pbs_units.stdout | trim != 'active'
+  loop:
+    - proxmox-backup.service
+    - proxmox-backup-proxy.service
+
 - name: Observe selected media ZFS pool health
   ansible.builtin.command:
     argv: [zpool, status, -x, "{{ media_spec.storage.pool_name }}"]

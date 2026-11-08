@@ -1,0 +1,55 @@
+---
+- name: Validate PBS 4.2+ installation is native, signed and scoped
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media_pbs_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-pbs-apply.yml') | from_yaml }}"
+    media30_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}"
+    media33_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-rclone-gui.yml') }}"
+    guest_accept_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') }}"
+  tasks:
+    - name: Find the exact PBS repository, package and service tasks
+      ansible.builtin.set_fact:
+        pbs_key: >-
+          {{ media_pbs_tasks | selectattr('name', 'equalto',
+             'Download verified official Proxmox Trixie key only when absent') | first }}
+        pbs_repo: >-
+          {{ media_pbs_tasks | selectattr('name', 'equalto',
+             'Enable only official Trixie PBS no-subscription repository') | first }}
+        pbs_pkg: >-
+          {{ media_pbs_tasks | selectattr('name', 'equalto',
+             'Install minimal PBS server version 4.2 or newer without replacing Debian kernel') | first }}
+        pbs_version_guard: >-
+          {{ media_pbs_tasks | selectattr('name', 'equalto',
+             'Require PBS version 4.2 or newer') | first }}
+        pbs_https: >-
+          {{ media_pbs_tasks | selectattr('name', 'equalto',
+             'Verify local PBS HTTPS UI responds without opening external access') | first }}
+
+    - name: Verify native PBS package and minimum version guard
+      ansible.builtin.assert:
+        that:
+          - pbs_pkg['ansible.builtin.apt'].name == 'proxmox-backup-server>=4.2'
+          - pbs_pkg['ansible.builtin.apt'].state == 'present'
+          - pbs_pkg['ansible.builtin.apt'].install_recommends is sameas false
+          - pbs_key['ansible.builtin.get_url'].checksum == 'sha256:136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45'
+          - "'pbs-no-subscription' in pbs_repo['ansible.builtin.copy'].content"
+          - "'Suites: trixie' in pbs_repo['ansible.builtin.copy'].content"
+          - "'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg' in pbs_repo['ansible.builtin.copy'].content"
+          - "'version(' in pbs_version_guard['ansible.builtin.assert'].that[1]"
+          - pbs_https['ansible.builtin.uri'].url == 'https://127.0.0.1:8007/'
+          - "'../tasks/media30-pbs-apply.yml' in media30_source"
+          - "'../tasks/media30-pbs-apply.yml' in media33_source"
+          - "'proxmox-backup-proxy.service' in guest_accept_source"
+          - "'proxmox-backup' in media_pbs_tasks | to_json"
+          - "'datastore create' not in media_pbs_tasks | to_json"
+          - "'zpool ' not in media_pbs_tasks | to_json"
+
+    - name: Test version ordering without installing PBS
+      ansible.builtin.assert:
+        that:
+          - "'4.1.10-1' is not version('4.2', '>=')"
+          - "'4.2.0-1' is version('4.2', '>=')"
+          - "'4.2.9-1' is version('4.2', '>=')"
+          - "'4.3.0-1' is version('4.2', '>=')"

@@ -1,5 +1,5 @@
 ---
-# 33 | Official rclone GUI + restic executable on a pinned media VM. No VM, ZFS or apps lifecycle.
+# 33 | rclone GUI, restic and PBS server on existing pinned media VM; no VM/ZFS lifecycle.
 - name: "33 | Resolve canonical media site and pinned guest access"
   hosts: runner
   connection: local
@@ -89,7 +89,7 @@
       changed_when: false
       no_log: true
 
-- name: "33 | Install pinned rclone GUI and restic without backup operations"
+- name: "33 | Install pinned rclone, restic and PBS server without backup operations"
   hosts: media33_existing_guest
   gather_facts: false
   become: true
@@ -123,6 +123,9 @@
     - name: Install only the official restic 0.19.1 executable
       ansible.builtin.include_tasks: ../tasks/media33-restic-apply.yml
 
+    - name: Install native Proxmox Backup Server 4.2 or newer
+      ansible.builtin.include_tasks: ../tasks/media30-pbs-apply.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -151,6 +154,8 @@
           status: MEDIA33_RCLONE_GUI_AND_RESTIC_READY
           rclone_version: v1.76.0
           restic_version: 0.19.1
+          pbs_version: "{{ media_pbs_version.stdout | trim }}"
+          pbs_url: "https://{{ media_spec.network.ipv4.split('/')[0] }}:8007/"
           gui: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/"
           api: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/"
           password_file: /etc/digitalhouses/rclone-gui.env
