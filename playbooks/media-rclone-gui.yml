@@ -1,5 +1,5 @@
 ---
-# 33 | Only rclone GUI on an existing, pinned media VM. No VM, ZFS or apps lifecycle.
+# 33 | Official rclone GUI + restic executable on a pinned media VM. No VM, ZFS or apps lifecycle.
 - name: "33 | Resolve canonical media site and pinned guest access"
   hosts: runner
   connection: local
@@ -89,7 +89,7 @@
       changed_when: false
       no_log: true
 
-- name: "33 | Install only upstream rclone and authenticated LAN GUI"
+- name: "33 | Install pinned rclone GUI and restic without backup operations"
   hosts: media33_existing_guest
   gather_facts: false
   become: true
@@ -120,6 +120,9 @@
     - name: Install only official rclone and its protected GUI service
       ansible.builtin.include_tasks: ../tasks/media30-rclone-apply.yml
 
+    - name: Install only the official restic 0.19.1 executable
+      ansible.builtin.include_tasks: ../tasks/media33-restic-apply.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -145,8 +148,9 @@
     - name: Report the LAN-only GUI URL and protected password location
       ansible.builtin.debug:
         msg:
-          status: MEDIA33_RCLONE_GUI_READY
-          version: v1.76.0
+          status: MEDIA33_RCLONE_GUI_AND_RESTIC_READY
+          rclone_version: v1.76.0
+          restic_version: 0.19.1
           gui: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/"
           api: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/"
           password_file: /etc/digitalhouses/rclone-gui.env

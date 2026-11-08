@@ -1,0 +1,31 @@
+---
+- name: Verify pinned restic installation is scoped to task 33
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    installer: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-restic-apply.yml') | from_yaml }}"
+    task33_text: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-rclone-gui.yml') }}"
+  tasks:
+    - name: Select exact official installer tasks
+      ansible.builtin.set_fact:
+        download: "{{ installer | selectattr('name', 'equalto', 'Download verified official restic 0.19.1 amd64 release') | first }}"
+        decompress: "{{ installer | selectattr('name', 'equalto', 'Unpack restic executable in the release cache only if absent') | first }}"
+        validate_binary: "{{ installer | selectattr('name', 'equalto', 'Reject unexpected or incomplete restic executable') | first }}"
+        install: "{{ installer | selectattr('name', 'equalto', 'Install upstream restic executable without modifying distro packages') | first }}"
+        check_version: "{{ installer | selectattr('name', 'equalto', 'Verify executable reports exact pinned restic release') | first }}"
+
+    - name: Validate pinned hashes and non-destructive installer contract
+      ansible.builtin.assert:
+        that:
+          - download['ansible.builtin.get_url'].url == 'https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_amd64.bz2'
+          - download['ansible.builtin.get_url'].checksum == 'sha256:f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c'
+          - decompress['ansible.builtin.command'].creates == '/var/cache/digitalhouses/restic/restic_0.19.1_linux_amd64'
+          - "'20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639' in validate_binary['ansible.builtin.assert'].that[-1]"
+          - install['ansible.builtin.copy'].dest == '/usr/local/bin/restic'
+          - install['ansible.builtin.copy'].remote_src is sameas true
+          - install['ansible.builtin.copy'].mode == '0755'
+          - check_version['ansible.builtin.command'].argv == ['/usr/local/bin/restic', 'version']
+          - check_version.changed_when is sameas false
+          - "'../tasks/media33-restic-apply.yml' in task33_text"
+          - "'restic_version: 0.19.1' in task33_text"
