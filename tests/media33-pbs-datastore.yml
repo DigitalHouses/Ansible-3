@@ -1,0 +1,72 @@
+---
+- name: Verify safe PBS datastore registration and ZFS atime handling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    zfs_tasks: >-
+      {{ lookup('ansible.builtin.file',
+         playbook_dir ~ '/../tasks/media33-pbs-dataset.yml') | from_yaml }}
+    datastore_tasks: >-
+      {{ lookup('ansible.builtin.file',
+         playbook_dir ~ '/../tasks/media33-pbs-datastore.yml') | from_yaml }}
+    media33_source: >-
+      {{ lookup('ansible.builtin.file',
+         playbook_dir ~ '/../playbooks/media-rclone-gui.yml') }}
+  tasks:
+    - name: Locate exact ZFS access-time and datastore registration actions
+      ansible.builtin.set_fact:
+        zfs_create: >-
+          {{ zfs_tasks | selectattr('name', 'equalto',
+             'Create only the missing PBS filesystem with GC-compatible access times') | first }}
+        zfs_atime_fix: >-
+          {{ zfs_tasks | selectattr('name', 'equalto',
+             'Enable access-time tracking only on this PBS dataset when needed') | first }}
+        store_list: >-
+          {{ datastore_tasks | selectattr('name', 'equalto',
+             'Read configured PBS datastores as structured JSON') | first }}
+        store_create: >-
+          {{ datastore_tasks | selectattr('name', 'equalto',
+             'Register the PBS datastore on the exact mounted ZFS path once') | first }}
+        store_empty: >-
+          {{ datastore_tasks | selectattr('name', 'equalto',
+             'Refuse to initialize PBS over unknown existing dataset files') | first }}
+        store_owner: >-
+          {{ datastore_tasks | selectattr('name', 'equalto',
+             'Set PBS backup service ownership on the empty mountpoint only') | first }}
+        store_readback: >-
+          {{ datastore_tasks | selectattr('name', 'equalto',
+             'Verify named datastore exists in PBS after registration') | first }}
+
+    - name: Assert only the permitted PBS dataset is prepared and registered
+      ansible.builtin.assert:
+        that:
+          - zfs_create['ansible.builtin.command'].argv[3] == 'atime=on'
+          - zfs_atime_fix['ansible.builtin.command'].argv[:3] == ['zfs', 'set', 'atime=on']
+          - zfs_atime_fix.when == "media33_pbs_atime.stdout | trim == 'off'"
+          - store_list['ansible.builtin.command'].argv == ['proxmox-backup-manager', 'datastore', 'list', '--output-format', 'json']
+          - store_create['ansible.builtin.command'].argv[:3] == ['proxmox-backup-manager', 'datastore', 'create']
+          - store_create['ansible.builtin.command'].argv[3] is search('media_site.owner_slug')
+          - store_create.when == 'media33_pbs_configured | length == 0'
+          - store_empty.when == 'media33_pbs_configured | length == 0'
+          - store_owner['ansible.builtin.file'].owner == 'backup'
+          - store_owner['ansible.builtin.file'].group == 'backup'
+          - store_owner.when == 'media33_pbs_configured | length == 0'
+          - store_readback['ansible.builtin.command'].argv[:3] == ['proxmox-backup-manager', 'datastore', 'show']
+          - "'../tasks/media33-pbs-dataset.yml' in media33_source"
+          - "'../tasks/media33-pbs-datastore.yml' in media33_source"
+          - "'proxmox-backup-manager, datastore, remove' not in datastore_tasks | to_json"
+          - "'zfs, destroy' not in datastore_tasks | to_json"
+
+    - name: Test PBS already-registered datastore and conflicting path selections
+      ansible.builtin.set_fact:
+        existing_stores:
+          - {name: 'pbs-serzhan', path: '/serzhan-pool/pbs-serzhan'}
+          - {name: 'other-store', path: '/other-pool/data'}
+
+    - name: Require repeated runs keep correct datastore path exactly
+      ansible.builtin.assert:
+        that:
+          - (existing_stores | selectattr('name', 'equalto', 'pbs-serzhan') | list | first).path == '/serzhan-pool/pbs-serzhan'
+          - (existing_stores | selectattr('path', 'equalto', '/serzhan-pool/pbs-serzhan') | list | first).name == 'pbs-serzhan'
+          - (existing_stores | selectattr('path', 'equalto', '/serzhan-pool/pbs-other') | list | length) == 0

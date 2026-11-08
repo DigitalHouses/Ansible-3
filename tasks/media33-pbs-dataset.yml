@@ -1,7 +1,8 @@
 ---
 # Task 33: create only the named PBS ZFS filesystem inside the existing media
-# pool. Never import, destroy, reformat, rename or adjust an existing dataset.
-# PBS datastore registration and quotas are separate, explicit tasks.
+# pool. Never import, destroy, reformat or rename an existing dataset.
+# PBS GC requires working atime. Adjust only the dedicated PBS dataset's atime;
+# do not touch the media parent or any ZFS quotas or reservations.
 - name: Derive the one permitted owner-specific PBS dataset
   ansible.builtin.set_fact:
     media33_pbs_dataset: "{{ media_spec.storage.pool_name }}/pbs-{{ media_site.owner_slug }}"
@@ -59,11 +60,35 @@
       - media33_pbs_existing.rc == 0 or not media33_pbs_mount_path.stat.exists
     fail_msg: MEDIA33_PBS_DATASET_MOUNTPOINT_OCCUPIED
 
-- name: Create only the missing PBS filesystem with no quota or reservations
+- name: Create only the missing PBS filesystem with GC-compatible access times
   ansible.builtin.command:
-    argv: [zfs, create, -o, atime=off, "{{ media33_pbs_dataset }}"]
+    argv: [zfs, create, -o, atime=on, "{{ media33_pbs_dataset }}"]
   when: media33_pbs_existing.rc != 0
   changed_when: true
+
+- name: Read PBS dataset access-time property independently of the media parent
+  ansible.builtin.command:
+    argv: [zfs, get, -H, -o, value, atime, "{{ media33_pbs_dataset }}"]
+  register: media33_pbs_atime
+  changed_when: false
+  failed_when: >-
+    media33_pbs_atime.rc != 0 or
+    media33_pbs_atime.stdout | trim not in ['on', 'off']
+
+- name: Enable access-time tracking only on this PBS dataset when needed
+  ansible.builtin.command:
+    argv: [zfs, set, atime=on, "{{ media33_pbs_dataset }}"]
+  when: media33_pbs_atime.stdout | trim == 'off'
+  changed_when: true
+
+- name: Confirm PBS dataset has access-time tracking enabled for safe GC
+  ansible.builtin.command:
+    argv: [zfs, get, -H, -o, value, atime, "{{ media33_pbs_dataset }}"]
+  register: media33_pbs_atime_readback
+  changed_when: false
+  failed_when: >-
+    media33_pbs_atime_readback.rc != 0 or
+    media33_pbs_atime_readback.stdout | trim != 'on'
 
 - name: Read back the named ZFS filesystem and its actual mountpoint
   ansible.builtin.command:
