@@ -71,6 +71,9 @@
         media_spec: "{{ (media_vm_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
+    - name: Resolve media guest LAN address from the task 30 Survey
+      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+
     - name: Resolve selected CPU caps from the task 30 Survey or site manifest
       ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
 
@@ -157,6 +160,20 @@
              | select('search', ': ') | map('split', ': ', 1)) }}
       when: media_vm_conf.stat.exists
 
+    - name: Never silently readdress an existing VM in keep mode
+      ansible.builtin.assert:
+        that:
+          - >-
+            media_current_vm.ipconfig0 | default('') is search(
+              '(^|,)ip=' ~ (media_spec.network.ipv4 | regex_escape) ~ '(,|$)')
+        fail_msg: >-
+          MEDIA30_KEEP_IP_CHANGE_REFUSED: keep cannot readdress a running
+          guest; use the existing IP or select a separate VM create/recreate.
+      when:
+        - media_mode == 'apply'
+        - media_vm_action == 'keep'
+        - media_vm_conf.stat.exists
+
     - name: Check whether selected PCI functions are present on this PVE
       ansible.builtin.stat:
         path: "/sys/bus/pci/devices/{{ item.value }}"
@@ -184,6 +201,18 @@
       when: item.path != '/etc/pve/qemu-server/' ~ (media_spec.vmid | string) ~ '.conf'
       register: media_other_vm_configs
       no_log: true
+
+    - name: Prevent duplicate static media IP in any other PVE VM
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_other_vm_configs.results
+             | selectattr('content', 'defined')
+             | map(attribute='content') | map('b64decode')
+             | select('search', '(^|\\n)ipconfig[0-9]+: ip=' ~
+                 (media_spec.network.ipv4 | regex_escape) ~ '(,|\\n|$)')
+             | list | length) == 0
+        fail_msg: MEDIA30_IP_ALREADY_CONFIGURED_ON_OTHER_PVE_VM
 
     - name: Require no other VM to own the SATA controller
       ansible.builtin.assert:
@@ -529,3 +558,19 @@
   tasks:
     - name: Run read-only PVE acceptance after guest setup
       ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
+
+- name: "30 | Persist newly selected IP after successful guest and PVE acceptance"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars:
+    media_github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
+    media_github_base: >-
+      https://api.github.com/repos/DigitalHouses/site-{{ media_site.id
+      }}/contents/inventories/{{ media_site.id }}
+  tasks:
+    - name: Write changed static media IP to the private site manifest
+      ansible.builtin.include_tasks: ../tasks/media30-ip-persist.yml
+      when:
+        - hostvars['media_pve'].media_mode == 'apply'
+        - media_spec.network.ipv4 != media30_manifest_ipv4

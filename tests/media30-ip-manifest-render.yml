@@ -1,0 +1,45 @@
+---
+- name: Verify media IP persistence renders only the canonical private manifest address
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media30_fixture: |
+      # Private site media VM declaration
+      media_vm:
+        name: mediaserver-serzhan
+        vmid: 2232
+        network:
+          ipv4: 192.168.11.232/24
+          gateway: 192.168.11.1
+          static_ipv4_verified: true   # old site note .232
+          dhcp_pool:
+            first_host: 50
+            last_host: 229
+        storage:
+          pool_name: serzhan-pool
+    media30_manifest_ipv4: 192.168.11.232/24
+  tasks:
+    - name: Prepare offline canonical inventory snapshot and desired media IPv4
+      ansible.builtin.set_fact:
+        media_vm_file:
+          json:
+            content: "{{ media30_fixture | b64encode }}"
+        media_spec: >-
+          {{ (media30_fixture | from_yaml).media_vm
+             | combine({'network': {'ipv4': '192.168.11.233/24'}},
+                       recursive=True) }}
+
+    - name: Render exact private media inventory update without calling GitHub
+      ansible.builtin.include_tasks: ../tasks/media30-ip-manifest-render.yml
+
+    - name: Verify only selected IP and stale comment were changed
+      ansible.builtin.assert:
+        that:
+          - "'    ipv4: 192.168.11.233/24' in media30_persisted_manifest_text"
+          - "'    ipv4: 192.168.11.232/24' not in media30_persisted_manifest_text"
+          - "'# old site note .232' not in media30_persisted_manifest_text"
+          - "'# Private site media VM declaration' in media30_persisted_manifest_text"
+          - "'pool_name: serzhan-pool' in media30_persisted_manifest_text"
+          - (media30_persisted_manifest_text | from_yaml).media_vm == media_spec
+          - media30_persisted_manifest_text.count('192.168.11.233/24') == 1

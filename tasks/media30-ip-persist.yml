@@ -1,0 +1,23 @@
+---
+# Included only after full media guest/PVE acceptance and only for changed IP.
+- name: Render the exact private site IPv4 change
+  ansible.builtin.include_tasks: media30-ip-manifest-render.yml
+
+- name: Commit selected IPv4 to the canonical site inventory with optimistic concurrency
+  ansible.builtin.uri:
+    url: "{{ media_github_base }}/media_vm.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ media_github_token }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: '2022-11-28'
+    body_format: json
+    body:
+      message: "media30: set {{ media_spec.name }} static IPv4 to {{ media_spec.network.ipv4 }}"
+      branch: main
+      sha: "{{ media_vm_file.json.sha }}"
+      content: "{{ media30_persisted_manifest_text | b64encode }}"
+    use_proxy: false
+    timeout: 30
+    status_code: 200
+  no_log: true

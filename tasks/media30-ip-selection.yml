@@ -1,0 +1,57 @@
+---
+# Task 30: user-selected final octet (default 232) or full LAN IPv4.
+# Canonical manifest network/gateway provide the /24 prefix; no Python helpers.
+- name: Normalize media guest address from Semaphore Survey
+  ansible.builtin.set_fact:
+    media30_ip_choice: "{{ DH_MEDIA_IP | default('232', true) | string | trim }}"
+    media30_manifest_ipv4: "{{ media_spec.network.ipv4 }}"
+
+- name: Require IPv4 host address or last octet from Semaphore
+  ansible.builtin.assert:
+    that:
+      - >-
+        media30_ip_choice is match('^[0-9]{1,3}$')
+        or media30_ip_choice is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+      - media30_manifest_ipv4 is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/24$')
+      - media_spec.network.gateway is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+    fail_msg: MEDIA30_IP_FORMAT_INVALID
+
+- name: Expand final octet or reuse previously commissioned nondefault site IP
+  ansible.builtin.set_fact:
+    media30_selected_ipv4: >-
+      {{ media30_manifest_ipv4.split('/')[0]
+         if media30_ip_choice == '232' and
+            media30_manifest_ipv4.split('/')[0].split('.')[3] != '232'
+         else ((media_spec.network.gateway.split('.')[:3] + [media30_ip_choice]) | join('.')
+               if media30_ip_choice is match('^[0-9]{1,3}$')
+               else media30_ip_choice) }}
+
+- name: Require host to be within declared LAN outside DHCP and reserved addresses
+  ansible.builtin.assert:
+    that:
+      - >-
+        media30_selected_ipv4.split('.')[:3] ==
+        media_spec.network.gateway.split('.')[:3]
+      - >-
+        media30_selected_ipv4.split('.')[:3] ==
+        media30_manifest_ipv4.split('/')[0].split('.')[:3]
+      - (media30_selected_ipv4.split('.')[3] | int) >= 1
+      - (media30_selected_ipv4.split('.')[3] | int) <= 254
+      - >-
+        (media30_selected_ipv4.split('.')[3] | int)
+        < (media_spec.network.dhcp_pool.first_host | int)
+        or (media30_selected_ipv4.split('.')[3] | int)
+        > (media_spec.network.dhcp_pool.last_host | int)
+      - media30_selected_ipv4 != media_spec.network.gateway
+      - media30_selected_ipv4 != pve.ipv4
+      - media30_selected_ipv4.split('.') | map('int') | map('string') | join('.') == media30_selected_ipv4
+    fail_msg: >-
+      MEDIA30_IP_INVALID: choose a free static host in the declared
+      LAN /24, outside the DHCP range and different from gateway/PVE.
+
+- name: Inject selected static IPv4 throughout task 30 without changing the source manifest
+  ansible.builtin.set_fact:
+    media_spec: >-
+      {{ media_spec | combine(
+          {'network': {'ipv4': media30_selected_ipv4 ~ '/24'}},
+          recursive=True) }}
