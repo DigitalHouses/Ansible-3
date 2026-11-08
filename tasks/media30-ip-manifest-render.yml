@@ -1,0 +1,34 @@
+---
+# Render a minimal textual patch of the canonical private media manifest.
+# Preserve unrelated fields, formatting and comments.
+- name: Decode original private media manifest without losing YAML comments
+  ansible.builtin.set_fact:
+    media30_original_manifest_text: "{{ media_vm_file.json.content | b64decode }}"
+
+- name: Require exactly one canonical network IPv4 line before editing
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media30_original_manifest_text | regex_findall(
+          '(?m)^    ipv4: ' ~ (media30_manifest_ipv4 | regex_escape) ~
+          '(?=[ \\t]*(?:#.*)?$)') | length) == 1
+    fail_msg: MEDIA30_MANIFEST_IP_LINE_UNEXPECTED
+
+- name: Replace only canonical IPv4 and stale static-address comment
+  ansible.builtin.set_fact:
+    media30_persisted_manifest_text: >-
+      {{ media30_original_manifest_text
+         | regex_replace(
+           '(?m)^    ipv4: ' ~ (media30_manifest_ipv4 | regex_escape) ~
+           '(?=[ \\t]*(?:#.*)?$)',
+           '    ipv4: ' ~ media_spec.network.ipv4)
+         | regex_replace(
+           '(?m)^    static_ipv4_verified: true[ \\t]*#.*$',
+           '    static_ipv4_verified: true  # owner-selected static IPv4 outside the declared DHCP pool') }}
+
+- name: Require private inventory matches selected guest specification
+  ansible.builtin.assert:
+    that:
+      - (media30_persisted_manifest_text | from_yaml).media_vm == media_spec
+      - media30_persisted_manifest_text != media30_original_manifest_text
+    fail_msg: MEDIA30_MANIFEST_IP_PERSISTENCE_MISMATCH
