@@ -1,0 +1,43 @@
+---
+# PBS 4.2 package enables an enterprise APT source by default even if the
+# operator already selected pbs-no-subscription. Disable only that exact source.
+- name: Check for packaged PBS enterprise APT source
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/pbs-enterprise.sources
+    follow: false
+  register: media_pbs_enterprise_source
+
+- name: Reject an unsafe PBS enterprise source file type
+  ansible.builtin.assert:
+    that:
+      - >-
+        not media_pbs_enterprise_source.stat.exists or
+        (media_pbs_enterprise_source.stat.isreg | default(false) and
+         not (media_pbs_enterprise_source.stat.islnk | default(false)))
+    fail_msg: MEDIA_PBS_ENTERPRISE_SOURCE_UNSAFE
+
+- name: Read existing packaged PBS enterprise source when present
+  ansible.builtin.slurp:
+    src: /etc/apt/sources.list.d/pbs-enterprise.sources
+  register: media_pbs_enterprise_content
+  when: media_pbs_enterprise_source.stat.exists
+
+- name: Never modify an unrecognized APT source
+  ansible.builtin.assert:
+    that:
+      - "'URIs: https://enterprise.proxmox.com/debian/pbs' in (media_pbs_enterprise_content.content | b64decode)"
+      - "'Components: pbs-enterprise' in (media_pbs_enterprise_content.content | b64decode)"
+      - "'Suites: trixie' in (media_pbs_enterprise_content.content | b64decode)"
+    fail_msg: MEDIA_PBS_ENTERPRISE_SOURCE_UNRECOGNIZED
+  when: media_pbs_enterprise_source.stat.exists
+
+- name: Disable only the unlicensed packaged PBS enterprise repository
+  ansible.builtin.lineinfile:
+    path: /etc/apt/sources.list.d/pbs-enterprise.sources
+    regexp: '^Enabled:'
+    line: 'Enabled: no'
+    state: present
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_pbs_enterprise_source.stat.exists
