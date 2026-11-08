@@ -31,10 +31,20 @@
     deb: /var/cache/digitalhouses/rclone/rclone-v1.76.0-linux-amd64.deb
   register: media_rclone_package
 
-- name: Ensure media application state parent exists without changing existing permissions
+- name: Observe existing DigitalHouses media state directory
+  ansible.builtin.stat:
+    path: /var/lib/digitalhouses
+    follow: false
+  register: media_rclone_state_parent
+
+- name: Create media state parent only when missing
   ansible.builtin.file:
     path: /var/lib/digitalhouses
     state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: not media_rclone_state_parent.stat.exists
 
 - name: Create restricted persistent rclone configuration directory
   ansible.builtin.file:
