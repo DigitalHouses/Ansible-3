@@ -4,6 +4,8 @@
   hosts: runner
   connection: local
   gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
   vars:
     media_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     media_github_base: "https://api.github.com/repos/DigitalHouses/site-{{ media_site_id }}/contents/inventories/{{ media_site_id }}"
@@ -89,6 +91,24 @@
       changed_when: false
       no_log: true
 
+    - name: Register site PVE with the pinned Semaphore SSH identity
+      ansible.builtin.add_host:
+        name: media33_pve
+        groups: media33_existing_pve
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          -o ConnectTimeout=10
+        media_site: "{{ media_site }}"
+        media_spec: "{{ media_spec }}"
+      changed_when: false
+      no_log: true
+
 - name: "33 | Install backup tools and prepare named PBS ZFS dataset without backup jobs"
   hosts: media33_existing_guest
   gather_facts: false
@@ -132,6 +152,9 @@
     - name: Register the owner-specific PBS datastore on the prepared ZFS dataset
       ansible.builtin.include_tasks: ../tasks/media33-pbs-datastore.yml
 
+    - name: Prepare restricted local PVE API token in PBS
+      ansible.builtin.include_tasks: ../tasks/media33-pbs-pve-token.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -157,14 +180,32 @@
     - name: Report the LAN-only GUI URL and protected password location
       ansible.builtin.debug:
         msg:
-          status: MEDIA33_BACKUP_TOOLS_AND_PBS_DATASTORE_READY
+          status: MEDIA33_LOCAL_PBS_DATASTORE_READY
           rclone_version: v1.76.0
           restic_version: 0.19.1
           pbs_version: "{{ media_pbs_version.stdout | trim }}"
           pbs_zfs_dataset: "{{ media33_pbs_dataset }}"
           pbs_mountpoint: "{{ media33_pbs_path }}"
           pbs_datastore: "pbs-{{ media_site.owner_slug }}"
+          pve_storage: "pbs-{{ media_site.owner_slug }}"
           pbs_url: "https://{{ media_spec.network.ipv4.split('/')[0] }}:8007/"
           gui: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/"
           api: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/"
           password_file: /etc/digitalhouses/rclone-gui.env
+
+- name: "33 | Register owner-local PBS Backup Storage on its own PVE"
+  hosts: media33_existing_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Attach registered PBS datastore to PVE with restricted API token
+      ansible.builtin.include_tasks: ../tasks/media33-pve-pbs-storage.yml
+
+    - name: Report ready local PBS backup and restore target without scheduling jobs
+      ansible.builtin.debug:
+        msg:
+          status: MEDIA33_LOCAL_PBS_PVE_STORAGE_READY
+          pve_storage: "pbs-{{ media_site.owner_slug }}"
+          datastore: "pbs-{{ media_site.owner_slug }}"
+          pbs_server: "{{ media_spec.network.ipv4.split('/')[0] }}:8007"
+          backup_job_created: false

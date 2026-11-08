@@ -1,0 +1,186 @@
+---
+# Only one local PVE client token, scoped to the exact owner PBS datastore.
+# root@pam token is privilege-separated: no PBS administrative access.
+# No passwords in Ansible logs, Semaphore task output or command arguments.
+- name: Identify only the owner PBS store and the managed local PVE token
+  ansible.builtin.set_fact:
+    media33_pve_storage_id: "pbs-{{ media_site.owner_slug }}"
+    media33_pve_token_id: "root@pam!pve-local"
+    media33_pve_token_file: /etc/digitalhouses/pbs-pve-local.token
+
+- name: Require the registered PBS datastore is backed by the intended ZFS dataset
+  ansible.builtin.assert:
+    that:
+      - (media33_pbs_datastore_readback.stdout | from_json).path == media33_pbs_path
+      - media33_pbs_path == '/' ~ media_spec.storage.pool_name ~ '/pbs-' ~ media_site.owner_slug
+    fail_msg: MEDIA33_PBS_TOKEN_DATASTORE_NOT_VALID
+
+- name: Inspect existing local PVE token secret file without following symlinks
+  ansible.builtin.stat:
+    path: "{{ media33_pve_token_file }}"
+    follow: false
+  register: media33_pve_token_file_stat
+  no_log: true
+
+- name: Reject insecure pre-existing local PBS token file
+  ansible.builtin.assert:
+    that:
+      - >-
+        not media33_pve_token_file_stat.stat.exists or
+        (media33_pve_token_file_stat.stat.isreg | default(false) and
+         media33_pve_token_file_stat.stat.pw_name == 'root' and
+         media33_pve_token_file_stat.stat.mode == '0600')
+    fail_msg: MEDIA33_PBS_TOKEN_FILE_UNSAFE
+
+- name: Observe already configured PBS root tokens without exposing secrets
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+  register: media33_pve_tokens_raw
+  changed_when: false
+  no_log: true
+
+- name: Select only the exact dedicated local PVE token
+  ansible.builtin.set_fact:
+    media33_pve_tokens: >-
+      {{ (media33_pve_tokens_raw.stdout | from_json)
+         | selectattr('tokenid', 'defined')
+         | selectattr('tokenid', 'equalto', media33_pve_token_id) | list }}
+  no_log: true
+
+- name: Reject orphaned PBS token configuration or missing secret
+  ansible.builtin.assert:
+    that:
+      - media33_pve_tokens | length <= 1
+      - >-
+        (media33_pve_tokens | length == 1) ==
+        (media33_pve_token_file_stat.stat.exists | bool)
+    fail_msg: >-
+      MEDIA33_PBS_PVE_TOKEN_OUT_OF_SYNC: managed PBS token and its secret
+      must either both exist or both be absent; no automatic rotation.
+  no_log: true
+
+- name: Generate local PVE token only once, without PBS admin privileges
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - user
+      - generate-token
+      - root@pam
+      - pve-local
+      - --comment
+      - "Local PVE backup/restore: {{ media33_pve_storage_id }}"
+  register: media33_pve_new_token
+  when: media33_pve_tokens | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Extract generated token JSON without leaking its secret
+  ansible.builtin.set_fact:
+    media33_pve_generated_token_json: >-
+      {{ (media33_pve_new_token.stdout
+          | regex_search('(?s)\{.*\}') | from_json) }}
+  when: media33_pve_tokens | length == 0
+  no_log: true
+
+- name: Require generated token belongs only to the intended PBS identity
+  ansible.builtin.assert:
+    that:
+      - media33_pve_generated_token_json.tokenid == media33_pve_token_id
+      - media33_pve_generated_token_json.value | length > 30
+    fail_msg: MEDIA33_PBS_TOKEN_RESPONSE_INVALID
+  when: media33_pve_tokens | length == 0
+  no_log: true
+
+- name: Persist new PBS token only on the existing media VM
+  ansible.builtin.copy:
+    dest: "{{ media33_pve_token_file }}"
+    content: "{{ media33_pve_generated_token_json.value }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+  when: media33_pve_tokens | length == 0
+  no_log: true
+
+- name: Load the protected managed PBS token secret for PVE storage registration
+  ansible.builtin.slurp:
+    src: "{{ media33_pve_token_file }}"
+  register: media33_pve_stored_token
+  no_log: true
+
+- name: Hold PBS local PVE secret only in Ansible memory
+  ansible.builtin.set_fact:
+    media33_pve_token_secret: "{{ media33_pve_stored_token.content | b64decode | trim }}"
+  no_log: true
+
+- name: Require a plausible nonempty token secret
+  ansible.builtin.assert:
+    that:
+      - media33_pve_token_secret | length > 30
+      - "'\\n' not in media33_pve_token_secret"
+    fail_msg: MEDIA33_PBS_TOKEN_SECRET_INVALID
+  no_log: true
+
+- name: Inspect existing PBS ACL entries
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, acl, list, --output-format, json]
+  register: media33_pve_acl_raw
+  changed_when: false
+
+- name: Select only local PVE token access rules
+  ansible.builtin.set_fact:
+    media33_pve_acl_entries: >-
+      {{ (media33_pve_acl_raw.stdout | from_json)
+         | selectattr('ugid', 'equalto', media33_pve_token_id) | list }}
+    media33_pve_acl_path: "/datastore/{{ media33_pve_storage_id }}"
+
+- name: Reject grants to other PBS datastores or elevated roles
+  ansible.builtin.assert:
+    that:
+      - >-
+        media33_pve_acl_entries
+        | rejectattr('path', 'equalto', media33_pve_acl_path)
+        | list | length == 0
+      - >-
+        media33_pve_acl_entries
+        | rejectattr('roleid', 'in', ['DatastorePowerUser', 'DatastoreAudit'])
+        | list | length == 0
+    fail_msg: MEDIA33_PBS_TOKEN_UNEXPECTED_PRIVILEGES
+
+- name: Grant only local backup/restore and datastore visibility to PVE
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - acl
+      - update
+      - "{{ media33_pve_acl_path }}"
+      - "{{ item }}"
+      - --auth-id
+      - "{{ media33_pve_token_id }}"
+  loop:
+    - DatastorePowerUser
+    - DatastoreAudit
+  when: >-
+    item not in (media33_pve_acl_entries | map(attribute='roleid') | list)
+  changed_when: true
+
+- name: Read PBS server TLS certificate fingerprint from the pinned guest
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, cert, info]
+  register: media33_pve_pbs_cert
+  changed_when: false
+
+- name: Extract the exact SHA-256 fingerprint of the PBS API certificate
+  ansible.builtin.set_fact:
+    media33_pve_pbs_fingerprints: >-
+      {{ media33_pve_pbs_cert.stdout | lower |
+         regex_findall('(?m)^fingerprint \(sha256\):\s*([0-9a-f]{2}(?::[0-9a-f]{2}){31})\s*$') }}
+
+- name: Require one well-formed pinned PBS TLS certificate fingerprint
+  ansible.builtin.assert:
+    that:
+      - media33_pve_pbs_fingerprints | length == 1
+    fail_msg: MEDIA33_PBS_TLS_FINGERPRINT_INVALID
+
+- name: Select the exact current PBS certificate fingerprint
+  ansible.builtin.set_fact:
+    media33_pve_pbs_fingerprint: "{{ media33_pve_pbs_fingerprints[0] }}"
