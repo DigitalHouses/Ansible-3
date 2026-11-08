@@ -1,0 +1,68 @@
+---
+- name: Test owner-local PBS storage provisioning without modifying any host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    token_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-pbs-pve-token.yml') | from_yaml }}"
+    pve_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-pve-pbs-storage.yml') | from_yaml }}"
+    task33_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-rclone-gui.yml') }}"
+    cert_sample: "Fingerprint (sha256): {{ ('b3:' * 31) ~ 'fd' }}"
+    token_result_sample: 'Result: {"tokenid":"root@pam!pve-local","value":"d63e505a-e3ec-449a-9bc7-1da610d4ccde"}'
+  tasks:
+    - name: Select only the managed token and PVE operations from their playbooks
+      ansible.builtin.set_fact:
+        token_create: >-
+          {{ token_tasks | selectattr('name', 'equalto',
+             'Generate local PVE token only once, without PBS admin privileges') | first }}
+        token_copy: >-
+          {{ token_tasks | selectattr('name', 'equalto',
+             'Persist new PBS token only on the existing media VM') | first }}
+        token_grants: >-
+          {{ token_tasks | selectattr('name', 'equalto',
+             'Grant only local backup/restore and datastore visibility to PVE') | first }}
+        pve_add: >-
+          {{ pve_tasks | selectattr('name', 'equalto',
+             'Add the local PBS datastore to PVE with native storage CLI') | first }}
+        pve_secret: >-
+          {{ pve_tasks | selectattr('name', 'equalto',
+             'Store the dedicated PBS token secret only in native PVE root-private storage') | first }}
+        pve_status: >-
+          {{ pve_tasks | selectattr('name', 'equalto',
+             'Verify PVE can communicate with the owner datastore over authenticated HTTPS') | first }}
+        extracted_token_json: >-
+          {{ (token_result_sample | regex_search('(?s)\{.*\}') | from_json) }}
+        extracted_fingerprints: >-
+          {{ cert_sample | lower |
+             regex_findall('(?m)^fingerprint \(sha256\):\s*([0-9a-f]{2}(?::[0-9a-f]{2}){31})\s*$') }}
+
+    - name: Require minimum privileges and no secrets in process command line
+      ansible.builtin.assert:
+        that:
+          - "'../tasks/media33-pbs-pve-token.yml' in task33_source"
+          - "'../tasks/media33-pve-pbs-storage.yml' in task33_source"
+          - extracted_token_json.tokenid == 'root@pam!pve-local'
+          - extracted_token_json.value | length > 30
+          - extracted_fingerprints | length == 1
+          - extracted_fingerprints[0].startswith('b3:')
+          - token_create.no_log is sameas true
+          - token_copy.no_log is sameas true
+          - token_grants.loop == ['DatastorePowerUser', 'DatastoreAudit']
+          - token_grants['ansible.builtin.command'].argv[0:3] == ['proxmox-backup-manager','acl','update']
+          - pve_add['ansible.builtin.command'].argv[0:3] == ['pvesm', 'add', 'pbs']
+          - pve_add['ansible.builtin.command'].argv[3] is search('media33_pve_storage_id')
+          - "'--password' not in pve_add['ansible.builtin.command'].argv"
+          - pve_secret.no_log is sameas true
+          - pve_secret['ansible.builtin.copy'].mode == '0600'
+          - pve_secret['ansible.builtin.copy'].unsafe_writes is sameas true
+          - pve_status['ansible.builtin.command'].argv[0:3] == ['pvesm','status','--storage']
+          - "'vzdump' not in pve_tasks | to_json"
+          - "'pvesm, remove' not in pve_tasks | to_json"
+          - "'qm, destroy' not in pve_tasks | to_json"
+
+    - name: Verify untrusted storage names do not match expected site identity
+      ansible.builtin.assert:
+        that:
+          - "'pbs-serzhan' == 'pbs-' ~ 'serzhan'"
+          - "'pbs-arman' != 'pbs-serzhan'"
+          - "'root@pam!pve-local' is search('@pam!')"

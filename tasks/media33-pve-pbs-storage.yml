@@ -1,0 +1,152 @@
+---
+# Task 33: connect site PVE directly to its own PBS datastore.
+# No backup job creation, VM/CT lifecycle, disk operations or storage deletion.
+# PBS token secret is copied only into PVE's root-private native password file.
+- name: Derive only the local owner-specific PBS storage identity
+  ansible.builtin.set_fact:
+    media33_pve_storage_id: "pbs-{{ media_site.owner_slug }}"
+    media33_pve_pbs_ip: "{{ media_spec.network.ipv4.split('/')[0] }}"
+    media33_pve_auth_id: root@pam!pve-local
+    media33_pve_fingerprint: "{{ hostvars['media33_guest'].media33_pve_pbs_fingerprint }}"
+  no_log: true
+
+- name: Require the exact media guest and PBS certificate before PVE changes
+  ansible.builtin.assert:
+    that:
+      - media33_pve_storage_id == hostvars['media33_guest'].media33_pve_storage_id
+      - media33_pve_pbs_ip == hostvars['media33_guest'].media_spec.network.ipv4.split('/')[0]
+      - media33_pve_fingerprint is match('^([0-9a-f]{2}:){31}[0-9a-f]{2}$')
+      - hostvars['media33_guest'].media33_pve_token_secret | length > 30
+    fail_msg: MEDIA33_PVE_PBS_GUEST_IDENTITY_INVALID
+  no_log: true
+
+- name: Read target PVE VM configuration before touching PVE storage
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_spec.vmid }}"]
+  register: media33_pve_vm
+  changed_when: false
+
+- name: Refuse PVE storage changes if the media VM identity or LAN IP differs
+  ansible.builtin.assert:
+    that:
+      - "('name: ' ~ media_spec.name) in media33_pve_vm.stdout_lines"
+      - >-
+        media33_pve_vm.stdout_lines |
+        select('match', '^ipconfig0: ip=' ~ (media_spec.network.ipv4 | regex_escape) ~ ',')
+        | list | length == 1
+    fail_msg: MEDIA33_PVE_PBS_MEDIA_VM_IDENTITY_MISMATCH
+
+- name: Read all PVE storages as structured JSON
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage, --output-format, json]
+  register: media33_pve_storage_raw
+  changed_when: false
+
+- name: Select only the owner-specific PVE backup storage
+  ansible.builtin.set_fact:
+    media33_pve_existing_storages: >-
+      {{ (media33_pve_storage_raw.stdout | from_json)
+         | selectattr('storage', 'equalto', media33_pve_storage_id) | list }}
+
+- name: Reject an unrelated PVE storage with this name
+  ansible.builtin.assert:
+    that:
+      - media33_pve_existing_storages | length <= 1
+      - >-
+        media33_pve_existing_storages | length == 0 or
+        (media33_pve_existing_storages[0].type == 'pbs' and
+         media33_pve_existing_storages[0].server == media33_pve_pbs_ip and
+         media33_pve_existing_storages[0].datastore == media33_pve_storage_id and
+         media33_pve_existing_storages[0].username == media33_pve_auth_id and
+         media33_pve_existing_storages[0].content == 'backup')
+    fail_msg: MEDIA33_PVE_PBS_STORAGE_ID_CONFLICT
+
+- name: Add the local PBS datastore to PVE with native storage CLI
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - add
+      - pbs
+      - "{{ media33_pve_storage_id }}"
+      - --server
+      - "{{ media33_pve_pbs_ip }}"
+      - --datastore
+      - "{{ media33_pve_storage_id }}"
+      - --username
+      - "{{ media33_pve_auth_id }}"
+      - --fingerprint
+      - "{{ media33_pve_fingerprint }}"
+      - --content
+      - backup
+  when: media33_pve_existing_storages | length == 0
+  changed_when: true
+
+- name: Verify the existing or newly registered PBS storage configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, "/storage/{{ media33_pve_storage_id }}", --output-format, json]
+  register: media33_pve_storage_config
+  changed_when: false
+
+- name: Require PVE uses exactly the intended local PBS datastore
+  ansible.builtin.assert:
+    that:
+      - (media33_pve_storage_config.stdout | from_json).type == 'pbs'
+      - (media33_pve_storage_config.stdout | from_json).server == media33_pve_pbs_ip
+      - (media33_pve_storage_config.stdout | from_json).datastore == media33_pve_storage_id
+      - (media33_pve_storage_config.stdout | from_json).username == media33_pve_auth_id
+      - (media33_pve_storage_config.stdout | from_json).content == 'backup'
+    fail_msg: MEDIA33_PVE_PBS_STORAGE_READBACK_MISMATCH
+
+- name: Update only local PBS TLS fingerprint after authenticated guest rotation
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ media33_pve_storage_id }}"
+      - --fingerprint
+      - "{{ media33_pve_fingerprint }}"
+  when: >-
+    (media33_pve_storage_config.stdout | from_json).fingerprint | default('') | lower
+    != media33_pve_fingerprint
+  changed_when: true
+
+- name: Store the dedicated PBS token secret only in native PVE root-private storage
+  ansible.builtin.copy:
+    dest: "/etc/pve/priv/storage/{{ media33_pve_storage_id }}.pw"
+    content: "{{ hostvars['media33_guest'].media33_pve_token_secret }}\n"
+    owner: root
+    group: www-data
+    mode: '0600'
+    unsafe_writes: true
+  no_log: true
+
+- name: Verify the PVE PBS password file exists and is private
+  ansible.builtin.stat:
+    path: "/etc/pve/priv/storage/{{ media33_pve_storage_id }}.pw"
+    follow: false
+  register: media33_pve_password_file
+  no_log: true
+
+- name: Reject inaccessible or insecure PVE storage token file
+  ansible.builtin.assert:
+    that:
+      - media33_pve_password_file.stat.isreg | default(false)
+      - media33_pve_password_file.stat.mode == '0600'
+    fail_msg: MEDIA33_PVE_PBS_PASSWORD_FILE_UNSAFE
+  no_log: true
+
+- name: Verify PVE can communicate with the owner datastore over authenticated HTTPS
+  ansible.builtin.command:
+    argv: [pvesm, status, --storage, "{{ media33_pve_storage_id }}"]
+  register: media33_pve_pbs_status
+  changed_when: false
+
+- name: Require the local PBS storage is active and ready for backups
+  ansible.builtin.assert:
+    that:
+      - media33_pve_pbs_status.rc == 0
+      - >-
+        media33_pve_pbs_status.stdout_lines |
+        select('match', '^' ~ (media33_pve_storage_id | regex_escape) ~ '\s+pbs\s+active\s+')
+        | list | length == 1
+    fail_msg: MEDIA33_PVE_PBS_STORAGE_NOT_ACTIVE
