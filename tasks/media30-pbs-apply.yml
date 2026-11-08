@@ -1,0 +1,113 @@
+---
+# Media VM: native Proxmox Backup Server 4.2+ on Debian 13 Trixie.
+# Install only the server package (not the proxmox-backup metapackage/kernel).
+# No datastore, disk, ZFS, backup job, ACL, external access or password changes.
+- name: Require Debian 13 before enabling official PBS repository
+  ansible.builtin.command:
+    argv: [cat, /etc/os-release]
+  register: media_pbs_os
+  changed_when: false
+  failed_when: >-
+    media_pbs_os.rc != 0 or
+    'ID=debian' not in media_pbs_os.stdout or
+    'VERSION_ID="13"' not in media_pbs_os.stdout
+
+- name: Verify selected guest architecture matches official PBS amd64 release
+  ansible.builtin.command:
+    argv: [dpkg, --print-architecture]
+  register: media_pbs_arch
+  changed_when: false
+  failed_when: media_pbs_arch.stdout | trim != 'amd64'
+
+- name: Check official Proxmox archive keyring on the guest
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    follow: false
+  register: media_pbs_keyring
+
+- name: Reject unsafe existing keyring file type
+  ansible.builtin.assert:
+    that:
+      - not media_pbs_keyring.stat.exists or media_pbs_keyring.stat.isreg
+      - not (media_pbs_keyring.stat.islnk | default(false))
+    fail_msg: MEDIA_PBS_KEYRING_UNSAFE
+
+- name: Download verified official Proxmox Trixie key only when absent
+  ansible.builtin.get_url:
+    url: https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    checksum: sha256:136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
+    owner: root
+    group: root
+    mode: '0644'
+  when: not media_pbs_keyring.stat.exists
+
+- name: Enable only official Trixie PBS no-subscription repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/dh-pbs-no-subscription.sources
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pbs
+      Suites: trixie
+      Components: pbs-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+- name: Install minimal PBS server version 4.2 or newer without replacing Debian kernel
+  ansible.builtin.apt:
+    name: 'proxmox-backup-server>=4.2'
+    state: present
+    update_cache: true
+    cache_valid_time: 0
+    install_recommends: false
+
+- name: Read installed PBS server package version
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - '-f=${Version}'
+      - proxmox-backup-server
+  register: media_pbs_version
+  changed_when: false
+
+- name: Require PBS version 4.2 or newer
+  ansible.builtin.assert:
+    that:
+      - media_pbs_version.rc == 0
+      - media_pbs_version.stdout | trim is version('4.2', '>=')
+    fail_msg: MEDIA_PBS_BELOW_REQUIRED_4_2
+
+- name: Enable PBS API and HTTPS proxy without modifying existing PBS config
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - proxmox-backup.service
+    - proxmox-backup-proxy.service
+
+- name: Verify both PBS daemon units are actually active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  register: media_pbs_running_units
+  changed_when: false
+  failed_when: media_pbs_running_units.rc != 0 or media_pbs_running_units.stdout | trim != 'active'
+  loop:
+    - proxmox-backup.service
+    - proxmox-backup-proxy.service
+
+- name: Verify local PBS HTTPS UI responds without opening external access
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/
+    validate_certs: false
+    use_proxy: false
+    timeout: 15
+    status_code: 200
+  register: media_pbs_https_check
+  changed_when: false
+  retries: 8
+  delay: 3
+  until: media_pbs_https_check.status | default(0) == 200

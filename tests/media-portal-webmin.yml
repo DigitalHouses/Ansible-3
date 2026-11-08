@@ -47,6 +47,7 @@
         that:
           - "'href=\"https://192.168.11.232:10000/\" target=\"_blank\"' in portal_markup"
           - "'href=\"http://192.168.11.232:5580/login?url=http%3A%2F%2F192.168.11.232%3A5572%2F\" target=\"_blank\"' in portal_markup"
+          - "'href=\"https://192.168.11.232:8007/\" target=\"_blank\"' in portal_markup"
           - "'serzhan-home-pve-mediaserver-admin.digitalhouses.vip' not in portal_markup"
           - "'Cloudflare Access' not in portal_markup"
           - "'target=\"_blank\" rel=\"noopener noreferrer\"' in portal_markup"

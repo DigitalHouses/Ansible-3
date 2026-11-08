@@ -517,6 +517,9 @@
     - name: Install official rclone and enable authenticated LAN Web GUI
       ansible.builtin.include_tasks: ../tasks/media30-rclone-apply.yml
 
+    - name: Install native Proxmox Backup Server 4.2 or newer
+      ansible.builtin.include_tasks: ../tasks/media30-pbs-apply.yml
+
     - name: Enforce one shared CPU budget for Plex and Jellyfin
       ansible.builtin.include_tasks: ../tasks/media30-cpu-shared-apply.yml
 

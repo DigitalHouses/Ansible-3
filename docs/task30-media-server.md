@@ -74,7 +74,7 @@
 
 ## Исключения
 
-PBS, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публикация SMB в Internet, сторонние VM и Cloudflare PVE/Quantum/Semaphore. Media Cloudflare — последующий отдельный этап; новый tunnel или Access не создавать неявно.
+PBS datastores/backup jobs, PVE backup jobs, legacy NFS cleanup, изменение PVE IP, публикация SMB в Internet, сторонние VM и Cloudflare PVE/Quantum/Semaphore. Media Cloudflare — последующий отдельный этап; новый tunnel или Access не создавать неявно.
 
 ## Реализовано в ветке
 
@@ -140,3 +140,15 @@ Filestash static binary официально доступен по `downloads.fi
 - Поле IP **не создаёт вторую VM само по себе**: на том же PVE для второго медиасервера нужны отдельный VMID, имя и дисковый контроллер в отдельном site manifest.
 
 Тесты: `tests/media30-ip-survey.yml` и `tests/media30-ip-manifest-render.yml` — без обращения к инфраструктуре. Регистрация поля в существующем шаблоне Semaphore выполняется штатным каталогом №00. При текущем применении к работающему медиасерверу `keep` с `232` не изменяет его IP.
+
+## PBS 4.2+ на медиасервере (08.11.2026)
+
+В №30 после установки rclone добавлен общий native-блок `tasks/media30-pbs-apply.yml`, который также запускается точечно из уже существующего №33 (`playbooks/media-rclone-gui.yml`) на существующей VM. Это **установка сервера**, а не настройка резервных копий.
+
+- На Debian 13 Trixie amd64 — **только** `proxmox-backup-server` из официального `pbs-no-subscription` APT репозитория. Метапакет `proxmox-backup` **не ставится**: ядро гостя, GPU и ZFS из Debian сохраняются. Публичный Proxmox keyring берётся по HTTPS с официальной SHA256 и применяется как отдельный `Signed-By` без `apt-key`.
+- Пакет ставится через native Ansible `apt` (с минимальной версией >=4.2); `dpkg-query` и Ansible `version` требуют **не ниже 4.2**. Проверяются `proxmox-backup.service` и `proxmox-backup-proxy.service`, локальная HTTPS-страница `127.0.0.1:8007`.
+- На портале медиасервера появляется ссылка **`https://<media-ip>:8007/`** (LAN, self-signed TLS); штатная учётная запись `root@pam` использует пароль Linux root VM. Credential `DH_PBS_ADMIN_PASSWORD` из №05 пока **не расходуется**, `admin@pbs` отдельно не создаётся; настройка пользователей и API токенов — будущая согласованная задача.
+- Не создаются datastore и ZFS dataset/quota, не меняются диски, не настраиваются локальные/облачные PVE backup jobs, нет PBS GC/prune/verify jobs или публикации через Cloudflare. Для однотипной схемы хранения и 70/30 квот потребуется отдельный этап, с сохранением медиа данных.
+- На mini-PC со 16 ГБ RAM и медиасервисами PBS будет делить ресурсы. Минимум, рекомендуемый Proxmox для PBS без учёта медиа — 4 GiB RAM и 4 ядра; нагрузку/квоты нужно оценить до использования хранилища в качестве производственного PBS.
+
+Тест: `ansible-playbook tests/media30-pbs.yml`; guest: `qm guest exec <vmid> -- proxmox-backup-manager versions`. Отдельный playbook для этого сервиса не создаётся — используется текущий точечный шаблон №33, а штатное развёртывание №30 включает PBS автоматически.
