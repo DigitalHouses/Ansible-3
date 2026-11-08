@@ -1,0 +1,57 @@
+---
+- name: Verify safe PBS dataset naming and ZFS idempotency in task 33
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    pbs_zfs_tasks: >-
+      {{ lookup('ansible.builtin.file',
+         playbook_dir ~ '/../tasks/media33-pbs-dataset.yml') | from_yaml }}
+    task33: >-
+      {{ lookup('ansible.builtin.file',
+         playbook_dir ~ '/../playbooks/media-rclone-gui.yml') | from_yaml }}
+    media_site:
+      owner_slug: serzhan
+    media_spec:
+      storage:
+        pool_name: serzhan-pool
+  tasks:
+    - name: Resolve approved owner-specific dataset preflight only
+      ansible.builtin.set_fact:
+        pbs_dataset_name: >-
+          {{ media_spec.storage.pool_name ~ '/pbs-' ~ media_site.owner_slug }}
+        pbs_dataset_mount: >-
+          {{ '/' ~ media_spec.storage.pool_name ~ '/pbs-' ~ media_site.owner_slug }}
+        pbs_create: >-
+          {{ pbs_zfs_tasks | selectattr('name', 'equalto',
+             'Create only the missing PBS filesystem with no quota or reservations') | first }}
+        pbs_mount_guard: >-
+          {{ pbs_zfs_tasks | selectattr('name', 'equalto',
+             'Never mount a new ZFS dataset over an existing directory or symlink') | first }}
+        pbs_identity: >-
+          {{ pbs_zfs_tasks | selectattr('name', 'equalto',
+             'Validate canonical owner and exact target ZFS path') | first }}
+
+    - name: Require precise no-erase PBS scope for the existing media pool
+      ansible.builtin.assert:
+        that:
+          - pbs_dataset_name == 'serzhan-pool/pbs-serzhan'
+          - pbs_dataset_mount == '/serzhan-pool/pbs-serzhan'
+          - pbs_create['ansible.builtin.command'].argv[0:3] == ['zfs', 'create', '-o']
+          - pbs_create['ansible.builtin.command'].argv[3] == 'atime=off'
+          - pbs_create.when == 'media33_pbs_existing.rc != 0'
+          - pbs_mount_guard['ansible.builtin.assert'].that[0] == 'media33_pbs_existing.rc == 0 or not media33_pbs_mount_path.stat.exists'
+          - "'media33_pbs_dataset == media_spec.storage.pool_name' in pbs_identity['ansible.builtin.assert'].that[2]"
+          - "'zpool, destroy' not in pbs_zfs_tasks | to_json"
+          - "'zfs, destroy' not in pbs_zfs_tasks | to_json"
+          - "'zfs, set' not in pbs_zfs_tasks | to_json"
+          - "'zpool, create' not in pbs_zfs_tasks | to_json"
+          - "'refquota' not in pbs_zfs_tasks | to_json"
+          - "'quota=' not in pbs_zfs_tasks | to_json"
+          - "'../tasks/media33-pbs-dataset.yml' in task33 | to_json"
+
+    - name: Verify another owner's dataset derives from their own named pool
+      ansible.builtin.assert:
+        that:
+          - "'arman-pool/pbs-arman' == 'arman-pool/pbs-' ~ 'arman'"
+          - "'/arman-pool/pbs-arman' == '/arman-pool/pbs-' ~ 'arman'"

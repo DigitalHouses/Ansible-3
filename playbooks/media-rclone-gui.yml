@@ -1,5 +1,5 @@
 ---
-# 33 | rclone GUI, restic and PBS server on existing pinned media VM; no VM/ZFS lifecycle.
+# 33 | rclone, restic, PBS and owner-specific PBS dataset on an existing VM; no VM/disk lifecycle.
 - name: "33 | Resolve canonical media site and pinned guest access"
   hosts: runner
   connection: local
@@ -89,7 +89,7 @@
       changed_when: false
       no_log: true
 
-- name: "33 | Install pinned rclone, restic and PBS server without backup operations"
+- name: "33 | Install backup tools and prepare named PBS ZFS dataset without backup jobs"
   hosts: media33_existing_guest
   gather_facts: false
   become: true
@@ -126,6 +126,9 @@
     - name: Install native Proxmox Backup Server 4.2 or newer
       ansible.builtin.include_tasks: ../tasks/media30-pbs-apply.yml
 
+    - name: Prepare the owner-specific PBS ZFS filesystem on the existing media pool
+      ansible.builtin.include_tasks: ../tasks/media33-pbs-dataset.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -155,6 +158,8 @@
           rclone_version: v1.76.0
           restic_version: 0.19.1
           pbs_version: "{{ media_pbs_version.stdout | trim }}"
+          pbs_zfs_dataset: "{{ media33_pbs_dataset }}"
+          pbs_mountpoint: "{{ media33_pbs_path }}"
           pbs_url: "https://{{ media_spec.network.ipv4.split('/')[0] }}:8007/"
           gui: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/"
           api: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/"
