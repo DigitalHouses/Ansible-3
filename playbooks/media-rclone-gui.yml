@@ -129,6 +129,9 @@
     - name: Prepare the owner-specific PBS ZFS filesystem on the existing media pool
       ansible.builtin.include_tasks: ../tasks/media33-pbs-dataset.yml
 
+    - name: Register the owner-specific PBS datastore on the prepared ZFS dataset
+      ansible.builtin.include_tasks: ../tasks/media33-pbs-datastore.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -154,12 +157,13 @@
     - name: Report the LAN-only GUI URL and protected password location
       ansible.builtin.debug:
         msg:
-          status: MEDIA33_RCLONE_GUI_AND_RESTIC_READY
+          status: MEDIA33_BACKUP_TOOLS_AND_PBS_DATASTORE_READY
           rclone_version: v1.76.0
           restic_version: 0.19.1
           pbs_version: "{{ media_pbs_version.stdout | trim }}"
           pbs_zfs_dataset: "{{ media33_pbs_dataset }}"
           pbs_mountpoint: "{{ media33_pbs_path }}"
+          pbs_datastore: "pbs-{{ media_site.owner_slug }}"
           pbs_url: "https://{{ media_spec.network.ipv4.split('/')[0] }}:8007/"
           gui: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5580/"
           api: "http://{{ media_spec.network.ipv4.split('/')[0] }}:5572/"
