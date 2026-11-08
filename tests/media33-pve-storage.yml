@@ -23,7 +23,7 @@
              'Grant only local backup/restore and datastore visibility to PVE') | first }}
         pve_add: >-
           {{ pve_tasks | selectattr('name', 'equalto',
-             'Add the local PBS datastore to PVE with native storage CLI') | first }}
+             'Add local PBS storage with password prompt fed through a private pseudo-TTY') | first }}
         pve_secret: >-
           {{ pve_tasks | selectattr('name', 'equalto',
              'Store the dedicated PBS token secret only in native PVE root-private storage') | first }}
@@ -49,9 +49,11 @@
           - token_copy.no_log is sameas true
           - token_grants.loop == ['DatastorePowerUser', 'DatastoreAudit']
           - token_grants['ansible.builtin.command'].argv[0:3] == ['proxmox-backup-manager','acl','update']
-          - pve_add['ansible.builtin.command'].argv[0:3] == ['pvesm', 'add', 'pbs']
-          - pve_add['ansible.builtin.command'].argv[3] is search('media33_pve_storage_id')
-          - "'--password' not in pve_add['ansible.builtin.command'].argv"
+          - pve_add['ansible.builtin.command'].argv[0:4] == ['script', '-q', '-e', '-c']
+          - pve_add['ansible.builtin.command'].argv[4] is search('pvesm add pbs')
+          - pve_add['ansible.builtin.command'].argv[4] is search('--password')
+          - pve_add['ansible.builtin.command'].stdin is search('media33_pve_token_secret')
+          - pve_add.no_log is sameas true
           - pve_secret.no_log is sameas true
           - pve_secret['ansible.builtin.copy'].mode == '0600'
           - pve_secret['ansible.builtin.copy'].unsafe_writes is sameas true
