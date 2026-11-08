@@ -55,6 +55,9 @@
       Components: pbs-no-subscription
       Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 
+- name: Disable unlicensed PBS enterprise APT source before package refresh
+  ansible.builtin.include_tasks: media30-pbs-disable-enterprise.yml
+
 - name: Install minimal PBS server version 4.2 or newer without replacing Debian kernel
   ansible.builtin.apt:
     name: 'proxmox-backup-server>=4.2'
@@ -62,6 +65,9 @@
     update_cache: true
     cache_valid_time: 0
     install_recommends: false
+
+- name: Disable packaged PBS enterprise APT source after a fresh installation
+  ansible.builtin.include_tasks: media30-pbs-disable-enterprise.yml
 
 - name: Read installed PBS server package version
   ansible.builtin.command:

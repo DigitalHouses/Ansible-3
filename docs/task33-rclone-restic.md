@@ -36,3 +36,10 @@
 - После подключения Ansible требует `pvesm status --storage pbs-<owner>` со статусом `active`.
 
 Создание расписания backup, Prune, GC, Verify, квоты, исключение VM с локальным PBS, PVE backup jobs, центральный PBS и B2 остаются в №300. Системная VM с PBS не должна неявно резервировать собственный физический диск или backup datastore.
+
+
+## PBS 4.2 APT: packaged Enterprise источник
+
+После установки `proxmox-backup-server` пакет по умолчанию включает `/etc/apt/sources.list.d/pbs-enterprise.sources`, который без подписки даёт HTTP 401 и блокирует повторный `apt update`.
+
+№30/№33 через общий `tasks/media30-pbs-apply.yml` теперь **до и после** установки пакета проверяют содержимое именно этого файла и добавляют `Enabled: no`, как рекомендует официальный PBS 4.2. Рабочим остаётся `dh-pbs-no-subscription.sources`. Никакие другие APT источники, PVE-хост и данные не затрагиваются. Проверка предотвращает изменение неожиданных файлов.
