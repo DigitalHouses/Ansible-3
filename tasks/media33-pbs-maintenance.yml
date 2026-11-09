@@ -1,10 +1,11 @@
 ---
 # Task 33 | Local PBS-only retention policy and maintenance schedule.
-# Uses the datastore's native prune/gc schedules and a named verify job.
+# Uses PBS 4.2 prune-job for retention; datastore only owns weekly GC.
 # Never executes prune/GC/verify immediately, deletes snapshots, or touches media.
 - name: Define owner-specific local PBS maintenance policy
   ansible.builtin.set_fact:
     media33_verify_job_id: "dh-weekly-{{ media_site.owner_slug }}"
+    media33_prune_job_id: "dh-daily-{{ media_site.owner_slug }}"
     media33_pbs_prune_time: '04:00'
     media33_pbs_gc_time: 'sat 06:00'
     media33_pbs_verify_time: 'sun 07:00'
@@ -30,23 +31,76 @@
         ) | length == 0
     fail_msg: MEDIA33_PBS_RETENTION_CONFLICT
 
-- name: Set 30 daily backups with daily prune and weekly GC on only this datastore
+- name: Read configured PBS 4.2 prune jobs
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, prune-job, list, --output-format, json]
+  register: media33_prune_jobs_raw
+  changed_when: false
+
+- name: Identify only owner-managed prune job and conflicting jobs on this datastore
+  ansible.builtin.set_fact:
+    media33_prune_own: >-
+      {{ (media33_prune_jobs_raw.stdout | from_json)
+         | selectattr('id', 'equalto', media33_prune_job_id) | list }}
+    media33_prune_competing: >-
+      {{ (media33_prune_jobs_raw.stdout | from_json)
+         | selectattr('store', 'equalto', 'pbs-' ~ media_site.owner_slug)
+         | rejectattr('id', 'equalto', media33_prune_job_id) | list }}
+
+- name: Refuse competing prune rules or other datastore identity
+  ansible.builtin.assert:
+    that:
+      - media33_prune_own | length <= 1
+      - media33_prune_competing | length == 0
+      - >-
+        media33_prune_own | length == 0 or
+        media33_prune_own[0].store == 'pbs-' ~ media_site.owner_slug
+    fail_msg: MEDIA33_PBS_PRUNE_JOB_CONFLICT
+
+- name: Create PBS 4.2 daily prune job retaining 30 daily backups
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - prune-job
+      - create
+      - "{{ media33_prune_job_id }}"
+      - --store
+      - "pbs-{{ media_site.owner_slug }}"
+      - --schedule
+      - "{{ media33_pbs_prune_time }}"
+      - --keep-daily
+      - '30'
+  when: media33_prune_own | length == 0
+  changed_when: true
+
+- name: Read back managed daily PBS prune job
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, prune-job, show, "{{ media33_prune_job_id }}", --output-format, json]
+  register: media33_prune_readback_raw
+  changed_when: false
+
+- name: Require exactly 30 daily backups with no other retention intervals
+  ansible.builtin.assert:
+    that:
+      - (media33_prune_readback_raw.stdout | from_json).store == 'pbs-' ~ media_site.owner_slug
+      - (media33_prune_readback_raw.stdout | from_json).schedule == media33_pbs_prune_time
+      - (media33_prune_readback_raw.stdout | from_json)['keep-daily'] | int == 30
+      - >-
+        ((media33_prune_readback_raw.stdout | from_json).keys()
+         | intersect(['keep-last','keep-hourly','keep-weekly','keep-monthly','keep-yearly'])
+         | length) == 0
+    fail_msg: MEDIA33_PBS_PRUNE_JOB_POLICY_DRIFT
+
+- name: Set weekly garbage collection on only the named PBS datastore
   ansible.builtin.command:
     argv:
       - proxmox-backup-manager
       - datastore
       - update
       - "pbs-{{ media_site.owner_slug }}"
-      - --keep-daily
-      - '30'
-      - --prune-schedule
-      - "{{ media33_pbs_prune_time }}"
       - --gc-schedule
       - "{{ media33_pbs_gc_time }}"
-  when: >-
-    (media33_maintenance_store['keep-daily'] | default(0) | int) != 30 or
-    (media33_maintenance_store['prune-schedule'] | default('')) != media33_pbs_prune_time or
-    (media33_maintenance_store['gc-schedule'] | default('')) != media33_pbs_gc_time
+  when: (media33_maintenance_store['gc-schedule'] | default('')) != media33_pbs_gc_time
   changed_when: true
 
 - name: Check existing named PBS verify jobs
@@ -112,11 +166,9 @@
   register: media33_maintenance_readback_raw
   changed_when: false
 
-- name: Require local PBS daily-30 retention and weekly GC are active
+- name: Require local PBS weekly GC remains active
   ansible.builtin.assert:
     that:
-      - (media33_maintenance_readback_raw.stdout | from_json)['keep-daily'] | int == 30
-      - (media33_maintenance_readback_raw.stdout | from_json)['prune-schedule'] == media33_pbs_prune_time
       - (media33_maintenance_readback_raw.stdout | from_json)['gc-schedule'] == media33_pbs_gc_time
     fail_msg: MEDIA33_PBS_MAINTENANCE_POLICY_READBACK_FAILED
 
