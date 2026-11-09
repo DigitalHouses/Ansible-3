@@ -23,6 +23,9 @@
         pve_create: >-
           {{ pve_job_tasks | selectattr('name', 'equalto',
              'Create scheduled daily PVE snapshots excluding PBS host VM') | first }}
+        client_package: >-
+          {{ client_tasks | selectattr('name', 'equalto',
+             'Install the official PBS Backup Client for noninteractive local backups') | first }}
         client_generate: >-
           {{ client_tasks | selectattr('name', 'equalto',
              'Create a new dedicated PBS file client token only once') | first }}
@@ -52,6 +55,8 @@
           - "'--all' in pve_create['ansible.builtin.command'].argv"
           - "'--remove' in pve_create['ansible.builtin.command'].argv"
           - pve_create.when == 'media33_pve_backup_own | length == 0'
+          - client_package['ansible.builtin.apt'].name == 'proxmox-backup-client'
+          - client_package['ansible.builtin.apt'].state == 'present'
           - client_generate.no_log is sameas true
           - "'file-client' in client_generate['ansible.builtin.command'].argv"
           - client_env['ansible.builtin.copy'].mode == '0600'

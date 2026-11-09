@@ -2,6 +2,11 @@
 # Task 33 | Separate file-oriented PBS Backup Client token.
 # Distinct from PVE's root@pam!pve-local. No backup or restore is started.
 # Persist a root-only password file for noninteractive future client jobs.
+- name: Install the official PBS Backup Client for noninteractive local backups
+  ansible.builtin.apt:
+    name: proxmox-backup-client
+    state: present
+
 - name: Define standalone PBS Backup Client identity on this site
   ansible.builtin.set_fact:
     media33_file_client_id: root@pam!file-client
