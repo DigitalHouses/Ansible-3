@@ -562,7 +562,7 @@
     - name: Run read-only PVE acceptance after guest setup
       ansible.builtin.include_tasks: ../tasks/media-accept-pve.yml
 
-- name: "30 | Persist newly selected IP after successful guest and PVE acceptance"
+- name: "30 | Persist selected IP and VMID after successful guest and PVE acceptance"
   hosts: runner
   connection: local
   gather_facts: false
@@ -572,8 +572,10 @@
       https://api.github.com/repos/DigitalHouses/site-{{ media_site.id
       }}/contents/inventories/{{ media_site.id }}
   tasks:
-    - name: Write changed static media IP to the private site manifest
+    - name: Write changed static media IP and derived VMID to private site manifest
       ansible.builtin.include_tasks: ../tasks/media30-ip-persist.yml
       when:
         - hostvars['media_pve'].media_mode == 'apply'
-        - media_spec.network.ipv4 != media30_manifest_ipv4
+        - >-
+          media_spec.network.ipv4 != media30_manifest_ipv4 or
+          (media_spec.vmid | int) != (media30_manifest_vmid | int)

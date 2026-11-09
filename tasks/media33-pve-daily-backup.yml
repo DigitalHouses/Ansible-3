@@ -1,0 +1,114 @@
+---
+# Task 33 | One scheduled PVE vzdump backup job on the already validated PBS.
+# Explicitly excludes the VM hosting PBS (avoid circular backups).
+# Never invokes vzdump or any restore; creates the future schedule only.
+- name: Select the exact owner-local PBS backup job
+  ansible.builtin.set_fact:
+    media33_pve_backup_job_id: "dh-local-pbs-{{ media_site.owner_slug }}"
+    media33_pve_backup_time: '02:00'
+
+- name: Read the actual PVE host name for node-scoped backups
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: media33_pve_node_name
+  changed_when: false
+
+- name: Require the PVE target VM is exactly the local PBS hosting VM
+  ansible.builtin.assert:
+    that:
+      - media_spec.vmid | int == 2000 + (media_spec.network.ipv4.split('/')[0].split('.')[3] | int)
+      - media33_pve_node_name.stdout is match('^[a-z][a-z0-9-]*$')
+      - media33_pve_storage_id == 'pbs-' ~ media_site.owner_slug
+    fail_msg: MEDIA33_PVE_BACKUP_EXCLUSION_MISMATCH
+
+- name: Verify local PBS Backup Storage is reachable before making a schedule
+  ansible.builtin.command:
+    argv: [pvesm, status, --storage, "{{ media33_pve_storage_id }}"]
+  register: media33_backup_storage_status
+  changed_when: false
+
+- name: Require active owner PBS before registering daily job
+  ansible.builtin.assert:
+    that:
+      - >-
+        media33_backup_storage_status.stdout_lines |
+        select('match', '^' ~ (media33_pve_storage_id | regex_escape) ~ '\s+pbs\s+active\s+')
+        | list | length == 1
+    fail_msg: MEDIA33_PVE_BACKUP_STORAGE_INACTIVE
+
+- name: Read existing PVE backup schedules
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/backup, --output-format, json]
+  register: media33_pve_backup_jobs_raw
+  changed_when: false
+
+- name: Select only managed backup job and possible competing jobs on this storage
+  ansible.builtin.set_fact:
+    media33_pve_backup_own: >-
+      {{ (media33_pve_backup_jobs_raw.stdout | from_json)
+         | selectattr('id', 'equalto', media33_pve_backup_job_id) | list }}
+    media33_pve_backup_competing: >-
+      {{ (media33_pve_backup_jobs_raw.stdout | from_json)
+         | selectattr('storage', 'defined')
+         | selectattr('storage', 'equalto', media33_pve_storage_id)
+         | rejectattr('id', 'equalto', media33_pve_backup_job_id) | list }}
+
+- name: Prevent accidental duplicate daily PVE backup schedules
+  ansible.builtin.assert:
+    that:
+      - media33_pve_backup_own | length <= 1
+      - media33_pve_backup_competing | length == 0
+      - >-
+        media33_pve_backup_own | length == 0 or
+        media33_pve_backup_own[0].storage == media33_pve_storage_id
+    fail_msg: MEDIA33_PVE_BACKUP_JOB_CONFLICT
+
+- name: Create scheduled daily PVE snapshots excluding PBS host VM
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - create
+      - /cluster/backup
+      - --id
+      - "{{ media33_pve_backup_job_id }}"
+      - --storage
+      - "{{ media33_pve_storage_id }}"
+      - --node
+      - "{{ media33_pve_node_name.stdout | trim }}"
+      - --schedule
+      - "{{ media33_pve_backup_time }}"
+      - --mode
+      - snapshot
+      - --all
+      - '1'
+      - --exclude
+      - "{{ media_spec.vmid }}"
+      - --remove
+      - '0'
+      - --notification-mode
+      - notification-system
+      - --enabled
+      - '1'
+  when: media33_pve_backup_own | length == 0
+  changed_when: true
+
+- name: Read the exact scheduled PVE backup job
+  ansible.builtin.command:
+    argv: [pvesh, get, "/cluster/backup/{{ media33_pve_backup_job_id }}", --output-format, json]
+  register: media33_pve_backup_job_readback_raw
+  changed_when: false
+
+- name: Verify PVE backup schedule only includes guests other than its PBS VM
+  ansible.builtin.assert:
+    that:
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).storage == media33_pve_storage_id
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).node == media33_pve_node_name.stdout | trim
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).mode == 'snapshot'
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).schedule == media33_pve_backup_time
+      - (media33_pve_backup_job_readback_raw.stdout | from_json)['all'] | int == 1
+      - >-
+        (media33_pve_backup_job_readback_raw.stdout | from_json).exclude | string
+        == media_spec.vmid | string
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).remove | default(0) | int == 0
+      - (media33_pve_backup_job_readback_raw.stdout | from_json).enabled | default(1) | int == 1
+    fail_msg: MEDIA33_PVE_BACKUP_JOB_READBACK_FAILED

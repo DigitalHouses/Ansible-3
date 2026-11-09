@@ -1,0 +1,170 @@
+---
+# Task 33 | Separate file-oriented PBS Backup Client token.
+# Distinct from PVE's root@pam!pve-local. No backup or restore is started.
+# Persist a root-only password file for noninteractive future client jobs.
+- name: Define standalone PBS Backup Client identity on this site
+  ansible.builtin.set_fact:
+    media33_file_client_id: root@pam!file-client
+    media33_file_client_token_path: /etc/digitalhouses/pbs-file-client.token
+    media33_file_client_env_path: /etc/digitalhouses/pbs-file-client.env
+    media33_file_client_repo: "root@pam!file-client@127.0.0.1:pbs-{{ media_site.owner_slug }}"
+
+- name: Require file client token differs from local PVE storage token
+  ansible.builtin.assert:
+    that:
+      - media33_file_client_id != media33_pve_token_id
+      - media33_file_client_repo.endswith('pbs-' ~ media_site.owner_slug)
+      - (media33_pbs_datastore_readback.stdout | from_json).path == media33_pbs_path
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_IDENTITY_INVALID
+
+- name: Inspect existing standalone client password file
+  ansible.builtin.stat:
+    path: "{{ media33_file_client_token_path }}"
+    follow: false
+  register: media33_file_client_secret_stat
+  no_log: true
+
+- name: Require the existing standalone client password file is root-private
+  ansible.builtin.assert:
+    that:
+      - >-
+        not media33_file_client_secret_stat.stat.exists or
+        (media33_file_client_secret_stat.stat.isreg | default(false) and
+         media33_file_client_secret_stat.stat.pw_name == 'root' and
+         media33_file_client_secret_stat.stat.mode == '0600')
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_SECRET_UNSAFE
+  no_log: true
+
+- name: Read configured PBS root API token identifiers
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+  register: media33_file_client_tokens_raw
+  changed_when: false
+  no_log: true
+
+- name: Match only the managed file client token
+  ansible.builtin.set_fact:
+    media33_file_client_existing_tokens: >-
+      {{ (media33_file_client_tokens_raw.stdout | from_json)
+         | selectattr('tokenid', 'equalto', media33_file_client_id) | list }}
+  no_log: true
+
+- name: Reject orphaned client token or missing private secret rather than rotate
+  ansible.builtin.assert:
+    that:
+      - media33_file_client_existing_tokens | length <= 1
+      - >-
+        (media33_file_client_existing_tokens | length == 1) ==
+        (media33_file_client_secret_stat.stat.exists | bool)
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_TOKEN_OUT_OF_SYNC
+  no_log: true
+
+- name: Create a new dedicated PBS file client token only once
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - user
+      - generate-token
+      - root@pam
+      - file-client
+      - --comment
+      - "Local file-oriented client on {{ media_site.id }}"
+  register: media33_file_client_generated
+  when: media33_file_client_existing_tokens | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Decode generated one-time PBS token secret
+  ansible.builtin.set_fact:
+    media33_file_client_created_token: >-
+      {{ (media33_file_client_generated.stdout
+         | regex_search('(?s)\{.*\}') | from_json) }}
+  when: media33_file_client_existing_tokens | length == 0
+  no_log: true
+
+- name: Validate newly created standalone client identity and secret
+  ansible.builtin.assert:
+    that:
+      - media33_file_client_created_token.tokenid == media33_file_client_id
+      - media33_file_client_created_token.value | length > 30
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_TOKEN_RESPONSE_INVALID
+  when: media33_file_client_existing_tokens | length == 0
+  no_log: true
+
+- name: Store standalone client token only in a root-protected file
+  ansible.builtin.copy:
+    dest: "{{ media33_file_client_token_path }}"
+    content: "{{ media33_file_client_created_token.value }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+  when: media33_file_client_existing_tokens | length == 0
+  no_log: true
+
+- name: Inspect existing permission grants for the standalone client
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, acl, list, --output-format, json]
+  register: media33_file_client_acl_raw
+  changed_when: false
+
+- name: Select standalone client ACL grants only
+  ansible.builtin.set_fact:
+    media33_file_client_acl: >-
+      {{ (media33_file_client_acl_raw.stdout | from_json)
+         | selectattr('ugid', 'equalto', media33_file_client_id) | list }}
+    media33_file_client_acl_path: "/datastore/pbs-{{ media_site.owner_slug }}"
+
+- name: Refuse broader PBS privileges or access to other datastores
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media33_file_client_acl | rejectattr('path','equalto',media33_file_client_acl_path) | list | length) == 0
+      - >-
+        (media33_file_client_acl | rejectattr('roleid','in',['DatastoreBackup','DatastoreAudit']) | list | length) == 0
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_ACL_UNEXPECTED_PRIVILEGES
+
+- name: Grant standalone file client backup and audit permissions on just this datastore
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - acl
+      - update
+      - "{{ media33_file_client_acl_path }}"
+      - "{{ item }}"
+      - --auth-id
+      - "{{ media33_file_client_id }}"
+  loop:
+    - DatastoreBackup
+    - DatastoreAudit
+  when: item not in (media33_file_client_acl | map(attribute='roleid') | list)
+  changed_when: true
+
+- name: Configure protected noninteractive client environment with password-file reference
+  ansible.builtin.copy:
+    dest: "{{ media33_file_client_env_path }}"
+    content: |
+      PBS_REPOSITORY={{ media33_file_client_repo }}
+      PBS_PASSWORD_FILE={{ media33_file_client_token_path }}
+      PBS_FINGERPRINT={{ media33_pve_pbs_fingerprint }}
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Confirm file-oriented PBS client can authenticate unattended without backing anything up
+  ansible.builtin.command:
+    argv: [proxmox-backup-client, list, --output-format, json]
+  environment:
+    PBS_REPOSITORY: "{{ media33_file_client_repo }}"
+    PBS_PASSWORD_FILE: "{{ media33_file_client_token_path }}"
+    PBS_FINGERPRINT: "{{ media33_pve_pbs_fingerprint }}"
+  register: media33_file_client_read_test
+  changed_when: false
+  no_log: true
+
+- name: Require noninteractive client list returned valid structured JSON
+  ansible.builtin.assert:
+    that:
+      - media33_file_client_read_test.rc == 0
+      - (media33_file_client_read_test.stdout | from_json) is sequence
+    fail_msg: MEDIA33_PBS_FILE_CLIENT_AUTHENTICATION_FAILED
+  no_log: true

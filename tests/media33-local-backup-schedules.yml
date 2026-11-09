@@ -1,0 +1,67 @@
+---
+- name: Verify local PBS scheduled backups and unattended client without contacting PVE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    pbs_job_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-pbs-maintenance.yml') | from_yaml }}"
+    pve_job_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-pve-daily-backup.yml') | from_yaml }}"
+    client_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media33-pbs-file-client.yml') | from_yaml }}"
+    task33: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-rclone-gui.yml') }}"
+  tasks:
+    - name: Collect only significant native PBS/PVE/client operations
+      ansible.builtin.set_fact:
+        pbs_policy: >-
+          {{ pbs_job_tasks | selectattr('name', 'equalto',
+             'Set 30 daily backups with daily prune and weekly GC on only this datastore') | first }}
+        verify_create: >-
+          {{ pbs_job_tasks | selectattr('name', 'equalto',
+             'Create named weekly PBS verify job only when absent') | first }}
+        pve_create: >-
+          {{ pve_job_tasks | selectattr('name', 'equalto',
+             'Create scheduled daily PVE snapshots excluding PBS host VM') | first }}
+        client_generate: >-
+          {{ client_tasks | selectattr('name', 'equalto',
+             'Create a new dedicated PBS file client token only once') | first }}
+        client_env: >-
+          {{ client_tasks | selectattr('name', 'equalto',
+             'Configure protected noninteractive client environment with password-file reference') | first }}
+        client_probe: >-
+          {{ client_tasks | selectattr('name', 'equalto',
+             'Confirm file-oriented PBS client can authenticate unattended without backing anything up') | first }}
+
+    - name: Assert no automatic backups are executed by this playbook
+      ansible.builtin.assert:
+        that:
+          - "'../tasks/media33-pbs-maintenance.yml' in task33"
+          - "'../tasks/media33-pbs-file-client.yml' in task33"
+          - "'../tasks/media33-pve-daily-backup.yml' in task33"
+          - "'--keep-daily' in pbs_policy['ansible.builtin.command'].argv"
+          - "'30' in pbs_policy['ansible.builtin.command'].argv"
+          - "'--prune-schedule' in pbs_policy['ansible.builtin.command'].argv"
+          - "'--gc-schedule' in pbs_policy['ansible.builtin.command'].argv"
+          - "'--outdated-after' in verify_create['ansible.builtin.command'].argv"
+          - "'30' in verify_create['ansible.builtin.command'].argv"
+          - verify_create.when == 'media33_verify_own | length == 0'
+          - pve_create['ansible.builtin.command'].argv[:3] == ['pvesh','create','/cluster/backup']
+          - "'--exclude' in pve_create['ansible.builtin.command'].argv"
+          - "'--all' in pve_create['ansible.builtin.command'].argv"
+          - "'--remove' in pve_create['ansible.builtin.command'].argv"
+          - pve_create.when == 'media33_pve_backup_own | length == 0'
+          - client_generate.no_log is sameas true
+          - "'file-client' in client_generate['ansible.builtin.command'].argv"
+          - client_env['ansible.builtin.copy'].mode == '0600'
+          - "'PBS_PASSWORD_FILE' in client_env['ansible.builtin.copy'].content"
+          - "'PBS_PASSWORD=' not in client_env['ansible.builtin.copy'].content"
+          - client_probe.no_log is sameas true
+          - client_probe['ansible.builtin.command'].argv == ['proxmox-backup-client','list','--output-format','json']
+          - "'vzdump' not in pve_job_tasks | to_json"
+          - "'prune-job, run' not in pbs_job_tasks | to_json"
+          - "'gc, start' not in pbs_job_tasks | to_json"
+
+    - name: Calculate new VM ID from alternate media server addresses
+      ansible.builtin.assert:
+        that:
+          - 2000 + ('192.168.11.232'.split('.')[3] | int) == 2232
+          - 2000 + ('192.168.11.250'.split('.')[3] | int) == 2250
+          - 2000 + ('192.168.22.250'.split('.')[3] | int) == 2250
