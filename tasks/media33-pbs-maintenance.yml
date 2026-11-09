@@ -1,0 +1,134 @@
+---
+# Task 33 | Local PBS-only retention policy and maintenance schedule.
+# Uses the datastore's native prune/gc schedules and a named verify job.
+# Never executes prune/GC/verify immediately, deletes snapshots, or touches media.
+- name: Define owner-specific local PBS maintenance policy
+  ansible.builtin.set_fact:
+    media33_verify_job_id: "dh-weekly-{{ media_site.owner_slug }}"
+    media33_pbs_prune_time: '04:00'
+    media33_pbs_gc_time: 'sat 06:00'
+    media33_pbs_verify_time: 'sun 07:00'
+
+- name: Read exact owner-specific PBS datastore configuration
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, datastore, show, "pbs-{{ media_site.owner_slug }}", --output-format, json]
+  register: media33_maintenance_store_raw
+  changed_when: false
+
+- name: Keep managed retention independent of other datastores
+  ansible.builtin.set_fact:
+    media33_maintenance_store: "{{ media33_maintenance_store_raw.stdout | from_json }}"
+
+- name: Require exactly the expected mounted ZFS dataset before scheduling maintenance
+  ansible.builtin.assert:
+    that:
+      - media33_maintenance_store.path == media33_pbs_path
+      - media33_pbs_atime_readback.stdout | trim == 'on'
+      - >-
+        media33_maintenance_store.keys() | intersect(
+          ['keep-last','keep-hourly','keep-weekly','keep-monthly','keep-yearly']
+        ) | length == 0
+    fail_msg: MEDIA33_PBS_RETENTION_CONFLICT
+
+- name: Set 30 daily backups with daily prune and weekly GC on only this datastore
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - datastore
+      - update
+      - "pbs-{{ media_site.owner_slug }}"
+      - --keep-daily
+      - '30'
+      - --prune-schedule
+      - "{{ media33_pbs_prune_time }}"
+      - --gc-schedule
+      - "{{ media33_pbs_gc_time }}"
+  when: >-
+    (media33_maintenance_store['keep-daily'] | default(0) | int) != 30 or
+    (media33_maintenance_store['prune-schedule'] | default('')) != media33_pbs_prune_time or
+    (media33_maintenance_store['gc-schedule'] | default('')) != media33_pbs_gc_time
+  changed_when: true
+
+- name: Check existing named PBS verify jobs
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, verify-job, list, --output-format, json]
+  register: media33_verify_jobs_raw
+  changed_when: false
+
+- name: Identify only our own weekly verify job and pre-existing competing jobs
+  ansible.builtin.set_fact:
+    media33_verify_own: >-
+      {{ (media33_verify_jobs_raw.stdout | from_json)
+         | selectattr('id', 'equalto', media33_verify_job_id) | list }}
+    media33_verify_competing: >-
+      {{ (media33_verify_jobs_raw.stdout | from_json)
+         | selectattr('store', 'equalto', 'pbs-' ~ media_site.owner_slug)
+         | rejectattr('id', 'equalto', media33_verify_job_id) | list }}
+
+- name: Refuse to overwrite another verify policy for this same datastore
+  ansible.builtin.assert:
+    that:
+      - media33_verify_own | length <= 1
+      - media33_verify_competing | length == 0
+      - >-
+        media33_verify_own | length == 0 or
+        media33_verify_own[0].store == 'pbs-' ~ media_site.owner_slug
+    fail_msg: MEDIA33_PBS_VERIFY_JOB_CONFLICT
+
+- name: Create named weekly PBS verify job only when absent
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - verify-job
+      - create
+      - "{{ media33_verify_job_id }}"
+      - --store
+      - "pbs-{{ media_site.owner_slug }}"
+      - --schedule
+      - "{{ media33_pbs_verify_time }}"
+      - --ignore-verified
+      - 'true'
+      - --outdated-after
+      - '30'
+      - --read-threads
+      - '1'
+      - --verify-threads
+      - '2'
+  when: media33_verify_own | length == 0
+  changed_when: true
+
+- name: Refuse drift of an already managed verify job instead of silently replacing settings
+  ansible.builtin.assert:
+    that:
+      - media33_verify_own[0].schedule == media33_pbs_verify_time
+      - media33_verify_own[0]['ignore-verified'] | default(true) | bool
+      - media33_verify_own[0]['outdated-after'] | default(30) | int == 30
+    fail_msg: MEDIA33_PBS_VERIFY_JOB_POLICY_DRIFT
+  when: media33_verify_own | length == 1
+
+- name: Read back PBS retention and maintenance schedules
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, datastore, show, "pbs-{{ media_site.owner_slug }}", --output-format, json]
+  register: media33_maintenance_readback_raw
+  changed_when: false
+
+- name: Require local PBS daily-30 retention and weekly GC are active
+  ansible.builtin.assert:
+    that:
+      - (media33_maintenance_readback_raw.stdout | from_json)['keep-daily'] | int == 30
+      - (media33_maintenance_readback_raw.stdout | from_json)['prune-schedule'] == media33_pbs_prune_time
+      - (media33_maintenance_readback_raw.stdout | from_json)['gc-schedule'] == media33_pbs_gc_time
+    fail_msg: MEDIA33_PBS_MAINTENANCE_POLICY_READBACK_FAILED
+
+- name: Confirm weekly verify job can be read back from PBS
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, verify-job, show, "{{ media33_verify_job_id }}", --output-format, json]
+  register: media33_verify_readback_raw
+  changed_when: false
+
+- name: Require weekly verification points to the exact owner datastore
+  ansible.builtin.assert:
+    that:
+      - (media33_verify_readback_raw.stdout | from_json).store == 'pbs-' ~ media_site.owner_slug
+      - (media33_verify_readback_raw.stdout | from_json).schedule == media33_pbs_verify_time
+    fail_msg: MEDIA33_PBS_VERIFY_READBACK_FAILED

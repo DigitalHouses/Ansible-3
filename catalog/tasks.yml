@@ -185,4 +185,4 @@ tasks:
           - {name: "Опубликовать Webmin через защищённый Tunnel", value: apply}
   - name: "33-rclone Web GUI"
     playbook: playbooks/media-rclone-gui.yml
-    description: "rclone/Restic, PBS 4.2+, ZFS dataset и datastore pbs-<owner>, подключение PVE Backup Storage; без VM/дисков и backup jobs"
+    description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"

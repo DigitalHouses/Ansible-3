@@ -155,6 +155,12 @@
     - name: Prepare restricted local PVE API token in PBS
       ansible.builtin.include_tasks: ../tasks/media33-pbs-pve-token.yml
 
+    - name: Configure dedicated noninteractive PBS file client identity
+      ansible.builtin.include_tasks: ../tasks/media33-pbs-file-client.yml
+
+    - name: Schedule 30 daily restores points with daily prune and weekly GC and verify
+      ansible.builtin.include_tasks: ../tasks/media33-pbs-maintenance.yml
+
     - name: Update only the existing static media portal page
       ansible.builtin.template:
         src: "{{ playbook_dir | dirname }}/templates/media-portal.html.j2"
@@ -201,11 +207,19 @@
     - name: Attach registered PBS datastore to PVE with restricted API token
       ansible.builtin.include_tasks: ../tasks/media33-pve-pbs-storage.yml
 
-    - name: Report ready local PBS backup and restore target without scheduling jobs
+    - name: Schedule daily PVE backups excluding the PBS hosting VM
+      ansible.builtin.include_tasks: ../tasks/media33-pve-daily-backup.yml
+
+    - name: Report ready local PBS backup and restore target
       ansible.builtin.debug:
         msg:
-          status: MEDIA33_LOCAL_PBS_PVE_STORAGE_READY
+          status: MEDIA33_LOCAL_PBS_SCHEDULE_READY
           pve_storage: "pbs-{{ media_site.owner_slug }}"
           datastore: "pbs-{{ media_site.owner_slug }}"
           pbs_server: "{{ media_spec.network.ipv4.split('/')[0] }}:8007"
-          backup_job_created: false
+          backup_job: "dh-local-pbs-{{ media_site.owner_slug }}"
+          backup_schedule: '02:00'
+          keep_daily: 30
+          prune_schedule: '04:00'
+          gc_schedule: 'sat 06:00'
+          verify_schedule: 'sun 07:00'

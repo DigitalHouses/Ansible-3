@@ -5,19 +5,27 @@
   ansible.builtin.set_fact:
     media30_original_manifest_text: "{{ media_vm_file.json.content | b64decode }}"
 
-- name: Require exactly one canonical network IPv4 line before editing
+- name: Require exactly one canonical network IPv4 and VMID before editing
   ansible.builtin.assert:
     that:
       - >-
         (media30_original_manifest_text | regex_findall(
           '(?m)^    ipv4: ' ~ (media30_manifest_ipv4 | regex_escape) ~
           '(?=[ \\t]*(?:#.*)?$)') | length) == 1
+      - >-
+        (media30_original_manifest_text | regex_findall(
+          '(?m)^  vmid: ' ~ (media30_manifest_vmid | string | regex_escape) ~
+          '(?=[ \\t]*(?:#.*)?$)') | length) == 1
     fail_msg: MEDIA30_MANIFEST_IP_LINE_UNEXPECTED
 
-- name: Replace only canonical IPv4 and stale static-address comment
+- name: Replace only canonical IPv4, matching VMID and stale static-address comment
   ansible.builtin.set_fact:
     media30_persisted_manifest_text: >-
       {{ media30_original_manifest_text
+         | regex_replace(
+           '(?m)^  vmid: ' ~ (media30_manifest_vmid | string | regex_escape) ~
+           '(?=[ \\t]*(?:#.*)?$)',
+           '  vmid: ' ~ (media_spec.vmid | string))
          | regex_replace(
            '(?m)^    ipv4: ' ~ (media30_manifest_ipv4 | regex_escape) ~
            '(?=[ \\t]*(?:#.*)?$)',
@@ -31,4 +39,5 @@
     that:
       - (media30_persisted_manifest_text | from_yaml).media_vm == media_spec
       - media30_persisted_manifest_text != media30_original_manifest_text
+      - (media30_persisted_manifest_text | from_yaml).media_vm.vmid | int == media30_selected_vmid | int
     fail_msg: MEDIA30_MANIFEST_IP_PERSISTENCE_MISMATCH

@@ -5,6 +5,7 @@
   ansible.builtin.set_fact:
     media30_ip_choice: "{{ DH_MEDIA_IP | default('232', true) | string | trim }}"
     media30_manifest_ipv4: "{{ media_spec.network.ipv4 }}"
+    media30_manifest_vmid: "{{ media_spec.vmid | int }}"
 
 - name: Require IPv4 host address or last octet from Semaphore
   ansible.builtin.assert:
@@ -49,9 +50,22 @@
       MEDIA30_IP_INVALID: choose a free static host in the declared
       LAN /24, outside the DHCP range and different from gateway/PVE.
 
-- name: Inject selected static IPv4 throughout task 30 without changing the source manifest
+- name: Derive media VMID from the static IP's last octet
+  ansible.builtin.set_fact:
+    media30_selected_vmid: "{{ 2000 + (media30_selected_ipv4.split('.')[3] | int) }}"
+
+- name: Require deterministic valid PVE VMID derived from media IP
+  ansible.builtin.assert:
+    that:
+      - media30_selected_vmid | int >= 2001
+      - media30_selected_vmid | int <= 2254
+      - media30_selected_vmid | int == 2000 + (media30_selected_ipv4.split('.')[3] | int)
+    fail_msg: MEDIA30_IP_TO_VMID_MAPPING_INVALID
+
+- name: Inject selected IPv4 and matching VMID throughout task 30
   ansible.builtin.set_fact:
     media_spec: >-
       {{ media_spec | combine(
-          {'network': {'ipv4': media30_selected_ipv4 ~ '/24'}},
+          {'network': {'ipv4': media30_selected_ipv4 ~ '/24'},
+           'vmid': media30_selected_vmid | int},
           recursive=True) }}
