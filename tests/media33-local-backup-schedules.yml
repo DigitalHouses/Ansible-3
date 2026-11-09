@@ -13,7 +13,10 @@
       ansible.builtin.set_fact:
         pbs_policy: >-
           {{ pbs_job_tasks | selectattr('name', 'equalto',
-             'Set 30 daily backups with daily prune and weekly GC on only this datastore') | first }}
+             'Create PBS 4.2 daily prune job retaining 30 daily backups') | first }}
+        gc_policy: >-
+          {{ pbs_job_tasks | selectattr('name', 'equalto',
+             'Set weekly garbage collection on only the named PBS datastore') | first }}
         verify_create: >-
           {{ pbs_job_tasks | selectattr('name', 'equalto',
              'Create named weekly PBS verify job only when absent') | first }}
@@ -38,8 +41,9 @@
           - "'../tasks/media33-pve-daily-backup.yml' in task33"
           - "'--keep-daily' in pbs_policy['ansible.builtin.command'].argv"
           - "'30' in pbs_policy['ansible.builtin.command'].argv"
-          - "'--prune-schedule' in pbs_policy['ansible.builtin.command'].argv"
-          - "'--gc-schedule' in pbs_policy['ansible.builtin.command'].argv"
+          - "'--schedule' in pbs_policy['ansible.builtin.command'].argv"
+          - "'--gc-schedule' in gc_policy['ansible.builtin.command'].argv"
+          - pbs_policy.when == 'media33_prune_own | length == 0'
           - "'--outdated-after' in verify_create['ansible.builtin.command'].argv"
           - "'30' in verify_create['ansible.builtin.command'].argv"
           - verify_create.when == 'media33_verify_own | length == 0'
