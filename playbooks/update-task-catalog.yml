@@ -7,8 +7,13 @@
   vars:
     semaphore_api: http://127.0.0.1/api
     site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    site_profile: >-
+      {{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-profile', errors='ignore')
+         | default('home', true) | trim }}
     catalog: >-
-      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../catalog/tasks.yml')
+      {{ lookup('ansible.builtin.file',
+                playbook_dir ~ '/../catalog/' ~
+                ('core-tasks.yml' if site_profile == 'core' else 'tasks.yml'))
          | from_yaml }}
   tasks:
     - name: Load the catalog API token
@@ -37,6 +42,7 @@
       ansible.builtin.assert:
         that:
           - site_projects | length == 1
+          - site_profile in ['home', 'core']
           - catalog.tasks is sequence
           - catalog.tasks | length > 0
         fail_msg: Invalid site project or task catalog

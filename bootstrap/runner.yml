@@ -16,6 +16,8 @@
       ansible.builtin.assert:
         that:
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - site_profile | default('home') in ['home', 'core']
+          - site_profile | default('home') != 'core' or site_id == 'dh-core'
           - runner_hostname is match('^[a-z0-9][a-z0-9-]+$')
           - runner_ip is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
           - pve_ipv4 is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
@@ -81,6 +83,14 @@
       ansible.builtin.copy:
         dest: /etc/digitalhouses/site-id
         content: "{{ site_id }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Store the runner site profile
+      ansible.builtin.copy:
+        dest: /etc/digitalhouses/site-profile
+        content: "{{ site_profile | default('home') }}\n"
         owner: root
         group: root
         mode: '0644'
