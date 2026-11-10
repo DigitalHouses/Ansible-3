@@ -4,4 +4,4 @@
 tasks:
   - name: 00-Обновить список задач
     playbook: playbooks/update-task-catalog.yml
-    description: Synchronize CORE tasks from the public Ansible-3 repo
+    description: Обновить каталог задач CORE из Ansible-3 (без запуска остальных задач)

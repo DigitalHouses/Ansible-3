@@ -128,7 +128,7 @@
       when: item.name not in (templates.json | map(attribute='name') | list)
       no_log: true
 
-    - name: Reconcile Survey fields of existing catalog templates
+    - name: Reconcile descriptions and Survey fields of existing catalog templates
       ansible.builtin.uri:
         url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates/{{ current_template.id }}"
         method: PUT
@@ -140,39 +140,41 @@
           project_id: "{{ site_projects[0].id }}"
           name: "{{ current_template.name }}"
           app: "{{ current_template.app }}"
-          description: "{{ current_template.description }}"
+          description: "{{ item.description | default(current_template.description) }}"
           playbook: "{{ current_template.playbook }}"
           arguments: "{{ current_template.arguments }}"
           inventory_id: "{{ current_template.inventory_id }}"
           repository_id: "{{ current_template.repository_id }}"
           environment_id: "{{ current_template.environment_id }}"
-          survey_vars: "{{ item.survey_vars }}"
+          survey_vars: "{{ desired_survey }}"
         use_proxy: false
         status_code: [200, 204]
       vars:
         current_template: "{{ templates.json | selectattr('name', 'equalto', item.name) | first }}"
         current_survey: "{{ current_template.survey_vars | default([]) }}"
+        desired_survey: "{{ item.survey_vars | default(current_survey) }}"
       loop: "{{ catalog.tasks }}"
       loop_control:
         label: "{{ item.name }}"
       when:
-        - item.survey_vars is defined
         - item.name in (templates.json | map(attribute='name') | list)
         - >-
+            current_template.description !=
+            (item.description | default(current_template.description)) or
             (current_survey | map(attribute='name') | list) !=
-            (item.survey_vars | map(attribute='name') | list)
+            (desired_survey | map(attribute='name') | list)
             or (current_survey | map(attribute='title') | list) !=
-            (item.survey_vars | map(attribute='title') | list)
+            (desired_survey | map(attribute='title') | list)
             or (current_survey | map(attribute='type', default='') | list) !=
-            (item.survey_vars | map(attribute='type', default='') | list)
+            (desired_survey | map(attribute='type', default='') | list)
             or (current_survey | selectattr('type', 'defined') | selectattr('type', 'equalto', 'enum') | map(attribute='values') | list) !=
-            (item.survey_vars | selectattr('type', 'defined') | selectattr('type', 'equalto', 'enum') | map(attribute='values') | list)
+            (desired_survey | selectattr('type', 'defined') | selectattr('type', 'equalto', 'enum') | map(attribute='values') | list)
             or (current_survey | map(attribute='default_value', default='') | list) !=
-            (item.survey_vars | map(attribute='default_value', default='') | list)
+            (desired_survey | map(attribute='default_value', default='') | list)
             or (current_survey | map(attribute='required', default=false) | list) !=
-            (item.survey_vars | map(attribute='required', default=false) | list)
+            (desired_survey | map(attribute='required', default=false) | list)
             or (current_survey | map(attribute='target', default='') | list) !=
-            (item.survey_vars | map(attribute='target', default='') | list)
+            (desired_survey | map(attribute='target', default='') | list)
       no_log: true
 
     - name: "Verify ownership of existing task 30 before changing its entrypoint"
@@ -229,5 +231,5 @@
       ansible.builtin.debug:
         msg: >-
           Catalog checked for {{ site_id }}. Existing tasks kept;
-          missing templates added and Surveys reconciled; only the known #30
+          missing templates added; descriptions and Surveys reconciled; only the known #30
           audit-to-native entrypoint may be updated. Nothing executed or deleted.
