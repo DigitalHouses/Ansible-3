@@ -16,12 +16,7 @@
     media_mqtt_password: >-
       {{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}
     media_root_password: >-
-      {{ lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD_ON_RUN')
-         | default(
-             (DH_MEDIA_ROOT_PASSWORD
-              | default(lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD'), true))
-             if media_vm_action in ['create', 'recreate'] else '',
-             true) }}
+      {{ DH_MEDIA_ROOT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD'), true) }}
     media_mode: "{{ DH_MEDIA_MODE | default('audit', true) }}"
     media_vm_action: "{{ DH_MEDIA_VM_ACTION | default('', true) }}"
     media_disk_action: "{{ DH_MEDIA_DISK_ACTION | default('', true) }}"
@@ -36,7 +31,7 @@
           - media_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
         fail_msg: "Task 30 deployment requires valid mode, VM action and disk action"
 
-    - name: Validate the selected Linux root password before any VM lifecycle change
+    - name: Validate the Linux root password saved in task 05 before VM changes
       ansible.builtin.assert:
         that:
           - media_root_password is string
@@ -46,11 +41,11 @@
       when: media_mode == 'apply' and media_root_password | length > 0
       no_log: true
 
-    - name: Require a Linux root password before creating or recreating the media VM
+    - name: Require stored task 05 Linux root password before VM create/recreate
       ansible.builtin.assert:
         that:
           - media_mode == 'audit' or media_vm_action == 'keep' or media_root_password | length > 0
-        fail_msg: MEDIA30_ROOT_PASSWORD_REQUIRED_FOR_NEW_VM
+        fail_msg: MEDIA30_ROOT_PASSWORD_REQUIRED_IN_TASK_05
       no_log: true
 
     - name: Require task 05 GitHub provisioning credential
