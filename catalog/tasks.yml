@@ -155,6 +155,7 @@ tasks:
           - {name: "import — импортировать существующий ZFS, не стирать", value: import}
           - {name: "erase — СТЕРЕТЬ выбранный SATA-диск и создать ZFS заново", value: erase}
       - {name: DH_MEDIA_IP, title: "IP медиасервера (232 или полный IPv4 в LAN)", type: "", target: "", required: true, default_value: "232", values: []}
+      - {name: DH_MEDIA_ROOT_PASSWORD_ON_RUN, title: "Linux root / PBS root@pam — новый пароль (пусто = не менять при keep)", type: secret, target: env, required: false, values: []}
       - {name: DH_MEDIA_VM_CPU_PERCENT, title: "CPU всей VM (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
       - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "CPU Plex+Jellyfin общий (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
   - name: "31-Сменить общий пароль медиасервера"
