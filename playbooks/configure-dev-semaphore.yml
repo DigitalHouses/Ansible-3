@@ -117,7 +117,7 @@
         mode: '0640'
         content: |
           {{ ((dev_server_config.content | b64decode | from_json)
-             | combine({'web_host': '/'})) | to_nice_json }}
+             | combine({'web_host': ''})) | to_nice_json }}
       register: sem_public_web_host_config
       no_log: true
       when: sem_cf_action == 'apply'

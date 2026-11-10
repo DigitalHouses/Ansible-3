@@ -145,7 +145,7 @@
             host: /var/lib/semaphore/database.sqlite
           port: ':80'
           interface: 0.0.0.0
-          web_host: '/'
+          web_host: ''
           tmp_path: /var/lib/semaphore/tmp
           cookie_hash: "{{ sem_cookie_hash }}"
           cookie_encryption: "{{ sem_cookie_encryption }}"
