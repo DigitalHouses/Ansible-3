@@ -271,8 +271,11 @@
          ((cf_matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
     fail_msg: "Cloudflare hostname is occupied by foreign DNS; do not reassign"
   loop: "{{ cf_dns_preflight.results }}"
-  when: item.item == public_hostname or quantum_requested
-  no_log: true
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - requested_mode == 'apply'
+    - item.item == public_hostname or quantum_requested
 
 - name: Identify current public PVE origin for audit output
   ansible.builtin.set_fact:
@@ -287,12 +290,13 @@
       - "CLOUDFLARE_MODE={{ requested_mode }}"
       - "TUNNEL={{ pve_tunnel_name }}"
       - "TUNNEL_EXISTS={{ cf_matching_tunnels | length == 1 }}"
+      - "TUNNEL_STATUS={{ cf_matching_tunnels[0].status if cf_matching_tunnels | length == 1 else 'absent' }}"
       - "TUNNEL_LOCAL_OWNER={{ cf_locally_owned }}"
       - "TUNNEL_ACTIVE_ELSEWHERE={{ cf_tunnel_active_elsewhere }}"
       - "ORIGIN_CURRENT={{ cf_current_pve_origin }}"
       - "ORIGIN_DESIRED={{ desired_origin }}"
-      - "DNS_PVE={{ cf_dns_preflight.results[0].json.result | length == 1 }}"
-      - "DNS_QUANTUM={{ cf_dns_preflight.results[1].json.result | length == 1 }}"
+      - "DNS_PVE_TARGET={{ (cf_dns_preflight.results[0].json.result | first | default({})).content | default('none') }}"
+      - "DNS_QUANTUM_TARGET={{ (cf_dns_preflight.results[1].json.result | first | default({})).content | default('none') }}"
 
 - name: Commission or reconcile only the owned PVE Tunnel
   ansible.builtin.include_tasks:
