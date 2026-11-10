@@ -25,7 +25,7 @@
         that:
           - media30_catalog_matches | length == 1
           - media30_catalog_matches[0].playbook == 'playbooks/media-server-deploy.yml'
-          - media30_catalog_matches[0].survey_vars | map(attribute='name') | list | length == 7
+          - media30_catalog_matches[0].survey_vars | map(attribute='name') | list | length == 6
           - >-
             (media30_catalog_matches[0].survey_vars
              | selectattr('name', 'equalto', 'DH_MEDIA_IP')
@@ -33,8 +33,7 @@
           - >-
             (media30_catalog_matches[0].survey_vars | map(attribute='name') | list)
             == ['DH_MEDIA_MODE', 'DH_MEDIA_VM_ACTION', 'DH_MEDIA_DISK_ACTION',
-                'DH_MEDIA_IP', 'DH_MEDIA_ROOT_PASSWORD_ON_RUN',
-                'DH_MEDIA_VM_CPU_PERCENT', 'DH_MEDIA_TRANSCODE_CPU_PERCENT']
+                'DH_MEDIA_IP', 'DH_MEDIA_VM_CPU_PERCENT', 'DH_MEDIA_TRANSCODE_CPU_PERCENT']
         fail_msg: MEDIA30_NATIVE_ENTRYPOINT_OR_SURVEY_MISSING
 
     - name: Read the tracked audit playbook without executing it
