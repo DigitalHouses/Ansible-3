@@ -86,7 +86,7 @@ tasks:
         values:
           - {name: "Не изменять Cloudflare", value: skip}
           - {name: "Проверить существующий туннель и Access", value: audit}
-          - {name: "Настроить существующий туннель (новый не создаётся)", value: apply}
+          - {name: "Настроить туннель (создать, если отсутствует)", value: apply}
       - name: DH_PVE_QUANTUM
         title: "File Browser Quantum на PVE"
         type: enum

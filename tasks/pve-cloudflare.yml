@@ -1,297 +1,302 @@
 ---
-# Task №10: only the existing site-owned PVE Cloudflare Tunnel origin.
-- name: Require trusted site and previously stored Cloudflare credential
+# Idempotent, site-scoped PVE Tunnel commissioning.
+# Existing connector with no Runner ownership marker is NEVER taken over while
+# active: the site name can be shared with an older physical server.
+# No tunnel/DNS/Access deletion, no token rotation, no foreign route modification.
+
+- name: Require site and Cloudflare credentials
   ansible.builtin.assert:
     that:
       - requested_mode in ['audit', 'apply']
-      - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-      - pve.ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
       - cf_token | length > 0
-    fail_msg: "Task 10 Cloudflare needs the existing site, PVE endpoint and Cloudflare token from task 05"
+      - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+      - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+    fail_msg: "Cloudflare: provide a token using task 05 and choose audit or apply"
   no_log: true
 
-- name: Prove actual PVE HTTPS origin with the pinned CA using curl
+- name: Verify the TLS origin with the bootstrap-pinned PVE CA
   ansible.builtin.command:
     argv:
       - /usr/bin/curl
       - --silent
       - --show-error
-      - --fail-with-body
       - --noproxy
-      - "*"
+      - '*'
       - --cacert
       - "{{ pve.ca_file }}"
       - --connect-timeout
-      - "5"
+      - '5'
       - --max-time
-      - "15"
-      - "{{ desired_origin }}/api2/json/access/domains"
-  register: pve_origin_check
+      - '15'
+      - --output
+      - /dev/null
+      - --write-out
+      - '%{http_code}'
+      - "{{ desired_origin }}/api2/json/version"
+  register: cf_pve_tls
   changed_when: false
+  failed_when: cf_pve_tls.rc != 0 or cf_pve_tls.stdout not in ['200', '401']
 
-- name: Refuse unknown origin responses
-  ansible.builtin.assert:
-    that:
-      - (pve_origin_check.stdout | from_json).data is defined
-      - (pve_origin_check.stdout | from_json).data is sequence
-    fail_msg: "PVE origin did not return its expected unauthenticated API structure"
-
-- name: Read canonical Cloudflare DNS zone
+- name: Read the canonical Cloudflare zone
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones?name={{ cf_zone_name }}&per_page=50"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: cf_zones
+  register: cf_zone_response
   changed_when: false
   no_log: true
 
-- name: Select the unique target zone
+- name: Identify the exact zone and account
   ansible.builtin.set_fact:
-    exact_zones: "{{ cf_zones.json.result | selectattr('name', 'equalto', cf_zone_name) | list }}"
+    cf_zone_matches: "{{ cf_zone_response.json.result | selectattr('name', 'equalto', cf_zone_name) | list }}"
 
-- name: Refuse ambiguous Cloudflare zones
+- name: Require one Cloudflare zone and its account
   ansible.builtin.assert:
     that:
-      - cf_zones.json.success | bool
-      - exact_zones | length == 1
-      - exact_zones[0].account.id is match('^[a-f0-9]{32}$')
+      - cf_zone_response.json.success | bool
+      - cf_zone_matches | length == 1
+      - cf_zone_matches[0].account.id is match('^[0-9a-f]{32}$')
     fail_msg: "Cloudflare zone/account not uniquely identified"
 
-- name: Save Cloudflare account and zone identifiers
+- name: Select canonical Cloudflare identifiers
   ansible.builtin.set_fact:
-    cf_account_id: "{{ exact_zones[0].account.id }}"
-    cf_zone_id: "{{ exact_zones[0].id }}"
+    cf_zone_id: "{{ cf_zone_matches[0].id }}"
+    cf_account_id: "{{ cf_zone_matches[0].account.id }}"
 
-- name: Audit all zone DNS names using the retired dh prefix
+- name: Read existing self-hosted Access applications
   ansible.builtin.uri:
-    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?per_page=500"
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps?per_page=100"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 25
-  register: cf_legacy_dns_inventory
+  register: cf_access_apps
   changed_when: false
   no_log: true
 
-- name: Report all existing legacy public DNS names without secrets
-  ansible.builtin.debug:
-    msg:
-      - "DNS_TOTAL={{ cf_legacy_dns_inventory.json.result_info.total_count }}"
-      - "DNS_PAGES={{ cf_legacy_dns_inventory.json.result_info.total_pages }}"
-      - "DH_NAMES={{ cf_legacy_dns_inventory.json.result | map(attribute='name') | select('match', '^dh-') | list }}"
-      - "DH_COUNT={{ cf_legacy_dns_inventory.json.result | map(attribute='name') | select('match', '^dh-') | list | length }}"
+- name: Find Access applications covering only the requested PVE endpoints
+  ansible.builtin.set_fact:
+    cf_access_wildcard: >-
+      {{ cf_access_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', '*.' ~ cf_zone_name) | list }}
+    cf_access_pve_exact: >-
+      {{ cf_access_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', public_hostname) | list }}
+    cf_access_quantum_exact: >-
+      {{ cf_access_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', quantum_public_hostname) | list }}
 
-- name: Find the existing dedicated site PVE tunnel
+- name: Require existing Cloudflare Access protection before publishing
+  ansible.builtin.assert:
+    that:
+      - cf_access_apps.json.success | bool
+      - cf_access_apps.json.result_info.total_pages | default(1) | int == 1
+      - cf_access_wildcard | length <= 1
+      - cf_access_pve_exact | length <= 1
+      - cf_access_quantum_exact | length <= 1
+      - cf_access_pve_exact | length == 1 or cf_access_wildcard | length == 1
+      - >-
+        not quantum_requested or cf_access_quantum_exact | length == 1
+        or cf_access_wildcard | length == 1
+    fail_msg: "Create a restricted self-hosted Cloudflare Access app before using task 10"
+
+- name: Select the narrowest Access policy for each published endpoint
+  ansible.builtin.set_fact:
+    cf_protecting_access_ids: >-
+      {{ ([ (cf_access_pve_exact if cf_access_pve_exact | length == 1
+             else cf_access_wildcard)[0].id ]
+          + ([ (cf_access_quantum_exact if cf_access_quantum_exact | length == 1
+                  else cf_access_wildcard)[0].id ] if quantum_requested else []))
+          | unique | list }}
+
+- name: Check each protecting Access policy without exposing identities
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps/{{ item }}/policies?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_access_policies
+  loop: "{{ cf_protecting_access_ids }}"
+  changed_when: false
+  no_log: true
+
+- name: Reject bypass, Everyone and missing email allowlists
+  ansible.builtin.assert:
+    that:
+      - item.json.success | bool
+      - item.json.result_info.total_pages | default(1) | int == 1
+      - item.json.result | selectattr('decision', 'equalto', 'bypass') | list | length == 0
+      - item.json.result | selectattr('decision', 'equalto', 'allow') | list | length > 0
+      - >-
+        item.json.result | map(attribute='include') | flatten
+        | selectattr('everyone', 'defined') | list | length == 0
+      - >-
+        item.json.result | selectattr('decision', 'equalto', 'allow')
+        | map(attribute='include') | flatten
+        | selectattr('email', 'defined') | list | length > 0
+    fail_msg: "Cloudflare Access must require an allowed email; bypass is forbidden"
+  loop: "{{ cf_access_policies.results }}"
+  no_log: true
+
+- name: Read the exactly named dedicated PVE Tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&per_page=50"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: site_tunnels
+  register: cf_tunnels
   changed_when: false
   no_log: true
 
-- name: Identify only the existing site PVE tunnel
+- name: Select active records with the exact site Tunnel name
   ansible.builtin.set_fact:
-    matching_tunnels: >-
-      {{ site_tunnels.json.result | selectattr('name', 'equalto', pve_tunnel_name)
-         | list }}
-  # No create/delete operations are ever allowed in this task.
+    cf_matching_tunnels: >-
+      {{ cf_tunnels.json.result | selectattr('name', 'equalto', pve_tunnel_name)
+         | selectattr('deleted_at', 'none') | list }}
 
-- name: Require exactly one healthy remotely managed dedicated tunnel
+- name: Refuse ambiguous or non-remotely-managed tunnels
   ansible.builtin.assert:
     that:
-      - site_tunnels.json.success | bool
-      - matching_tunnels | length == 1
-      - matching_tunnels[0].deleted_at | default(none) is none
-      - matching_tunnels[0].config_src == 'cloudflare'
-      - matching_tunnels[0].status == 'healthy'
-    fail_msg: "Dedicated Cloudflare tunnel is missing, ambiguous, unhealthy, or locally managed"
+      - cf_tunnels.json.success | bool
+      - cf_matching_tunnels | length <= 1
+      - cf_matching_tunnels | length == 0 or cf_matching_tunnels[0].config_src == 'cloudflare'
+    fail_msg: "Dedicated PVE Tunnel name is occupied or has incompatible management"
 
-- name: Read currently published dedicated tunnel ingress
+- name: Inspect the local PVE Tunnel ownership marker
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/pve-cloudflare-tunnel-id
+    follow: false
+  register: cf_marker_stat
+
+- name: Read the existing local PVE Tunnel identity
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/pve-cloudflare-tunnel-id
+  become: true
+  register: cf_marker
+  no_log: true
+  when: cf_marker_stat.stat.exists
+
+- name: Confirm the local ownership record is unambiguous
+  ansible.builtin.assert:
+    that:
+      - not cf_marker_stat.stat.exists or cf_marker_stat.stat.isreg
+      - not cf_marker_stat.stat.exists or cf_marker_stat.stat.mode == '0600'
+      - >-
+        not cf_marker_stat.stat.exists or
+        (cf_matching_tunnels | length == 1 and
+         (cf_marker.content | b64decode | trim) == cf_matching_tunnels[0].id)
+    fail_msg: "Local Tunnel ownership marker disagrees with Cloudflare; manual audit required"
+
+- name: Read the existing site's Tunnel config without modifying it
   ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_matching_tunnels[0].id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: [200, 404]
+  register: cf_tunnel_config_response
+  changed_when: false
+  no_log: true
+  when: cf_matching_tunnels | length == 1
+
+- name: Normalize previously configured ingress
+  ansible.builtin.set_fact:
+    cf_existing_config: >-
+      {{ (cf_tunnel_config_response.json.result.config | default({}))
+          if (cf_matching_tunnels | length == 1 and
+              cf_tunnel_config_response.status == 200) else {} }}
+
+- name: Select existing routes and the ownership state
+  ansible.builtin.set_fact:
+    cf_existing_ingress: "{{ cf_existing_config.ingress | default([]) }}"
+    cf_locally_owned: "{{ cf_marker_stat.stat.exists | bool }}"
+    cf_tunnel_active_elsewhere: >-
+      {{ cf_matching_tunnels | length == 1 and not cf_marker_stat.stat.exists
+         and cf_matching_tunnels[0].status in ['healthy', 'degraded'] }}
+
+- name: Refuse to seize an active tunnel from another PVE connector
+  ansible.builtin.assert:
+    that:
+      - not cf_tunnel_active_elsewhere
+    fail_msg: >-
+      CLOUDFLARE_OWNERSHIP_CONFLICT: the existing site Tunnel has an active
+      connector, but this Runner has no ownership marker. It may still serve
+      another PVE. Do not recreate, rotate or repoint it automatically.
+  when: requested_mode == 'apply'
+
+- name: Refuse taking over a foreign route from an inactive Tunnel
+  ansible.builtin.assert:
+    that:
+      - >-
+        (cf_existing_ingress | selectattr('hostname', 'defined')
+         | rejectattr('hostname', 'in', [public_hostname, quantum_public_hostname])
+         | list | length == 0)
+      - >-
+        cf_existing_ingress | length == 0 or
+        (cf_existing_ingress[-1].service == 'http_status:404'
+         and cf_existing_ingress[-1].hostname is not defined)
+    fail_msg: "Unowned Tunnel has foreign routes or no safe fallback"
+  when:
+    - requested_mode == 'apply'
+    - cf_matching_tunnels | length == 1
+    - not cf_locally_owned
+
+- name: Inspect canonical PVE and Quantum DNS records
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: current_tunnel_configuration
+  loop:
+    - "{{ public_hostname }}"
+    - "{{ quantum_public_hostname }}"
+  register: cf_dns_preflight
   changed_when: false
   no_log: true
 
-- name: Extract existing dedicated tunnel config
+- name: Refuse foreign, unproxied or duplicate DNS records
+  ansible.builtin.assert:
+    that:
+      - item.json.success | bool
+      - item.json.result_info.total_pages | default(1) | int == 1
+      - item.json.result | length <= 1
+      - >-
+        item.json.result | length == 0 or
+        (cf_matching_tunnels | length == 1 and
+         item.json.result[0].type == 'CNAME' and
+         item.json.result[0].proxied | bool and
+         (item.json.result[0].content | lower) ==
+         ((cf_matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
+    fail_msg: "Cloudflare hostname is occupied by foreign DNS; do not reassign"
+  loop: "{{ cf_dns_preflight.results }}"
+  when: item.item == public_hostname or quantum_requested
+  no_log: true
+
+- name: Identify current public PVE origin for audit output
   ansible.builtin.set_fact:
-    current_cf_config: "{{ current_tunnel_configuration.json.result.config }}"
+    cf_current_pve_origin: >-
+      {{ cf_existing_ingress | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', public_hostname)
+         | map(attribute='service') | list }}
 
-- name: Require pre-existing Cloudflare Access challenge on this public name
-  ansible.builtin.uri:
-    url: "https://{{ current_cf_config.ingress[0].hostname }}/"
-    method: GET
-    use_proxy: false
-    follow_redirects: none
-    validate_certs: true
-    status_code: 302
-    timeout: 20
-  register: cf_access_before
-  changed_when: false
-  no_log: true
-
-- name: Refuse a publicly exposed or unprotected PVE hostname
-  ansible.builtin.assert:
-    that:
-      - (cf_access_before.location | default('')) is match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
-    fail_msg: "Cloudflare Access login is not protecting the existing PVE hostname"
-
-- name: Migrate existing prefixed PVE and Quantum hostnames under strict Access
-  ansible.builtin.include_tasks: pve-cloudflare-hostname-cutover.yml
-
-- name: Refuse foreign ingress, changed TLS trust or missing fallback
-  ansible.builtin.assert:
-    that:
-      - current_tunnel_configuration.json.success | bool
-      - current_cf_config.ingress | length in [2, 3, 4]
-      - current_cf_config.ingress[0].hostname in [public_hostname, 'dh-' ~ site_id ~ '-pve.' ~ cf_zone_name]
-      - current_cf_config.ingress[0].service is match('^https://[0-9.]+:8006$')
-      - current_cf_config.ingress[0].originRequest.caPool == expected_ca_pool
-      - current_cf_config.ingress[0].originRequest.noTLSVerify is sameas false
-      - current_cf_config.ingress[-1].service == 'http_status:404'
-      - current_cf_config.ingress[-1].hostname is not defined
-      - >-
-        current_cf_config.ingress | length < 3 or
-        current_cf_config.ingress[1].hostname in [quantum_public_hostname,
-        'dh-' ~ site_id ~ '-pve-filebrowser.' ~ cf_zone_name]
-      - >-
-        current_cf_config.ingress | length < 3 or
-        current_cf_config.ingress[1].service in ['http://127.0.0.1:8090',
-        'http://' ~ pve.ipv4 ~ ':8090']
-      - >-
-        current_cf_config.ingress | length != 4 or
-        current_cf_config.ingress[2].hostname == site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name
-      - >-
-        current_cf_config.ingress | length != 4 or
-        current_cf_config.ingress[2].service is match('^https://192[.]168[.][0-9.]+:10000$')
-      - >-
-        current_cf_config.ingress | length != 4 or
-        (current_cf_config.ingress[2].originRequest.noTLSVerify is sameas true and
-         current_cf_config.ingress[2].originRequest.httpHostHeader ==
-         site_id ~ '-pve-mediaserver-admin.' ~ cf_zone_name)
-    fail_msg: "Dedicated tunnel drift detected: refusing to overwrite any foreign route or TLS policy"
-
-- name: Ensure DNS still routes public name to this dedicated tunnel
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?type=CNAME&name={{ current_cf_config.ingress[0].hostname }}&per_page=50"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: cf_dns
-  changed_when: false
-  no_log: true
-
-- name: Confirm existing DNS record is owned by this tunnel
-  ansible.builtin.assert:
-    that:
-      - cf_dns.json.success | bool
-      - cf_dns.json.result | length == 1
-      - cf_dns.json.result[0].content | lower == ((matching_tunnels[0].id ~ '.cfargotunnel.com') | lower)
-      - cf_dns.json.result[0].proxied | bool
-    fail_msg: "Existing Cloudflare DNS entry does not point to the dedicated PVE tunnel"
-
-- name: Report exact existing and desired origin
+- name: Report read-only Cloudflare state
   ansible.builtin.debug:
     msg:
+      - "CLOUDFLARE_MODE={{ requested_mode }}"
       - "TUNNEL={{ pve_tunnel_name }}"
-      - "PUBLIC_HOST={{ current_cf_config.ingress[0].hostname }}"
-      - "DESIRED_HOST={{ public_hostname }}"
-      - "MODE={{ requested_mode }}"
-      - "ORIGIN_CURRENT={{ current_cf_config.ingress[0].service }}"
+      - "TUNNEL_EXISTS={{ cf_matching_tunnels | length == 1 }}"
+      - "TUNNEL_LOCAL_OWNER={{ cf_locally_owned }}"
+      - "TUNNEL_ACTIVE_ELSEWHERE={{ cf_tunnel_active_elsewhere }}"
+      - "ORIGIN_CURRENT={{ cf_current_pve_origin }}"
       - "ORIGIN_DESIRED={{ desired_origin }}"
-      - "CHANGE_REQUIRED={{ current_cf_config.ingress[0].service != desired_origin }}"
-      - "ACCESS=PROTECTED; TLS=STRICT; DNS=UNCHANGED"
+      - "DNS_PVE={{ cf_dns_preflight.results[0].json.result | length == 1 }}"
+      - "DNS_QUANTUM={{ cf_dns_preflight.results[1].json.result | length == 1 }}"
 
-- name: Replace only the existing PVE origin, preserving all other config
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
-    method: PUT
-    headers: "{{ cf_headers }}"
-    body_format: json
-    body:
-      config: >-
-        {{ current_cf_config | combine({'ingress':
-           [current_cf_config.ingress[0] | combine({'service': desired_origin})]
-           + current_cf_config.ingress[1:]}) }}
-    use_proxy: false
-    status_code: 200
-    timeout: 30
-  register: updated_tunnel_configuration
-  changed_when: true
-  no_log: true
-  when:
-    - requested_mode == 'apply'
-    - current_cf_config.ingress[0].service != desired_origin
-
-- name: Read back the tunnel configuration after apply
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ matching_tunnels[0].id }}/configurations"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: final_tunnel_configuration
-  changed_when: false
-  no_log: true
+- name: Commission or reconcile only the owned PVE Tunnel
+  ansible.builtin.include_tasks:
+    file: pve-cloudflare-apply.yml
+    apply:
+      become: true
   when: requested_mode == 'apply'
-
-- name: Verify only origin changed in the canonical tunnel configuration
-  ansible.builtin.assert:
-    that:
-      - final_tunnel_configuration.json.success | bool
-      - >-
-        final_tunnel_configuration.json.result.config ==
-        (current_cf_config | combine({'ingress':
-          [current_cf_config.ingress[0] | combine({'service': desired_origin})]
-          + current_cf_config.ingress[1:]}))
-    fail_msg: "Cloudflare tunnel readback differs from the approved origin-only change"
-  when: requested_mode == 'apply'
-
-- name: Verify Cloudflare Access still blocks anonymous PVE UI access
-  ansible.builtin.uri:
-    url: "https://{{ public_hostname }}/"
-    method: GET
-    use_proxy: false
-    follow_redirects: none
-    validate_certs: true
-    status_code: 302
-    timeout: 20
-  register: cf_access_after
-  changed_when: false
-  no_log: true
-  when:
-    - requested_mode == 'apply'
-    - cloudflare_hostname_state == 'new'
-
-- name: Confirm Access is still protecting this PVE hostname
-  ansible.builtin.assert:
-    that:
-      - (cf_access_after.location | default('')) is match('^https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
-    fail_msg: "Cloudflare Access challenge missing after origin update"
-  when:
-    - requested_mode == 'apply'
-    - cloudflare_hostname_state == 'new'
-
-- name: Report safe completion
-  ansible.builtin.debug:
-    msg: >-
-      CF_PVE={{ 'AUDITED' if requested_mode == 'audit' else
-          ('UNCHANGED' if current_cf_config.ingress[0].service == desired_origin
-           else 'UPDATED') }};
-      endpoint={{ desired_origin }};
-      shared_tunnel_untouched=true; dns_unchanged=true; access_protected=true
-
-
-- name: Commission FileBrowser Quantum using the existing PVE tunnel and Access
-  ansible.builtin.include_tasks: pve-quantum-cloudflare.yml
-  when: quantum_requested

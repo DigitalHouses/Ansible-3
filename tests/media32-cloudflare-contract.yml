@@ -7,8 +7,7 @@
     root: "{{ playbook_dir | dirname }}"
     cf_playbook: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml') | from_yaml }}"
     pve_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
-    quantum_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-quantum-cloudflare.yml') }}"
-    hostname_cutover_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-hostname-cutover.yml') }}"
+    pve_cf_apply_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-apply.yml') }}"
     cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
     media_cf_public_proof:
       rc: 0
@@ -59,10 +58,13 @@
           - cf_proof.no_log | bool
           - cf_proof.retries | int >= 1
           - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
-          - "'current_cf_config.ingress | length in [2, 3, 4]' in pve_cf_source"
-          - "'quantum_original_config.ingress | length in [2, 3, 4]' in quantum_cf_source"
-          - "'current_cf_config.ingress | length in [3, 4, 5]' in hostname_cutover_source"
-          - "'quantum_original_config.ingress[2:]' in quantum_cf_source"
+          - "'cf_tunnel_active_elsewhere' in pve_cf_source"
+          - "'pve-cloudflare-tunnel-id' in pve_cf_source"
+          - "'cf_foreign_ingress' in pve_cf_apply_source"
+          - "'cf_desired_ingress' in pve_cf_apply_source"
+          - "'noTLSVerify: false' in pve_cf_apply_source"
+          - "'method: DELETE' not in pve_cf_apply_source"
+          - "'method: DELETE' not in pve_cf_source"
 
     - name: Verify HTTPS 302 and Cloudflare Access login pattern on fixture
       ansible.builtin.assert:

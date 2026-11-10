@@ -1,0 +1,147 @@
+---
+# Install/update only the DigitalHouses-owned Quantum instance.
+- name: Create root-only Quantum configuration/state directory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - /etc/digitalhouses
+    - /var/lib/digitalhouses/filebrowser-quantum
+
+- name: Guard FileBrowser LAN port before opening the listener
+  ansible.builtin.include_tasks: pve-quantum-firewall.yml
+
+- name: Configure management-IP Quantum with indexing disabled for full root
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/filebrowser-quantum.yml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      http:
+        listen: "{{ quantum_bind_ipv4 }}"
+        port: 8090
+        disableWebDAV: true
+        trustProxyHeaders: false
+        disableRateLimit: false
+      server:
+        disableUpdateCheck: true
+        database:
+          path: "/var/lib/digitalhouses/filebrowser-quantum/filebrowser.sqlite"
+        sources:
+          - path: "/"
+            name: "Proxmox Host"
+            config:
+              defaultEnabled: true
+              private: true
+              rules:
+                - folderPath: "/"
+                  viewable: true
+      auth:
+        adminUsername: admin
+        methods:
+          password:
+            enabled: true
+  register: quantum_config_changed
+
+- name: Download pinned stable Quantum binary with upstream SHA256
+  ansible.builtin.get_url:
+    url: https://github.com/gtsteffaniak/filebrowser/releases/download/v2.0.2-stable/linux-amd64-filebrowser
+    dest: /usr/local/bin/digitalhouses-filebrowser
+    checksum: sha256:5710dc6f51d77f1db884eace44f6952286c49f2ce40b6a59af37e0dc7c4a8bbd
+    owner: root
+    group: root
+    mode: '0755'
+  register: quantum_binary
+
+- name: Install root-only LAN Quantum service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses-filebrowser.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses FileBrowser Quantum (LAN admin)
+      After=network.target
+      Requires=digitalhouses-filebrowser-firewall.service
+      After=digitalhouses-filebrowser-firewall.service
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/var/lib/digitalhouses/filebrowser-quantum
+      ExecStart=/usr/local/bin/digitalhouses-filebrowser -c /etc/digitalhouses/filebrowser-quantum.yml
+      Restart=on-failure
+      RestartSec=5
+      UMask=0077
+      NoNewPrivileges=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+
+      [Install]
+      WantedBy=multi-user.target
+  register: quantum_unit
+
+- name: Enable and start Quantum
+  ansible.builtin.systemd_service:
+    name: digitalhouses-filebrowser.service
+    daemon_reload: "{{ quantum_unit.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or quantum_binary.changed else 'started' }}"
+
+- name: Verify the Quantum listener is available on the management address
+  ansible.builtin.wait_for:
+    host: "{{ quantum_bind_ipv4 }}"
+    port: 8090
+    delay: 1
+    timeout: 30
+
+- name: Verify authenticated API remains private
+  ansible.builtin.uri:
+    url: http://{{ quantum_bind_ipv4 }}:8090/api/users
+    method: GET
+    status_code: [401, 403]
+    use_proxy: false
+  register: quantum_unauthenticated_check
+  changed_when: false
+
+- name: Verify Quantum HTTP health endpoint
+  ansible.builtin.uri:
+    url: http://{{ quantum_bind_ipv4 }}:8090/health
+    method: GET
+    status_code: 200
+    use_proxy: false
+  changed_when: false
+
+- name: Verify direct Quantum LAN access from the separate Runner LXC
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/health"
+    method: GET
+    status_code: 200
+    use_proxy: false
+    timeout: 15
+  delegate_to: runner
+  changed_when: false
+
+- name: Verify anonymous Quantum administration is blocked from the LAN
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/api/users"
+    method: GET
+    status_code: [401, 403]
+    use_proxy: false
+    timeout: 15
+  delegate_to: runner
+  changed_when: false
+
+- name: Report direct-LAN Quantum readiness
+  ansible.builtin.debug:
+    msg:
+      - "QUANTUM=LAN_READY http://{{ quantum_bind_ipv4 }}:8090 (Cloudflare Access commissioned afterwards)"
+      - "Full / source with indexing DISABLED"
+      - "Initial admin password: retrieve once from root-only systemd journal"
+      - "Cloudflare Access is commissioned later in this same PVE task 10"
