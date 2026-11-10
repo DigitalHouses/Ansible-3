@@ -60,7 +60,9 @@ PVE_ROOT_CA=/etc/pve/pve-root-ca.pem
   echo 'BLOCKED: missing PVE identity or cluster CA certificate' >&2; exit 2;
 }
 # An unauthenticated HTTP 401 is fine; the TLS verification must succeed.
-curl --silent --show-error --cacert "$PVE_ROOT_CA" --connect-timeout 5 --max-time 10 \
+# The PVE API is on the local subnet. Never route this TLS check via HTTPS_PROXY.
+curl --noproxy '*' --silent --show-error --cacert "$PVE_ROOT_CA" \
+  --connect-timeout 5 --max-time 10 \
   -o /dev/null "https://$HOST_IPV4:8006/api2/json/version" || {
     echo 'BLOCKED: PVE API certificate is not trusted for vmbr0 IP' >&2; exit 2;
   }
