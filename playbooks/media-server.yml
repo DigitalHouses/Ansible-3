@@ -61,7 +61,7 @@
     - name: Resolve optional task 30 CPU percentages without changing resources
       ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
 
-    - name: Reject mismatched site, VM or PCI declaration
+    - name: Reject mismatched site or media VM declaration
       ansible.builtin.assert:
         that:
           - media_site.id == media_site_id
@@ -76,8 +76,6 @@
           - media_spec.network.ipv4.split('/')[0] != media_spec.network.gateway
           - media_spec.storage.pool_name == media_site.owner_slug ~ '-pool'
           - media_spec.storage.media_dataset == media_spec.storage.pool_name ~ '/media'
-          - media_spec.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
-          - media_spec.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
         fail_msg: MEDIA30_SITE_VM_DECLARATION_MISMATCH
 
     - name: Register PVE using the previously pinned Semaphore SSH identity
@@ -107,6 +105,9 @@
   gather_facts: false
   become: false
   tasks:
+    - name: Detect actual PCI hardware on this PVE for this run
+      ansible.builtin.include_tasks: ../tasks/media30-pci-autodetect.yml
+
     - name: Check requested VM definition on Proxmox
       ansible.builtin.stat:
         path: "/etc/pve/qemu-server/{{ media_spec.vmid }}.conf"
@@ -127,45 +128,6 @@
           {{ dict((media_vm_config.stdout_lines | default([]))
              | select('search', ': ') | map('split', ': ', 1)) }}
       when: media_vm_conf.stat.exists
-
-    - name: Check whether selected PCI functions are present on this PVE
-      ansible.builtin.stat:
-        path: "/sys/bus/pci/devices/{{ item.value }}"
-        follow: false
-      loop:
-        - {name: gpu, value: "{{ media_spec.pci.gpu }}"}
-        - {name: sata, value: "{{ media_spec.pci.sata_controller }}"}
-      loop_control:
-        label: "{{ item.name }}"
-      register: media_pci
-
-    - name: List other QEMU VM definitions for exclusive SATA ownership
-      ansible.builtin.find:
-        paths: /etc/pve/qemu-server
-        patterns: '*.conf'
-        file_type: file
-      register: media_qemu_configs
-
-    - name: Read only other VM definitions to detect duplicate SATA passthrough
-      ansible.builtin.slurp:
-        src: "{{ item.path }}"
-      loop: "{{ media_qemu_configs.files }}"
-      loop_control:
-        label: "{{ item.path | basename }}"
-      when: item.path != '/etc/pve/qemu-server/' ~ (media_spec.vmid | string) ~ '.conf'
-      register: media_other_vm_configs
-      no_log: true
-
-    - name: Require no other VM to own the SATA controller
-      ansible.builtin.assert:
-        that:
-          - >-
-            (media_other_vm_configs.results
-             | selectattr('content', 'defined')
-             | map(attribute='content') | map('b64decode')
-             | select('search', media_spec.pci.sata_controller | regex_escape)
-             | list | length) == 0
-        fail_msg: MEDIA30_SATA_CONTROLLER_ASSIGNED_TO_OTHER_VM
 
     - name: Verify existing VM belongs to the selected site
       ansible.builtin.assert:
@@ -197,8 +159,8 @@
           vm_name: "{{ media_spec.name }}"
           vm_exists: "{{ media_vm_conf.stat.exists }}"
           vm_state: "{{ media_vm_power.stdout | default('absent') }}"
-          gpu_pci_present: "{{ media_pci.results[0].stat.exists }}"
-          sata_pci_present: "{{ media_pci.results[1].stat.exists }}"
+          gpu_pci: "{{ media_spec.pci.gpu }}"
+          sata_pci: "{{ media_spec.pci.sata_controller }}"
           intended_pool: "{{ media_spec.storage.pool_name }}"
           intended_guest_ipv4: "{{ media_spec.network.ipv4 }}"
           manifest_blob: "{{ media_site_blob }}"
