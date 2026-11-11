@@ -16,6 +16,13 @@ media_arr_releases:
     archive: Sonarr.main.4.0.20.3014.linux-x64.tar.gz
     source: https://github.com/Sonarr/Sonarr/releases/download/v4.0.20.3014/Sonarr.main.4.0.20.3014.linux-x64.tar.gz
     sha256: 1fc48544b5a3401b2fc3df8d0642c1e6a73a28e41a351169edd9cd8f54770db5
+  - slug: lidarr
+    name: Lidarr
+    port: 8686
+    version: v1
+    archive: Lidarr.master.3.1.6.5079.linux-core-x64.tar.gz
+    source: https://github.com/Lidarr/Lidarr/releases/download/v3.1.6.5079/Lidarr.master.3.1.6.5079.linux-core-x64.tar.gz
+    sha256: fed16c58f5de797be955e830a3a93994f020c1d8d60f5a6cb061d7647d45b8bc
   - slug: prowlarr
     name: Prowlarr
     port: 9696

@@ -1,0 +1,64 @@
+---
+- name: Require Lidarr and selected no-login Prowlarr indexers in native task 30
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vars/media-arr-releases.yml
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    apps: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-native-apps.yml') | from_yaml }}"
+    wire: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-arr-wire.yml') | from_yaml }}"
+    indexers: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-prowlarr-public-indexers.yml') | from_yaml }}"
+    indexer_one: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-prowlarr-public-one.yml') | from_yaml }}"
+    portal: "{{ lookup('ansible.builtin.file', root ~ '/templates/media-portal.html.j2') }}"
+  tasks:
+    - name: Require a pinned official Lidarr release and standard music port
+      ansible.builtin.assert:
+        that:
+          - media_arr_releases | selectattr('slug', 'equalto', 'lidarr') | list | length == 1
+          - (media_arr_releases | selectattr('slug', 'equalto', 'lidarr') | first).port == 8686
+          - (media_arr_releases | selectattr('slug', 'equalto', 'lidarr') | first).version == 'v1'
+          - (media_arr_releases | selectattr('slug', 'equalto', 'lidarr') | first).sha256 == 'fed16c58f5de797be955e830a3a93994f020c1d8d60f5a6cb061d7647d45b8bc'
+          - "'8686' in portal and 'lidarr' in portal"
+          - "'musicCategory' in lookup('ansible.builtin.file', root ~ '/tasks/media-arr-qbt-provider-one.yml')"
+          - "'media_active_arr_releases' in lookup('ansible.builtin.file', root ~ '/tasks/media-arr-wire.yml')"
+
+    - name: Require public indexers to preserve existing and test before add
+      ansible.builtin.assert:
+        that:
+          - (indexers | selectattr('name', 'equalto', 'Read existing Prowlarr indexers') | list | length) == 1
+          - (indexers | selectattr('name', 'equalto', 'Read native indexer definitions supported by installed Prowlarr') | list | length) == 1
+          - >-
+            (indexer_one | selectattr('name', 'equalto',
+             'Ask Prowlarr to test the public source before adding it')
+             | first)['ansible.builtin.uri'].url
+            == 'http://127.0.0.1:9696/api/v1/indexer/test'
+          - >-
+            (indexer_one | selectattr('name', 'equalto',
+             'Add only the absent and successfully tested public indexer')
+             | first)['ansible.builtin.uri'].url
+            == 'http://127.0.0.1:9696/api/v1/indexer'
+          - "'media_public_test.status | default(0) == 200' in lookup('ansible.builtin.file', root ~ '/tasks/media-prowlarr-public-one.yml')"
+          - "'username' not in lookup('ansible.builtin.file', root ~ '/tasks/media-prowlarr-public-one.yml')"
+          - "'password' not in lookup('ansible.builtin.file', root ~ '/tasks/media-prowlarr-public-one.yml')"
+
+    - name: Check fixture with enabled Lidarr and disabled default
+      ansible.builtin.set_fact:
+        lidarr_enabled: >-
+          {{ media_arr_releases | rejectattr('slug', 'equalto', 'lidarr') | list
+             if not media_spec_enabled.applications.lidarr | default(false) | bool
+             else media_arr_releases }}
+        lidarr_disabled: >-
+          {{ media_arr_releases | rejectattr('slug', 'equalto', 'lidarr') | list
+             if not media_spec_disabled.applications.lidarr | default(false) | bool
+             else media_arr_releases }}
+      vars:
+        media_spec_enabled: {applications: {lidarr: true}}
+        media_spec_disabled: {applications: {radarr: true}}
+
+    - name: Prevent deploying Lidarr to sites without their explicit selection
+      ansible.builtin.assert:
+        that:
+          - "'lidarr' in (lidarr_enabled | map(attribute='slug') | list)"
+          - "'lidarr' not in (lidarr_disabled | map(attribute='slug') | list)"

@@ -1,0 +1,33 @@
+---
+# Apply only the operator-selected, no-account indexers using Prowlarr's API.
+# Never change existing indexers or add a failing remote source.
+- name: Read existing Prowlarr indexers
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/indexer
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    return_content: true
+    status_code: 200
+    use_proxy: false
+  register: media_public_indexers_existing
+  changed_when: false
+  no_log: true
+
+- name: Read native indexer definitions supported by installed Prowlarr
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/indexer/schema
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    return_content: true
+    status_code: 200
+    use_proxy: false
+  register: media_public_indexer_schemas
+  changed_when: false
+  no_log: true
+
+- name: Add absent public sources only when Prowlarr's own test succeeds
+  ansible.builtin.include_tasks: media-prowlarr-public-one.yml
+  loop: "{{ media_spec.prowlarr_public_indexers }}"
+  loop_control:
+    loop_var: media_public_id
+    label: "{{ media_public_id }}"

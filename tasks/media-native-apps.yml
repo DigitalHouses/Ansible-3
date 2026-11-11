@@ -50,6 +50,14 @@
   ansible.builtin.include_vars:
     file: "{{ playbook_dir | dirname }}/vars/media-arr-releases.yml"
 
+- name: Select only Servarr applications enabled by the site
+  ansible.builtin.set_fact:
+    media_active_arr_releases: >-
+      {{ media_arr_releases
+         | rejectattr('slug', 'equalto', 'lidarr') | list
+         if not (media_spec.applications.lidarr | default(false) | bool)
+         else media_arr_releases }}
+
 - name: Load verified third-party release artifacts from public catalog
   ansible.builtin.include_vars:
     file: "{{ playbook_dir | dirname }}/vars/media-app-artifacts.yml"
@@ -67,7 +75,7 @@
 
 - name: Install and commission owner logins for declared native Servarr apps
   ansible.builtin.include_tasks: media-native-arr-one.yml
-  loop: "{{ media_arr_releases }}"
+  loop: "{{ media_active_arr_releases }}"
   loop_control:
     loop_var: media_arr
     label: "{{ media_arr.slug }}"

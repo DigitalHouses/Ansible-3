@@ -9,9 +9,11 @@
       } | combine({
         ('movieCategory' if media_wire_arr.slug == 'radarr'
           else 'tvCategory' if media_wire_arr.slug == 'sonarr'
+          else 'musicCategory' if media_wire_arr.slug == 'lidarr'
           else 'category'):
         ('radarr' if media_wire_arr.slug == 'radarr'
           else 'tv-sonarr' if media_wire_arr.slug == 'sonarr'
+          else 'lidarr' if media_wire_arr.slug == 'lidarr'
           else 'prowlarr')
       }) }}
   no_log: true

@@ -15,6 +15,7 @@
     media_filestash_secret:
       stdout: abcdef1234567890
     media_sambee_bind: 127.0.0.1
+    media_mqtt_host: 192.168.22.33
     media_mqtt_username: fixture
     media_mqtt_password: fake-fixture-only
     media_spec:
@@ -32,6 +33,7 @@
         jellyfin: true
         radarr: true
         sonarr: true
+        lidarr: true
         prowlarr: true
         qbittorrent: true
         filestash: true
@@ -113,6 +115,7 @@
                   media_test_dir.path ~ '/media-smb.conf.j2')
               - "'Plex' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - "'Radarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
+              - "'Lidarr' in lookup('ansible.builtin.file', media_test_dir.path ~ '/media-portal.html.j2')"
               - >-
                 '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
                 in lookup('ansible.builtin.file',

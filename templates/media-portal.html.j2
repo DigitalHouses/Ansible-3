@@ -33,7 +33,7 @@ h2{font-size:19px;font-weight:750;letter-spacing:-.3px;margin:0 0 4px}
 .logo{display:grid;place-items:center;flex:none;width:41px;height:41px;border-radius:11px;font-size:22px;font-weight:800}
 .plex{background:#43341e;color:#efbf58}.jellyfin{background:#362849;color:#c9a7ff}
 .filestash{background:#223d55;color:#91cdff}.sambee{background:#423321;color:#eac07c}
-.radarr{background:#442f42;color:#f0bcdc}.sonarr{background:#253d48;color:#95d3e7}
+.radarr{background:#442f42;color:#f0bcdc}.sonarr{background:#253d48;color:#95d3e7}.lidarr{background:#324638;color:#abe2ac}
 .prowlarr{background:#352e4a;color:#c9b3fa}.qb{background:#203e5a;color:#85bcff}
 .security{background:#254b4c;color:#95f0dd}
 .name{font-weight:750;font-size:15px}.desc{color:#a5b7cb;font-size:13px;line-height:1.6;margin:11px 0;flex:1}
@@ -118,7 +118,7 @@ footer{border-top:1px solid #28394b;margin-top:37px;padding-top:22px;color:#93ab
 </section>
 <section aria-labelledby="media-control">
 <h2 id="media-control">Загрузки и управление медиатекой</h2>
-<p class="sub">Поиск, добавление и отслеживание фильмов и сериалов.</p>
+<p class="sub">Поиск, добавление и отслеживание фильмов, сериалов и музыки.</p>
 <div class="grid">
 {% if media_spec.applications.radarr | default(false) | bool %}
 <a class="card" href="http://{{ host }}:7878/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo radarr">▣</span><span class="name">Radarr</span></div><p class="desc">Добавление фильмов, управление качеством и отслеживание загрузок.</p><span class="action">Управление фильмами <span>↗</span></span></a>
@@ -126,8 +126,11 @@ footer{border-top:1px solid #28394b;margin-top:37px;padding-top:22px;color:#93ab
 {% if media_spec.applications.sonarr | default(false) | bool %}
 <a class="card" href="http://{{ host }}:8989/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo sonarr">▤</span><span class="name">Sonarr</span></div><p class="desc">Управление сериалами, сезонами и новыми сериями.</p><span class="action">Управление сериалами <span>↗</span></span></a>
 {% endif %}
+{% if media_spec.applications.lidarr | default(false) | bool %}
+<a class="card" href="http://{{ host }}:8686/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo lidarr">♫</span><span class="name">Lidarr</span></div><p class="desc">Управление музыкальной библиотекой и загрузками альбомов.</p><span class="action">Управление музыкой <span>↗</span></span></a>
+{% endif %}
 {% if media_spec.applications.prowlarr | default(false) | bool %}
-<a class="card" href="http://{{ host }}:9696/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo prowlarr">⌕</span><span class="name">Prowlarr</span></div><p class="desc">Настройка источников поиска для Radarr и Sonarr.</p><span class="action">Источники поиска <span>↗</span></span></a>
+<a class="card" href="http://{{ host }}:9696/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo prowlarr">⌕</span><span class="name">Prowlarr</span></div><p class="desc">Настройка источников поиска для Radarr, Sonarr и Lidarr.</p><span class="action">Источники поиска <span>↗</span></span></a>
 {% endif %}
 {% if media_spec.applications.qbittorrent | default(false) | bool %}
 <a class="card" href="http://{{ host }}:8080/" target="_blank" rel="noopener noreferrer"><div class="head"><span class="logo qb">↓</span><span class="name">qBittorrent</span></div><p class="desc">Очередь загрузок, текущая скорость и завершённые файлы.</p><span class="action">Открыть загрузки <span>↗</span></span></a>
