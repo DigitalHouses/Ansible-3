@@ -1,0 +1,6 @@
+---
+# Semaphore installs these upstream collections automatically before each run.
+# Keep pinned to the same version as bootstrap/collections.yml.
+collections:
+  - name: community.general
+    version: 11.2.1

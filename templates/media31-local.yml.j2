@@ -19,6 +19,7 @@
         jellyfin: {{ media_spec.applications.jellyfin | bool | to_json }}
         radarr: {{ media_spec.applications.radarr | bool | to_json }}
         sonarr: {{ media_spec.applications.sonarr | bool | to_json }}
+        lidarr: {{ media_spec.applications.lidarr | default(false) | bool | to_json }}
         prowlarr: {{ media_spec.applications.prowlarr | bool | to_json }}
         qbittorrent: {{ media_spec.applications.qbittorrent | bool | to_json }}
         filestash: {{ media_spec.applications.filestash | bool | to_json }}

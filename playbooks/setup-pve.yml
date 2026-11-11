@@ -1,5 +1,5 @@
 ---
-# Task 10 configures only the Proxmox host and its own Cloudflare entrypoint.
+# Task 10 configures only Proxmox. Cloudflare belongs to task 15.
 # It never changes existing VM/LXC, pools, or disks.
 # Local inventory is supplied by Semaphore. PVE connection is added dynamically
 # from the public bootstrap identity; SSH trust is pinned during fresh bootstrap.
@@ -18,6 +18,7 @@
     ip_action: "{{ DH_PVE_NETWORK_ACTION | default('keep', true) }}"
     new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
     quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
+    quantum_update: "{{ DH_PVE_QUANTUM_UPDATE | default('no', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
     ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
     ups_host: "{{ DH_PVE_UPS_IP | default('', true) }}"
@@ -32,9 +33,6 @@
     ups_auth_pass: "{{ DH_PVE_SNMP_AUTH_PASSWORD | default('', true) }}"
     ups_priv_pass: "{{ DH_PVE_SNMP_PRIV_PASSWORD | default('', true) }}"
     pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
-    mqtt_host: "{{ lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST') }}"
-    mqtt_user: "{{ lookup('ansible.builtin.env', 'DH_MQTT_USERNAME') }}"
-    mqtt_password: "{{ DH_MQTT_PASSWORD | default('', true) }}"
   tasks:
     - name: Validate host setup request
       ansible.builtin.assert:
@@ -44,6 +42,7 @@
           - upgrade_mode in ['no', 'yes']
           - ip_action in ['keep', 'migrate']
           - quantum_action in ['install', 'skip']
+          - quantum_update in ['no', 'yes']
           - ip_action != 'migrate' or setup_mode == 'apply'
           - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
           - ups_mode in ['none', 'usb', 'snmp_v2c', 'snmp_v3']
@@ -268,6 +267,8 @@
         requested_ip_action: "{{ ip_action }}"
         requested_new_ipv4: "{{ new_ipv4 }}"
         requested_quantum_action: "{{ quantum_action }}"
+        requested_cf_update: "{{ cf_update }}"
+        requested_quantum_update: "{{ quantum_update }}"
         original_pve_ipv4: "{{ pve.ipv4 }}"
         recorded_pve: "{{ pve }}"
         requested_ups_mode: "{{ ups_mode }}"
@@ -281,9 +282,6 @@
         requested_ups_community: "{{ ups_community }}"
         requested_ups_auth_pass: "{{ ups_auth_pass }}"
         requested_ups_priv_pass: "{{ ups_priv_pass }}"
-        requested_mqtt_host: "{{ mqtt_host }}"
-        requested_mqtt_user: "{{ mqtt_user }}"
-        requested_mqtt_password: "{{ mqtt_password }}"
       no_log: true
 
 - name: 10 - Audit or configure the Proxmox host
@@ -347,9 +345,6 @@
       when:
         - requested_mode == 'apply'
         - requested_ups_mode != 'none'
-    - name: Install or verify the pinned DigitalHouses PVE agent
-      ansible.builtin.include_tasks: ../tasks/pve-agent.yml
-      when: requested_mode == 'apply'
     - name: Migrate PVE management IP with timed rollback and runner verification
       ansible.builtin.include_tasks: ../tasks/pve-network.yml
       when:
@@ -370,38 +365,3 @@
           - "Quantum: {{ requested_quantum_action }}"
           - "PBS storage and backup jobs: deferred until PBS deployment"
           - "NUT automated shutdown: not armed by task 10"
-
-# This play runs AFTER PVE management IP migration. Runner's pve.yml is
-# re-read here, so Cloudflare receives the new confirmed management address.
-# Existing PVE audit/apply behavior is unaffected when Cloudflare is skipped.
-- name: 10 - Manage the existing Cloudflare entrypoint for Proxmox if requested
-  hosts: runner
-  connection: local
-  gather_facts: false
-  vars_files:
-    - /etc/digitalhouses/pve.yml
-  vars:
-    requested_mode: "{{ 'skip' if (DH_PVE_MODE | default('audit', true)) == 'audit' and
-                    (DH_PVE_CF_ACTION | default('apply', true)) == 'apply'
-                    else (DH_PVE_CF_ACTION | default('apply', true)) }}"
-    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
-    cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
-    cf_api: https://api.cloudflare.com/client/v4
-    cf_zone_name: digitalhouses.vip
-    pve_tunnel_name: "{{ site_id }}-pve"
-    public_hostname: "{{ site_id ~ '-pve.' ~ cf_zone_name }}"
-    quantum_public_hostname: "{{ site_id ~ '-pve-filebrowser.' ~ cf_zone_name }}"
-    desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
-    expected_ca_pool: /etc/cloudflared/dh-pve-ca.pem
-    quantum_requested: "{{ (DH_PVE_QUANTUM | default('install', true)) == 'install' and (DH_PVE_MODE | default('audit', true)) == 'apply' }}"
-    cf_headers:
-      Authorization: "Bearer {{ cf_token }}"
-      Accept: application/json
-  tasks:
-    - name: Validate the PVE Cloudflare action
-      ansible.builtin.assert:
-        that: requested_mode in ['skip', 'audit', 'apply']
-        fail_msg: "Unknown PVE Cloudflare action"
-    - name: Audit or update existing PVE Cloudflare tunnel using native Ansible
-      ansible.builtin.include_tasks: ../tasks/pve-cloudflare.yml
-      when: requested_mode != 'skip'

@@ -1,0 +1,44 @@
+---
+# Lidarr RootFolderResource is not the same as the Radarr/Sonarr root model.
+- name: Require Lidarr native root request fields without changing other Servarr apps
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    tasks_src: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-arr-root-one.yml') }}"
+    media_wire_arr: {slug: lidarr, port: 8686, version: v1, path: /serzhan-pool/media/music}
+    media_wire_arr_keys: {lidarr: fixture-only}
+    item: metadataprofile
+    media_lidarr_root_profiles:
+      results:
+        - json: [{id: 12, name: Standard}]
+        - json: [{id: 27, name: Any}]
+  tasks:
+    - name: Render the actual native Ansible root tasks without contacting Lidarr
+      ansible.builtin.set_fact:
+        lidarr_rendered_tasks: >-
+          {{ lookup('ansible.builtin.template',
+             playbook_dir ~ '/../tasks/media-arr-root-one.yml') | from_yaml }}
+      vars:
+        media_lidarr_root_payload: {path: /serzhan-pool/media/music}
+
+    - name: Read the rendered Lidarr-specific task payload
+      ansible.builtin.set_fact:
+        media_lidarr_root_payload: >-
+          {{ (lidarr_rendered_tasks
+              | selectattr('name', 'equalto',
+                'Use Lidarr native root-folder fields with existing default profiles')
+              | first)['ansible.builtin.set_fact'].media_lidarr_root_payload }}
+
+    - name: Require the native Lidarr root schema and Radarr/Sonarr fallback
+      ansible.builtin.assert:
+        that:
+          - media_lidarr_root_payload.name == 'Music'
+          - media_lidarr_root_payload.path == '/serzhan-pool/media/music'
+          - media_lidarr_root_payload.defaultMetadataProfileId | int == 12
+          - media_lidarr_root_payload.defaultQualityProfileId | int == 27
+          - media_lidarr_root_payload.defaultMonitorOption == 'all'
+          - media_lidarr_root_payload.defaultNewItemMonitorOption == 'all'
+          - media_lidarr_root_payload.defaultTags == []
+          - "'else' in tasks_src"
+          - "'media_wire_arr.slug' in tasks_src"

@@ -32,11 +32,12 @@
           - (another_pool | regex_findall('(?m)^\s*pool:\s*' ~ (pool_name | regex_escape) ~ '\s*$') | length) == 0
           - (multiple_pools | regex_findall('(?m)^\s*pool:') | length) == 2
 
-    - name: Verify native import uses named pool and never erase
+    - name: Verify import executes native zpool import directly
       ansible.builtin.assert:
         that:
           - "'media_vm.storage.pool_name]' in media_zfs_apply"
           - "'media_vm.storage.import_pool_guid' not in media_zfs_apply"
+          - "'media_import_scan' not in media_zfs_apply"
           - "'-f' in media_zfs_apply"
           - media_zfs_apply is search('media_raw_disk_action.*import')
       vars:

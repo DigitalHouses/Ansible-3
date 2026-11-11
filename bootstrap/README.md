@@ -1,10 +1,44 @@
 # Ansible-3 — PVE CLI bootstrap
 
-Работает по прежней схеме: **root@pve → одна команда → Site ID → y/n → новый LXC**.
+**Обязательный стандарт IPv4 и VM/CT ID:** [S24, ANSIBLE_STANDARDS.md](../ANSIBLE_STANDARDS.md#s24-адресация-и-id-объектов-home--core--согласовано-11112026).
+HOME: PVE `.220`, Runner `.221/CT1221`, HAOS `.222/VM2222`,
+Media `.223/VM2223`, PostgreSQL `.224/CT1224`.
+CORE: PVE `.240`, Runner `.241/CT1241`, HAOS `.242/VM2242`,
+Media `.243/VM2243`, PostgreSQL `.244/CT1244`.
+Подсеть /24 берётся из текущего `vmbr0` объекта. `192.168.11.0/24` — только сеть владельца; клиентские подсети могут быть другими. Bootstrap создаёт только Runner.
+
+Один bootstrap для двух профилей: **HOME** (по умолчанию) и **CORE**.
+Запускать от `root@pve` одной командой. Bootstrap спрашивает профиль,
+для HOME — Site ID (`serzhan-home` и т. п.), для CORE использует `dh-core`
+без дополнительного ввода. Перед созданием выводит фактический PVE, имя
+и адрес LXC и запрашивает подтверждение.
+
+| Параметр | HOME | CORE |
+| --- | --- | --- |
+| Целевой PVE IP | `<site-prefix>.220` | `<site-prefix>.240` |
+| Ansible/Semaphore IP | `<site-prefix>.221` | `<site-prefix>.241` |
+| LXC ID | `1221` | `1241` |
+| Hostname | `ansible-<site-id>` | `ansible-dh-core` |
+| Semaphore project | `<site-id>` | `dh-core` |
+| Task catalog (№00) | `catalog/tasks.yml` | `catalog/core-tasks.yml` |
+
+Значения привязаны к профилю, а не к произвольно выбранному IP PVE.
+**Bootstrap откажется запускаться, пока текущий PVE не получил целевой
+адрес `.220` (HOME) или `.240` (CORE).** Сначала выполнить отдельную
+контролируемую миграцию адресов PVE. Сам bootstrap IP PVE не меняет.
+
+Новый Runner сохраняет профиль в `/etc/digitalhouses/site-profile`; при
+отсутствии файла у старых HOME Runner задача №00 применяет HOME catalog.
+Каталог CORE сначала содержит только №00; задачи для CORE добавляются
+позже, начиная с №40.
+Штатная автоматическая регистрация токена DEV во время bootstrap работает
+только если CT1254 запущен на том же PVE. Для двух независимых PVE
+подключение центрального DEV к новому Runner требует отдельной доработки
+№08 (не считать CORE API интегрированным после одного bootstrap).
 
 Bootstrap выполняет только:
-1. Fresh Debian 13 LXC: CT1231 по умолчанию, hostname `ansible-<site>`,
-   IP `<PVE-vmbr0-/24-network>.231`, `onboot=1`, `startup order=2`.
+1. Fresh Debian 13 LXC: CT1221 (HOME) или CT1241 (CORE),
+   IP `192.168.11.221/.241`, `onboot=1`, `startup order=2`.
 2. Установку штатного `ansible-core==2.21.4` в LXC, clone
    `DigitalHouses/Ansible-3` в `/opt/ansible-3` и установку
    закреплённых нативных коллекций из `bootstrap/collections.yml`
@@ -30,12 +64,17 @@ Ansible в свежем госте, далее используется `ansible
 bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/Ansible-3/main/bootstrap/install.sh)
 ```
 
-Ввод: `Site ID` (пример `serzhan-home`), затем `y/n`. На PVE
-`192.168.11.6/24` стандартный результат — CT1231,
-`ansible-serzhan-home`, `192.168.11.231/24`.
+Ввод: профиль (ENTER = HOME; `2` = CORE), для HOME — `Site ID`
+(например, `serzhan-home`), затем `y/n`.
+Например, на HOME PVE владельца `192.168.11.220/24`
+результат — CT1221,
+`ansible-serzhan-home`, `192.168.11.221/24`.
+На CORE PVE `192.168.11.240/24` — CT1241,
+`ansible-dh-core`, `192.168.11.241/24`.
 
-**Важное ограничение:** существующий CT1231 не уничтожается и не изменяется.
-Если ID занят, bootstrap откажется работать. Восстановление/resume после
+**Важное ограничение:** существующие CT1231 и любые другие гости не
+уничтожаются и не изменяются. Если целевой ID занят, bootstrap откажется
+работать. Восстановление/resume после
 частичного сбоя намеренно отсутствует: это fresh-only установщик.
 
 ## Испытание на отдельном тестовом LXC

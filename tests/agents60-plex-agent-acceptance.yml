@@ -1,0 +1,76 @@
+---
+- name: Verify Plex Agent and PVE Agent belong exclusively to task 60
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-native-plex-agent.yml') | from_yaml }}"
+    native_apps: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-native-apps.yml') | from_yaml }}"
+    acceptance: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-accept-guest.yml') | from_yaml }}"
+    task10: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/setup-pve.yml') | from_yaml }}"
+    task30: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') | from_yaml }}"
+    task60: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/digitalhouses-agents.yml') | from_yaml }}"
+    catalog: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../catalog/tasks.yml') | from_yaml }}"
+  tasks:
+    - name: Select independent agent installation and verification steps
+      ansible.builtin.set_fact:
+        pve_steps: "{{ task60[1].tasks }}"
+        media_steps: "{{ task60[3].tasks }}"
+        role_install: >-
+          {{ role | selectattr('name', 'equalto',
+             'Install only the upstream, checked Plex Agent product release') | first }}
+        fresh_marker: >-
+          {{ role | selectattr('name', 'equalto',
+             'Record a fresh Plex Agent MQTT identity before the upstream installer') | first }}
+        update_step: >-
+          {{ role | selectattr('name', 'equalto',
+             'Determine whether the pinned Plex Agent product installation is required') | first }}
+        start_agent: >-
+          {{ role | selectattr('name', 'equalto',
+             'Start existing Plex Agent product with protected site MQTT settings') | first }}
+
+    - name: Require agent isolation and its own explicit Semaphore survey
+      ansible.builtin.assert:
+        that:
+          - "'pve-agent.yml' not in (task10 | to_json)"
+          - "'media-native-plex-agent.yml' not in (native_apps | to_json)"
+          - "'digitalhouses_plex_agent.service' not in (acceptance | to_json)"
+          - "'digitalhouses_plex_agent_gpu_helper.service' not in (acceptance | to_json)"
+          - >-
+            (pve_steps | selectattr('name', 'equalto',
+             'Install or update DigitalHouses PVE Agent independently of task 10') | first)
+            ['ansible.builtin.include_tasks'] == '../tasks/pve-agent.yml'
+          - >-
+            (media_steps | selectattr('name', 'equalto',
+             'Install or update DigitalHouses Plex Agent independently of task 30') | first)
+            ['ansible.builtin.include_tasks'] == '../tasks/media-native-plex-agent.yml'
+          - "'media80_known_hosts' in (task60 | to_json)"
+          - "'qm' in (task60 | to_json)"
+          - >-
+            (catalog.tasks | selectattr('name', 'equalto', '60-DigitalHouses Agents') | first).playbook
+            == 'playbooks/digitalhouses-agents.yml'
+          - >-
+            ((catalog.tasks | selectattr('name', 'equalto', '60-DigitalHouses Agents')
+              | first).survey_vars | map(attribute='name') | list)
+            == ['DH_AGENTS_MODE', 'DH_AGENTS_UPDATE']
+          - "'media_mqtt_host' not in (task30 | to_json)"
+
+    - name: Require safe Plex installation and firstboot migration rules
+      ansible.builtin.assert:
+        that:
+          - start_agent['ansible.builtin.systemd_service'].enabled | bool
+          - role_install.no_log | bool
+          - >-
+            'media_plex_agent_current_version is version('
+            in update_step['ansible.builtin.set_fact'].media_plex_agent_install_needed
+          - "'DIGITALHOUSES_SOURCE_REF' in role_install.environment"
+          - "'force' in fresh_marker['ansible.builtin.copy']"
+          - not fresh_marker['ansible.builtin.copy'].force | bool
+          - "'not media_plex_agent_config_before.stat.exists' in fresh_marker.when"
+          - "'not media_plex_agent_build_stat.stat.exists' in fresh_marker.when"
+          - "'not media_plex_agent_legacy_config.stat.exists' in fresh_marker.when"
+          - "'not media_plex_agent_legacy_state.stat.exists' in fresh_marker.when"
+          - >-
+            (media_steps | selectattr('name', 'equalto',
+             'Require functional Plex Agent after apply') | first)
+            ['ansible.builtin.assert'].fail_msg == 'AGENTS60_PLEX_AGENT_NOT_READY'

@@ -1,0 +1,109 @@
+---
+# Install or restore the existing site Tunnel connector on Runner only.
+- name: Request site Tunnel-scoped connector token
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/token"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_runner_token
+  changed_when: false
+  no_log: true
+
+- name: Install Cloudflare signed APT key
+  ansible.builtin.get_url:
+    url: https://pkg.cloudflare.com/cloudflare-main.gpg
+    dest: /usr/share/keyrings/cloudflare-main.gpg
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Configure official cloudflared APT source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/cloudflared.list
+    content: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
+    owner: root
+    group: root
+    mode: '0644'
+  register: cf_apt_repo
+
+- name: Install cloudflared without an implicit software upgrade
+  ansible.builtin.apt:
+    name: cloudflared
+    state: present
+    update_cache: "{{ cf_apt_repo.changed }}"
+
+- name: Ensure only the private cloudflared token directory is root-only
+  ansible.builtin.file:
+    path: /etc/cloudflared
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Copy original PVE origin CA onto the Runner connector
+  ansible.builtin.copy:
+    src: "{{ pve.ca_file }}"
+    dest: "{{ cf_origin_ca }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Store only the new connector token privately
+  ansible.builtin.copy:
+    dest: /etc/cloudflared/site-token
+    content: "{{ cf_runner_token.json.result }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Save the exact site Tunnel ownership marker
+  ansible.builtin.copy:
+    dest: /etc/digitalhouses/site-cloudflare-tunnel-id
+    content: "{{ cf_tunnel_id }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Install the site connector systemd service on Runner
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses-site-cloudflared.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses owner-object Cloudflare Tunnel
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/site-token
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start the managed site connector
+  ansible.builtin.systemd_service:
+    name: digitalhouses-site-cloudflared.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Wait for healthy Cloudflare Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_healthy
+  changed_when: false
+  until: cf_healthy.json.result.status == 'healthy'
+  retries: 12
+  delay: 4
+  no_log: true

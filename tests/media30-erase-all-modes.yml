@@ -21,7 +21,7 @@
           - "['recreate', 'erase'] in media30_combinations"
           - "'media30-erase-guest-identity.yml' not in zfs_source"
           - "'media_vm.storage.import_pool_guid' not in zfs_source"
-          - "'- name: Create requested new ZFS pool' in zfs_source"
-          - "'- name: Import existing named pool' in zfs_source"
+          - "'- name: Create a fresh ZFS pool' in zfs_source"
+          - "'- name: Import the requested existing ZFS pool' in zfs_source"
       vars:
         zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"

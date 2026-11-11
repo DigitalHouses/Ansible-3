@@ -1,0 +1,57 @@
+---
+- name: Detect SATA and GPU automatically without the old private PCI addresses
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    discovery_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media30-pci-autodetect.yml') | from_yaml }}"
+    pve_lspci_fixture: |
+      0000:00:02.0 VGA compatible controller [0300]: Intel Corporation Alder Lake-N [UHD Graphics] [8086:46d1]
+      0000:00:17.0 SATA controller [0106]: Intel Corporation Alder Lake-N SATA AHCI Controller [8086:54d3]
+    original_manifest_pci:
+      gpu: '0000:2f:00.0'
+      sata_controller: '0000:2b:00.0'
+  tasks:
+    - name: Require hardware discovery never references prior PCI declarations
+      ansible.builtin.assert:
+        that:
+          - discovery_tasks | length == 2
+          - >-
+            discovery_tasks[0]['ansible.builtin.command'].argv ==
+            ['lspci', '-Dnn']
+          - "'media_spec.pci.gpu' not in pci_src"
+          - "'media_spec.pci.sata_controller' not in pci_src"
+          - "'media_raw_disk_action' not in pci_src"
+      vars:
+        pci_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media30-pci-autodetect.yml') }}"
+
+    - name: Select actual devices from the supplied PVE diagnostic
+      ansible.builtin.set_fact:
+        discovered_sata: >-
+          {{ (pve_lspci_fixture |
+              regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+[^\n]*\[0106\]')) | first }}
+        discovered_gpu: >-
+          {{ (pve_lspci_fixture |
+              regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+[^\n]*\[(?:0300|0380)\]')) | first }}
+
+    - name: Verify both historical PCI values are ignored
+      ansible.builtin.assert:
+        that:
+          - discovered_sata == '0000:00:17.0'
+          - discovered_gpu == '0000:00:02.0'
+          - discovered_sata != original_manifest_pci.sata_controller
+          - discovered_gpu != original_manifest_pci.gpu
+
+    - name: Verify import workflow never inspects physical disk identity
+      ansible.builtin.assert:
+        that:
+          - >-
+            (zfs_tasks | selectattr('name', 'equalto',
+            'Import the requested existing ZFS pool without touching disk contents')
+            | first).when[0] == "media_raw_disk_action == 'import'"
+          - "'media_import_scan' not in zfs_source"
+          - "'media_sata_pci_vendor' not in zfs_source"
+      vars:
+        zfs_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-zfs-apply.yml') }}"
+        zfs_tasks: "{{ zfs_source | from_yaml }}"

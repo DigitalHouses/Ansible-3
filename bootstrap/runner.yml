@@ -16,6 +16,8 @@
       ansible.builtin.assert:
         that:
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - site_profile | default('home') in ['home', 'core']
+          - site_profile | default('home') != 'core' or site_id == 'dh-core'
           - runner_hostname is match('^[a-z0-9][a-z0-9-]+$')
           - runner_ip is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
           - pve_ipv4 is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
@@ -85,6 +87,14 @@
         group: root
         mode: '0644'
 
+    - name: Store the runner site profile
+      ansible.builtin.copy:
+        dest: /etc/digitalhouses/site-profile
+        content: "{{ site_profile | default('home') }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Confirm PVE cluster CA was copied from the host
       ansible.builtin.stat:
         path: /etc/digitalhouses/pve-root-ca.pem
@@ -135,7 +145,7 @@
             host: /var/lib/semaphore/database.sqlite
           port: ':80'
           interface: 0.0.0.0
-          web_host: '/'
+          web_host: ''
           tmp_path: /var/lib/semaphore/tmp
           cookie_hash: "{{ sem_cookie_hash }}"
           cookie_encryption: "{{ sem_cookie_encryption }}"

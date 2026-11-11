@@ -8,15 +8,36 @@ unset LANGUAGE
 [[ $EUID -eq 0 && -f /etc/pve/user.cfg && $# -eq 0 ]] || {
   echo 'BLOCKED: launch as root on Proxmox VE, without arguments' >&2; exit 2;
 }
-read -r -p 'Site ID (<owner>-<type>): ' SITE
-SITE="${SITE%$'\r'}"
+printf 'Site profile: 1) HOME (default)  2) CORE\n'
+read -r -p 'Selection [1]: ' PROFILE
+PROFILE="${PROFILE%$'\r'}"
+PROFILE="${PROFILE:-1}"
+case "$PROFILE" in
+  1|home)
+    PROFILE=home
+    PVE_OCTET=220
+    RUNNER_OCTET=221
+    read -r -p 'Site ID (<owner>-home): ' SITE
+    SITE="${SITE%$'\r'}"
+    [[ $SITE == *-home ]] || {
+      echo 'BLOCKED: home Site ID must end in -home' >&2; exit 2;
+    }
+    ;;
+  2|core)
+    PROFILE=core
+    PVE_OCTET=240
+    RUNNER_OCTET=241
+    SITE=dh-core
+    ;;
+  *)
+    echo 'BLOCKED: select 1/home or 2/core' >&2; exit 2
+    ;;
+esac
 [[ ${#SITE} -le 31 && $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
   echo 'BLOCKED: invalid Site ID' >&2; exit 2;
 }
-read -r -p "Confirm site $SITE (y/n): " YES
-[[ $YES == y || $YES == Y ]] || { echo 'Cancelled'; exit 2; }
 
-CTID="${DH_BOOTSTRAP_CTID:-1231}"
+CTID="${DH_BOOTSTRAP_CTID:-$((1000 + RUNNER_OCTET))}"
 GIT_REF="${DH_BOOTSTRAP_REF:-main}"
 RUNNER_HOSTNAME="${DH_BOOTSTRAP_HOSTNAME:-ansible-$SITE}"
 PROTECTION="${DH_BOOTSTRAP_PROTECTION:-1}"
@@ -39,13 +60,20 @@ PVE_ROOT_CA=/etc/pve/pve-root-ca.pem
   echo 'BLOCKED: missing PVE identity or cluster CA certificate' >&2; exit 2;
 }
 # An unauthenticated HTTP 401 is fine; the TLS verification must succeed.
-curl --silent --show-error --cacert "$PVE_ROOT_CA" --connect-timeout 5 --max-time 10 \
+# The PVE API is on the local subnet. Never route this TLS check via HTTPS_PROXY.
+curl --noproxy '*' --silent --show-error --cacert "$PVE_ROOT_CA" \
+  --connect-timeout 5 --max-time 10 \
   -o /dev/null "https://$HOST_IPV4:8006/api2/json/version" || {
     echo 'BLOCKED: PVE API certificate is not trusted for vmbr0 IP' >&2; exit 2;
   }
 IFS=. read -r A B C D <<< "$HOST_IPV4"
 NETWORK="${A}.${B}.${C}"
-RUNNER_IP="${DH_BOOTSTRAP_IP:-$NETWORK.231}"
+RUNNER_IP="${DH_BOOTSTRAP_IP:-$NETWORK.$RUNNER_OCTET}"
+EXPECTED_PVE_IP="$NETWORK.$PVE_OCTET"
+[[ $HOST_IPV4 == "$EXPECTED_PVE_IP" ]] || {
+  echo "BLOCKED: $PROFILE profile requires PVE $EXPECTED_PVE_IP (actual: $HOST_IPV4). Migrate PVE IP first." >&2
+  exit 2
+}
 [[ $HOST_GW == "$NETWORK."* && $RUNNER_IP == "$NETWORK."* ]] || {
   echo 'BLOCKED: PVE, gateway and Runner must share vmbr0 /24' >&2; exit 2;
 }
@@ -59,6 +87,11 @@ if pct config "$CTID" >/dev/null 2>&1 || qm config "$CTID" >/dev/null 2>&1; then
   echo "BLOCKED: guest $CTID already exists. Use a separate test CTID/IP, or an empty PVE." >&2
   exit 2
 fi
+
+printf 'PROFILE=%s SITE=%s PVE=%s RUNNER=CT%s/%s/%s\n' \
+  "$PROFILE" "$SITE" "$HOST_IPV4" "$CTID" "$RUNNER_HOSTNAME" "$RUNNER_IP"
+read -r -p 'Confirm fresh LXC creation (y/N): ' YES
+[[ $YES == y || $YES == Y ]] || { echo 'Cancelled'; exit 2; }
 LOG_DIR=/var/log/digitalhouses/ansible-3
 install -d -m 0700 "$LOG_DIR"
 LOG="$(mktemp "$LOG_DIR/bootstrap-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")"
@@ -75,8 +108,8 @@ on_exit() {
 trap on_exit EXIT
 exec > >(tee -a "$LOG") 2>&1
 
-printf 'SITE=%s PVE=%s RUNNER=CT%s/%s/%s REF=%s\n' \
-  "$SITE" "$HOST_CIDR" "$CTID" "$RUNNER_HOSTNAME" "$RUNNER_IP" "$GIT_REF"
+printf 'PROFILE=%s SITE=%s PVE=%s RUNNER=CT%s/%s/%s REF=%s\n' \
+  "$PROFILE" "$SITE" "$HOST_CIDR" "$CTID" "$RUNNER_HOSTNAME" "$RUNNER_IP" "$GIT_REF"
 
 echo '=== 1/5 Debian 13 LXC ==='
 pveam update
@@ -136,7 +169,7 @@ pct push "$CTID" "$PVE_ROOT_CA" /etc/digitalhouses/pve-root-ca.pem \
 echo '=== 3/5 Semaphore through Ansible ==='
 pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   /opt/ansible/venv/bin/ansible-playbook -i localhost, -c local \
-  -e "site_id=$SITE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF pve_ipv4=$HOST_IPV4 pve_node=$PVE_NODE pve_hostname=$PVE_HOSTNAME" \
+  -e "site_id=$SITE site_profile=$PROFILE runner_ip=$RUNNER_IP runner_hostname=$RUNNER_HOSTNAME code_branch=$GIT_REF pve_ipv4=$HOST_IPV4 pve_node=$PVE_NODE pve_hostname=$PVE_HOSTNAME" \
   /opt/ansible-3/bootstrap/runner.yml
 
 echo '=== 4/5 Pin host SSH and enroll the Semaphore runner ==='
@@ -180,7 +213,7 @@ pct exec "$CTID" -- runuser -u semaphore -- ssh -n \
 
 # Fresh bootstrap uses the same native Ansible playbook as task 08.
 # Do not add any other Semaphore task during bootstrap; no task is autorun.
-if [[ $CTID == 1231 ]] && [[ $(pct status 1254 2>/dev/null) == 'status: running' ]]; then
+if [[ $(pct status 1254 2>/dev/null) == 'status: running' ]]; then
   echo '=== DEV enrollment through Ansible task 08 playbook ==='
   pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     /opt/ansible/venv/bin/ansible-playbook -i /opt/ansible-3/inventory/bootstrap.yml \
@@ -189,7 +222,7 @@ if [[ $CTID == 1231 ]] && [[ $(pct status 1254 2>/dev/null) == 'status: running'
       exit 2
     }
 else
-  echo 'DEV enrollment skipped: no running local DEV CT1254 for Runner CT1231.'
+  echo 'DEV enrollment skipped: no running local DEV CT1254 (remote DEV enrollment is separate).'
 fi
 
 echo '=== 5/5 Ready ==='

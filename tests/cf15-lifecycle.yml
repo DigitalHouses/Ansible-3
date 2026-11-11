@@ -1,0 +1,109 @@
+---
+- name: Offline lifecycle contract for the dedicated Cloudflare task 15
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    cf_main: "{{ (lookup('ansible.builtin.file', root ~ '/playbooks/cloudflare-site.yml') | from_yaml)[0] }}"
+    cf_connector: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-connector.yml') | from_yaml }}"
+    cf_route: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-publish-route.yml') | from_yaml }}"
+    pve10: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/setup-pve.yml') }}"
+    cf15: "{{ catalog.tasks | selectattr('name', 'equalto', '15-Cloudflare') | first }}"
+    pve10_catalog: "{{ catalog.tasks | selectattr('name', 'equalto', '10-Настроить PVE') | first }}"
+  tasks:
+    - name: Confirm task 15 has five user-requested activities in four choices
+      ansible.builtin.assert:
+        that:
+          - cf15.playbook == 'playbooks/cloudflare-site.yml'
+          - >-
+            cf15.survey_vars | map(attribute='name') | list ==
+            ['DH_CF15_CONNECTOR_ACTION', 'DH_CF15_PVE_ROUTE',
+             'DH_CF15_FILEBROWSER_ROUTE', 'DH_CF15_CONNECTOR_UPDATE']
+          - (cf15.survey_vars[0]['values'] | map(attribute='value') | list) == ['check','create','recreate']
+          - (cf15.survey_vars[1]['values'] | map(attribute='value') | list) == ['skip','create']
+          - (cf15.survey_vars[2]['values'] | map(attribute='value') | list) == ['skip','create']
+          - cf15.survey_vars[0].default_value == 'check'
+          - cf15.survey_vars[1].default_value == 'skip'
+          - cf15.survey_vars[2].default_value == 'skip'
+          - cf15.survey_vars[3].default_value == 'no'
+
+    - name: Confirm task 10 no longer manages Cloudflare
+      ansible.builtin.assert:
+        that:
+          - "'DH_PVE_CF_ACTION' not in pve10"
+          - "'DH_PVE_CF_UPDATE' not in pve10"
+          - "'cf15-connector.yml' not in pve10"
+          - "'cf15-publish-route.yml' not in pve10"
+          - >-
+            (pve10_catalog.survey_vars
+             | selectattr('name', 'search', 'DH_PVE_CF_') | list | length) == 0
+
+    - name: Select lifecycle actions from playbook and connector
+      ansible.builtin.set_fact:
+        cf_create_call: >-
+          {{ cf_main.tasks | selectattr('name', 'equalto',
+             'Create or recreate the site Tunnel and Runner connector') | first }}
+        cf_publish_call: >-
+          {{ cf_main.tasks | selectattr('name', 'equalto',
+             'Independently publish selected PVE or File Browser route') | first }}
+        cf_delete_block: >-
+          {{ cf_connector | selectattr('name', 'equalto',
+             'Retire only the exact old site Tunnel') | first }}
+
+    - name: Require creation only when missing or explicitly recreated
+      ansible.builtin.assert:
+        that:
+          - cf_create_call.when is search("cf_connector_action == 'recreate'")
+          - cf_create_call.when is search("cf_connector_action == 'create'")
+          - cf_create_call.when is search("cf_active_tunnels")
+          - cf_publish_call.when == "cf_endpoint.action == 'create'"
+          - cf_publish_call.loop | length == 2
+          - cf_publish_call.loop[0].kind == 'pve'
+          - cf_publish_call.loop[1].kind == 'filebrowser'
+
+    - name: Require inactive existing site Tunnel to start a connector without deletion
+      ansible.builtin.assert:
+        that:
+          - >-
+            (cf_main.tasks | selectattr('name', 'equalto',
+             'Install missing connector for an existing inactive site Tunnel')
+             | first).when is search("cf_connector_action == 'create'")
+          - >-
+            (cf_main.tasks | selectattr('name', 'equalto',
+             'Install missing connector for an existing inactive site Tunnel')
+             | first).when is search("cf_active_tunnels")
+          - >-
+            (cf_main.tasks | selectattr('name', 'equalto',
+             'Install missing connector for an existing inactive site Tunnel')
+             | first)['ansible.builtin.include_tasks'].file ==
+             '../tasks/cf15-runner-install.yml'
+
+    - name: Require pre-delete DNS and ownership safety with no route deletion
+      ansible.builtin.assert:
+        that:
+          - cf_delete_block.when == 'cf_old_id | length > 0'
+          - >-
+            (cf_delete_block.block | selectattr('name', 'equalto',
+             'Remove only the original owner-object Tunnel') | first)
+             ['ansible.builtin.uri'].method == 'DELETE'
+          - >-
+            cf_connector.index(cf_connector | selectattr('name', 'equalto',
+             'Read DNS for every existing route before deletion') | first)
+            < cf_connector.index(cf_delete_block)
+          - >-
+            cf_connector.index(cf_connector | selectattr('name', 'equalto',
+             'Refuse to remove any Tunnel not owned by this Runner') | first)
+            < cf_connector.index(cf_delete_block)
+          - >-
+            cf_connector | selectattr('name', 'equalto',
+            'Redirect only existing original site CNAMEs to the new UUID')
+            | list | length == 1
+          - >-
+            cf_route | selectattr('name', 'equalto', 'Publish only a missing route')
+            | list | length == 1
+          - >-
+            cf_route | to_json is not search('"method": "DELETE"')
+          - >-
+            cf_route | to_json is not search('"config_src"')

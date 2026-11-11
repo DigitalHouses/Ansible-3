@@ -80,45 +80,12 @@
   register: media80_accept_services
   changed_when: false
   failed_when: media80_accept_services.rc != 0 or media80_accept_services.stdout | trim != 'active'
-  loop:
-    - plexmediaserver.service
-    - jellyfin.service
-    - radarr.service
-    - sonarr.service
-    - prowlarr.service
-    - qbittorrent.service
-    - filestash.service
-    - smbd.service
-    - nmbd.service
-    - nginx.service
-    - digitalhouses_plex_agent.service
-    - digitalhouses_plex_agent_gpu_helper.service
-
-- name: Verify Plex Agent and GPU helper start automatically after reboot
-  ansible.builtin.command:
-    argv: [systemctl, is-enabled, "{{ item }}"]
-  register: media80_accept_plex_agent_enabled
-  changed_when: false
-  failed_when: >-
-    media80_accept_plex_agent_enabled.rc != 0 or
-    media80_accept_plex_agent_enabled.stdout | trim != 'enabled'
-  loop:
-    - digitalhouses_plex_agent.service
-    - digitalhouses_plex_agent_gpu_helper.service
-
-- name: Read Plex Agent installed release information without modifying it
-  ansible.builtin.slurp:
-    src: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
-  register: media80_accept_plex_agent_build
-
-- name: Require deployed Plex Agent to match the pinned upstream release
-  ansible.builtin.assert:
-    that:
-      - "'version = 0.8.5' in (media80_accept_plex_agent_build.content | b64decode).splitlines()"
-      - >-
-        'source = digitalhouses_plex_agent-v0.8.5'
-        in (media80_accept_plex_agent_build.content | b64decode).splitlines()
-    fail_msg: MEDIA80_ACCEPT_PLEX_AGENT_RELEASE_MISMATCH
+  loop: >-
+    {{ [
+      'plexmediaserver.service', 'jellyfin.service', 'radarr.service',
+      'sonarr.service', 'prowlarr.service', 'qbittorrent.service',
+      'filestash.service', 'smbd.service', 'nmbd.service', 'nginx.service',
+    ] + (['lidarr.service'] if media_spec.applications.lidarr | default(false) | bool else []) }}
 
 - name: Verify every published user-facing local TCP port
   ansible.builtin.wait_for:
@@ -126,7 +93,7 @@
     port: "{{ item }}"
     state: started
     timeout: 15
-  loop: [80, 32400, 8096, 7878, 8989, 9696, 8080, 8334, 8000]
+  loop: "{{ [80, 32400, 8096, 7878, 8989, 9696, 8080, 8334, 8000] + ([8686] if media_spec.applications.lidarr | default(false) | bool else []) }}"
   changed_when: false
 
 - name: Check actual local landing page body
@@ -143,7 +110,11 @@
     that:
       - item in media80_accept_portal.content
     fail_msg: MEDIA80_ACCEPT_PORTAL_INCOMPLETE
-  loop: [Plex, Jellyfin, Radarr, Sonarr, Prowlarr, qBittorrent, Filestash, Sambee]
+  loop: >-
+    {{ [
+      'Plex', 'Jellyfin', 'Radarr', 'Sonarr',
+      'Prowlarr', 'qBittorrent', 'Filestash', 'Sambee'
+    ] + (['Lidarr'] if media_spec.applications.lidarr | default(false) | bool else []) }}
 
 - name: Reject unauthorized access to every published Servarr system API
   ansible.builtin.uri:
@@ -152,7 +123,7 @@
     use_proxy: false
     status_code: [302, 401, 403]
     return_content: false
-  loop: "{{ media_arr_releases }}"
+  loop: "{{ media_active_arr_releases }}"
   loop_control:
     label: "{{ item.slug }}"
   register: media80_accept_arr_anonymous

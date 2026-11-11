@@ -1,0 +1,63 @@
+---
+- name: Keep S24 octets and IDs site-independent across HOME and CORE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    standards: "{{ lookup('ansible.builtin.file', root ~ '/ANSIBLE_STANDARDS.md') }}"
+    bootstrap: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/install.sh') }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    ip_selection: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media30-ip-selection.yml') }}"
+    entries:
+      - {service: 'Proxmox PVE', home_ip: '.220', home_id: '—', core_ip: '.240', core_id: '—'}
+      - {service: 'Ansible + Semaphore', home_ip: '.221', home_id: 'CT1221', core_ip: '.241', core_id: 'CT1241'}
+      - {service: 'Home Assistant', home_ip: '.222', home_id: 'VM2222', core_ip: '.242', core_id: 'VM2242'}
+      - {service: 'Media Server', home_ip: '.223', home_id: 'VM2223', core_ip: '.243', core_id: 'VM2243'}
+      - {service: 'PostgreSQL', home_ip: '.224', home_id: 'CT1224', core_ip: '.244', core_id: 'CT1244'}
+  tasks:
+    - name: Require all five normative octet and ID pairs
+      ansible.builtin.assert:
+        that:
+          - item.service in standards
+          - item.home_ip in standards
+          - item.home_id in standards
+          - item.core_ip in standards
+          - item.core_id in standards
+      loop: "{{ entries }}"
+      loop_control:
+        label: "{{ item.service }}"
+
+    - name: Require bootstrap derives each object's prefix from vmbr0
+      ansible.builtin.assert:
+        that:
+          - "'NETWORK=' in bootstrap"
+          - "'PVE_OCTET=220' in bootstrap"
+          - "'RUNNER_OCTET=221' in bootstrap"
+          - "'PVE_OCTET=240' in bootstrap"
+          - "'RUNNER_OCTET=241' in bootstrap"
+          - "'NETWORK=192.168.11' not in bootstrap"
+          - "'192.168.11' not in ip_selection"
+
+    - name: Ensure task 30 has no DHCP range checks in audit or deployment
+      ansible.builtin.assert:
+        that:
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/tasks/media30-ip-selection.yml')
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/playbooks/media-server-deploy.yml')
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/playbooks/media-server.yml')
+
+    - name: Require media default octet and VMID formula
+      ansible.builtin.assert:
+        that:
+          - >-
+            (catalog.tasks | selectattr('name', 'equalto', '30-Медиасервер')
+             | first).survey_vars | selectattr('name', 'equalto', 'DH_MEDIA_IP')
+             | map(attribute='default_value') | list == ['223']
+          - "'DH_MEDIA_IP | default' in ip_selection"
+          - "'2000 + (media30_selected_ipv4.split' in ip_selection"

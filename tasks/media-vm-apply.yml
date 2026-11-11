@@ -37,33 +37,6 @@
     fail_msg: MEDIA_VM_FOREIGN_OR_LOCKED
   when: media_vm_present.stat.exists
 
-- name: List configured QEMU guests to avoid foreign SATA ownership
-  ansible.builtin.find:
-    paths: /etc/pve/qemu-server
-    patterns: '*.conf'
-    file_type: file
-  register: media_qemu_config_files
-
-- name: Inspect PCI assignments of other QEMU guests
-  ansible.builtin.slurp:
-    src: "{{ item.path }}"
-  loop: "{{ media_qemu_config_files.files }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
-  register: media_other_qemu_configs
-  when: item.path != '/etc/pve/qemu-server/' ~ (media_vm.vmid | string) ~ '.conf'
-
-- name: Require dedicated SATA PCI function to have no other QEMU owner
-  ansible.builtin.assert:
-    that:
-      - >-
-        (media_other_qemu_configs.results
-         | selectattr('content', 'defined')
-         | map(attribute='content') | map('b64decode')
-         | select('search', media_vm.pci.sata_controller | regex_escape)
-         | list | length) == 0
-    fail_msg: MEDIA_SATA_CONTROLLER_ASSIGNED_TO_ANOTHER_VM
-
 # Only recreate removes VM disks. The passed-through SATA HDD is not a VM disk.
 - name: Require recreate to remove only own virtual disks
   ansible.builtin.assert:

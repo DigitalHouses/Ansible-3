@@ -4,12 +4,10 @@
 - name: Require task 05 MQTT credentials for the existing Plex Agent product
   ansible.builtin.assert:
     that:
-      - media_spec.plex_agent.mqtt.host | length > 0
-      - media_spec.plex_agent.mqtt.port | int > 0
-      - media_spec.plex_agent.mqtt.port | int <= 65535
+      - media_mqtt_host | default('') | length > 0
       - media_mqtt_username | default('') | length > 0
       - media_mqtt_password | default('') | length > 0
-    fail_msg: MEDIA30_PLEX_AGENT_MQTT_CREDENTIALS_REQUIRED_FROM_TASK05
+    fail_msg: MEDIA30_PLEX_AGENT_MQTT_SETTINGS_REQUIRED_FROM_TASK05
   no_log: true
 
 - name: Install upstream Plex Agent runtime prerequisites
@@ -22,6 +20,24 @@
     name: digitalhouses_plex_agent
     system: true
     state: present
+
+- name: Inspect Plex Agent configuration before firstboot
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
+    follow: false
+  register: media_plex_agent_config_before
+
+- name: Inspect legacy Plex monitoring configuration
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_plex_monitoring/digitalhouses_plex_monitoring.conf
+    follow: false
+  register: media_plex_agent_legacy_config
+
+- name: Inspect legacy Plex monitoring state
+  ansible.builtin.stat:
+    path: /var/lib/digitalhouses_plex_monitoring
+    follow: false
+  register: media_plex_agent_legacy_state
 
 - name: Ensure protected Plex Agent configuration location exists
   ansible.builtin.file:
@@ -62,12 +78,52 @@
       - not (media_plex_agent_build_stat.stat.islnk | default(false))
     fail_msg: MEDIA80_PLEX_AGENT_BUILD_INFO_UNSAFE
 
+- name: Skip legacy MQTT migration only for a genuinely new Ansible-managed Plex Agent
+  ansible.builtin.file:
+    path: /var/lib/digitalhouses_plex_agent
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - not media_plex_agent_config_before.stat.exists
+    - not media_plex_agent_build_stat.stat.exists
+    - not media_plex_agent_legacy_config.stat.exists
+    - not media_plex_agent_legacy_state.stat.exists
+
+- name: Record a fresh Plex Agent MQTT identity before the upstream installer
+  ansible.builtin.copy:
+    dest: /var/lib/digitalhouses_plex_agent/.ha_mqtt_identity_migrated_v1
+    content: "fresh Ansible-managed Plex Agent; no legacy MQTT identity to migrate\n"
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when:
+    - not media_plex_agent_config_before.stat.exists
+    - not media_plex_agent_build_stat.stat.exists
+    - not media_plex_agent_legacy_config.stat.exists
+    - not media_plex_agent_legacy_state.stat.exists
+
+- name: Read the installed Plex Agent version without assuming a downgrade
+  ansible.builtin.set_fact:
+    media_plex_agent_current_version: >-
+      {{ (media_plex_agent_build.content | default('') | b64decode
+         | regex_findall('(?m)^version = ([0-9]+[.][0-9]+[.][0-9]+)$')
+         | first | default('0.0.0')) }}
+
+- name: Reject an existing Plex Agent with unreadable release version
+  ansible.builtin.assert:
+    that:
+      - not media_plex_agent_build_stat.stat.exists or media_plex_agent_current_version != '0.0.0'
+    fail_msg: AGENTS60_PLEX_AGENT_EXISTING_RELEASE_INVALID
+
 - name: Determine whether the pinned Plex Agent product installation is required
   ansible.builtin.set_fact:
     media_plex_agent_install_needed: >-
       {{ not media_plex_agent_build_stat.stat.exists or
-         'source = digitalhouses_plex_agent-v0.8.5'
-         not in (media_plex_agent_build.content | default('') | b64decode) }}
+         (agents_update | default('no')) == 'yes' and
+         media_plex_agent_current_version is version('0.8.5', '<') }}
 
 - name: Download integrity-pinned vendor Plex Agent release installer
   ansible.builtin.get_url:

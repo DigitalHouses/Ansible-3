@@ -1,0 +1,64 @@
+---
+# Update only a local, active, vendor APT cloudflared installation.
+# HAOS add-ons, other hosts and unmanaged containers are out of scope.
+- name: Read locally installed cloudflared APT version
+  ansible.builtin.command:
+    argv: [/usr/bin/dpkg-query, -W, '-f=${Version}', cloudflared]
+  register: cf_package_before
+  changed_when: false
+  failed_when: false
+
+- name: Detect the active DigitalHouses site connector service
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, is-active, digitalhouses-site-cloudflared.service]
+  register: cf_site_service
+  changed_when: false
+  failed_when: false
+
+- name: Require an active, Ansible-managed site connector for a safe upgrade
+  ansible.builtin.set_fact:
+    cf_local_service: >-
+      {{ 'digitalhouses-site-cloudflared.service'
+         if cf_site_service.stdout == 'active' else '' }}
+    cf_local_update_available: >-
+      {{ cf_package_before.rc == 0 and cf_site_service.stdout == 'active' }}
+
+- name: Upgrade only the active, locally packaged cloudflared
+  ansible.builtin.apt:
+    name: cloudflared
+    state: latest
+    only_upgrade: true
+    update_cache: true
+  register: cf_vendor_upgrade
+  when: cf_local_update_available
+
+- name: Restart the connector only if the package changed
+  ansible.builtin.systemd_service:
+    name: "{{ cf_local_service }}"
+    state: restarted
+  when:
+    - cf_local_update_available
+    - cf_vendor_upgrade.changed
+
+- name: Read cloudflared version after the upgrade
+  ansible.builtin.command:
+    argv: [/usr/bin/dpkg-query, -W, '-f=${Version}', cloudflared]
+  register: cf_package_after
+  changed_when: false
+  when: cf_local_update_available
+
+- name: Determine cloudflared package update result
+  ansible.builtin.set_fact:
+    cf_update_result: >-
+      {{ 'APT_UPDATED' if cf_vendor_upgrade.changed | default(false)
+         else ('NO_NEW_APT_VERSION' if cf_local_update_available
+               else 'NOT_MANAGED_HERE') }}
+
+- name: Report the actual cloudflared package result
+  ansible.builtin.debug:
+    msg:
+      - "CLOUDFLARED_HOST={{ cf_package_host_label }}"
+      - "CLOUDFLARED_ACTION={{ cf_update_result }}"
+      - "CLOUDFLARED_BEFORE={{ cf_package_before.stdout if cf_package_before.rc == 0 else 'not-installed-by-apt' }}"
+      - "CLOUDFLARED_AFTER={{ cf_package_after.stdout if cf_local_update_available else 'not-applicable' }}"
+      - "CLOUDFLARED_SERVICE={{ cf_local_service if cf_local_update_available else 'not-found-active' }}"

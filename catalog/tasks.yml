@@ -3,186 +3,247 @@
 tasks:
   - name: 00-Обновить список задач
     playbook: playbooks/update-task-catalog.yml
-    description: Synchronize catalog entries from the public Ansible-3 repo
+    description: Обновить каталог задач Semaphore из Ansible-3 (без запуска остальных задач)
   - name: "05-Ввести и проверить credentials"
     playbook: playbooks/obtain-site-credentials.yml
-    description: "Ввод и замена credentials объекта, проверка доступных сервисов"
+    description: "Ввод и обновление паролей и токенов; проверка доступа к PVE, GitHub и Cloudflare"
     survey_vars:
-      - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "PVE — пароль root@pam (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Media VM Linux root / PBS root@pam — пароль (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API токен (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT — адрес брокера (пусто = сохранить)", type: "", target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT — логин (пусто = сохранить)", type: "", target: env, required: false, values: []}
-      - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT — пароль (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_PVE_SNMP_COMMUNITY, title: "UPS SNMP v2c — community (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_PVE_SNMP_USERNAME, title: "UPS SNMP v3 — логин (пусто = сохранить)", type: "", target: env, required: false, values: []}
-      - {name: DH_INPUT_PVE_SNMP_AUTH_PASSWORD, title: "UPS SNMP v3 — Auth password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
-      - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "UPS SNMP v3 — Privacy password (пусто = сохранить)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "Proxmox — пароль root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Медиасервер — пароль Linux root / PBS root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен доступа (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API-токен (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT — IP или имя брокера (пусто — оставить прежний)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT — имя пользователя (пусто — оставить прежнее)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT — пароль (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_COMMUNITY, title: "ИБП SNMP v2c — community (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_USERNAME, title: "ИБП SNMP v3 — имя пользователя (пусто — оставить прежнее)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_AUTH_PASSWORD, title: "ИБП SNMP v3 — пароль аутентификации (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "ИБП SNMP v3 — пароль шифрования (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Доступ DEV к Semaphore и защищённый Cloudflare Tunnel для веб-интерфейса"
+    description: "Подключение DEV к Semaphore; доступ Cloudflare через единый туннель объекта"
     survey_vars:
       - name: DH_SEMAPHORE_CF_ACTION
-        title: "Cloudflare Tunnel для Semaphore"
+        title: "Cloudflare — Semaphore (общий туннель объекта)"
         type: enum
         target: ""
         required: true
-        default_value: apply
+        default_value: skip
         values:
-          - {name: "Настроить или проверить туннель", value: apply}
-          - {name: "Проверить без изменений", value: audit}
-          - {name: "Не менять Cloudflare", value: skip}
+          - {name: "Не изменять Cloudflare", value: skip}
+          - {name: "Проверить маршрут и DNS без изменений", value: audit}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
-    description: "PVE 8 postinstall, Bonjour, NUT, Quantum, PVE Agent, сеть и Cloudflare Access PVE"
+    description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, File Browser Quantum (без агентов и Cloudflare)"
     survey_vars:
       - name: DH_PVE_MODE
-        title: "Режим №10"
+        title: "Настройка Proxmox — режим запуска"
         type: enum
         target: ""
         required: true
         default_value: audit
         values:
-          - {name: "Аудит PVE — без изменений на хосте", value: audit}
-          - {name: "Применить настройки", value: apply}
+          - {name: "Проверить PVE (без изменений на хосте)", value: audit}
+          - {name: "Настроить PVE (применить выбранные действия)", value: apply}
       - name: DH_PVE_REPO_MODE
-        title: "PVE APT-репозитории"
+        title: "Репозитории пакетов Proxmox"
         type: enum
         target: ""
         required: true
         default_value: keep
         values:
-          - {name: "Не изменять текущие", value: keep}
-          - {name: "No-subscription (PVE 8, без лицензии)", value: nosub}
+          - {name: "Сохранить действующие репозитории", value: keep}
+          - {name: "Перейти на no-subscription (PVE 8)", value: nosub}
       - name: DH_PVE_UPGRADE
-        title: "Обновить пакеты PVE"
+        title: "Общее обновление пакетов PVE"
         type: enum
         target: ""
         required: true
         default_value: "no"
         values:
-          - {name: "Нет", value: "no"}
-          - {name: "Да, без перезагрузки", value: "yes"}
+          - {name: "Пропустить общее обновление", value: "no"}
+          - {name: "Выполнить обновление без перезагрузки", value: "yes"}
+      - name: DH_PVE_QUANTUM_UPDATE
+        title: "File Browser Quantum — обновление версии"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Сохранить установленную версию", value: "no"}
+          - {name: "Обновить до закреплённой версии Ansible", value: "yes"}
       - name: DH_PVE_NETWORK_ACTION
-        title: "PVE management IP"
+        title: "IP-адрес управления PVE"
         type: enum
         target: ""
         required: true
         default_value: keep
         values:
-          - {name: "Оставить существующий IP", value: keep}
-          - {name: "Сменить IP с автоматическим rollback", value: migrate}
-      - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (для migrate, например 192.168.11.230)", type: "", target: "", required: false, values: []}
-      - name: DH_PVE_CF_ACTION
-        title: "Cloudflare Access к PVE и File Browser"
-        type: enum
-        target: ""
-        required: true
-        default_value: apply
-        values:
-          - {name: "Не менять Cloudflare", value: skip}
-          - {name: "Проверить туннель и Access", value: audit}
-          - {name: "Обновить PVE и опубликовать File Browser", value: apply}
+          - {name: "Сохранить текущий IP", value: keep}
+          - {name: "Сменить IP (с автоматическим откатом)", value: migrate}
+      - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (только при выборе смены адреса)", type: "", target: "", required: false, values: []}
       - name: DH_PVE_QUANTUM
-        title: "FileBrowser Quantum"
+        title: "File Browser Quantum на PVE"
         type: enum
         target: ""
         required: true
         default_value: install
         values:
-          - {name: "Установить / проверить", value: install}
-          - {name: "Пропустить", value: skip}
+          - {name: "Установить или проверить", value: install}
+          - {name: "Не устанавливать / пропустить", value: skip}
       - name: DH_PVE_UPS_MODE
-        title: "UPS — подключение"
+        title: "ИБП (NUT) — настройка подключения"
         type: enum
         target: ""
         required: true
         default_value: none
         values:
-          - {name: "Нет UPS / не настраивать", value: none}
-          - {name: "USB — подключён к PVE", value: usb}
-          - {name: "Сетевой — SNMP v2c", value: snmp_v2c}
-          - {name: "Сетевой — SNMP v3", value: snmp_v3}
-      - {name: DH_PVE_UPS_IP, title: "UPS — IP (только для сетевого)", type: "", target: "", required: false, values: []}
+          - {name: "Не изменять NUT (в том числе существующий ИБП)", value: none}
+          - {name: "Настроить USB-ИБП", value: usb}
+          - {name: "Настроить сетевой ИБП — SNMP v2c", value: snmp_v2c}
+          - {name: "Настроить сетевой ИБП — SNMP v3", value: snmp_v3}
+      - {name: DH_PVE_UPS_IP, title: "IP сетевого ИБП (только для SNMP)", type: "", target: "", required: false, values: []}
       - name: DH_PVE_UPS_DRIVER
-        title: "UPS — драйвер NUT"
+        title: "Драйвер NUT (только при настройке ИБП)"
         type: enum
         target: ""
         required: true
         default_value: auto
         values:
-          - {name: "Auto (рекомендуется)", value: auto}
+          - {name: "Авто: USB — usbhid-ups, сеть — snmp-ups", value: auto}
           - {name: "usbhid-ups — USB HID", value: usbhid-ups}
           - {name: "nutdrv_qx — Qx/Megatec USB", value: nutdrv_qx}
           - {name: "blazer_usb — старый Megatec USB", value: blazer_usb}
           - {name: "bcmxcp_usb — Eaton USB", value: bcmxcp_usb}
           - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
           - {name: "snmp-ups — сетевой", value: snmp-ups}
+  - name: "15-Cloudflare"
+    playbook: playbooks/cloudflare-site.yml
+    description: "Единый Tunnel дома: проверить/создать/пересоздать коннектор, отдельно публиковать PVE и File Browser"
+    survey_vars:
+      - name: DH_CF15_CONNECTOR_ACTION
+        title: "Коннектор общего Cloudflare Tunnel"
+        type: enum
+        target: ""
+        required: true
+        default_value: check
+        values:
+          - {name: "Проверить (без изменений)", value: check}
+          - {name: "Создать (если отсутствует)", value: create}
+          - {name: "ПЕРЕСОЗДАТЬ Tunnel и коннектор (новый UUID)", value: recreate}
+      - name: DH_CF15_PVE_ROUTE
+        title: "Публикация Proxmox PVE"
+        type: enum
+        target: ""
+        required: true
+        default_value: skip
+        values:
+          - {name: "Пропустить", value: skip}
+          - {name: "Создать маршрут в общем Tunnel", value: create}
+      - name: DH_CF15_FILEBROWSER_ROUTE
+        title: "Публикация File Browser Quantum"
+        type: enum
+        target: ""
+        required: true
+        default_value: skip
+        values:
+          - {name: "Пропустить", value: skip}
+          - {name: "Создать маршрут в общем Tunnel", value: create}
+      - name: DH_CF15_CONNECTOR_UPDATE
+        title: "Версия cloudflared на Runner"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Не обновлять", value: "no"}
+          - {name: "Обновить установленный APT-пакет", value: "yes"}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
-    description: "Медиасервер: аудит или установка; VM keep/create/recreate; SATA import/erase"
+    description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"
     survey_vars:
       - name: DH_MEDIA_MODE
-        title: "Режим №30"
-        type: enum
-        target: ""
-        required: true
-        default_value: audit
-        values:
-          - {name: "Аудит — без изменений", value: audit}
-          - {name: "Применить конфигурацию медиасервера", value: apply}
-      - name: DH_MEDIA_VM_ACTION
-        title: "Действие с VM"
-        type: enum
-        target: ""
-        required: true
-        default_value: keep
-        values:
-          - {name: "keep — сохранить VM", value: keep}
-          - {name: "create — создать отсутствующую VM", value: create}
-          - {name: "recreate — пересоздать существующую VM", value: recreate}
-      - name: DH_MEDIA_DISK_ACTION
-        title: "Действие с SATA-диском"
-        type: enum
-        target: ""
-        required: true
-        default_value: import
-        values:
-          - {name: "import — импортировать существующий ZFS, не стирать", value: import}
-          - {name: "erase — СТЕРЕТЬ выбранный SATA-диск и создать ZFS заново", value: erase}
-      - {name: DH_MEDIA_IP, title: "IP медиасервера (232 или полный IPv4 в LAN)", type: "", target: "", required: true, default_value: "232", values: []}
-      - {name: DH_MEDIA_VM_CPU_PERCENT, title: "CPU всей VM (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
-      - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "CPU Plex+Jellyfin общий (%) — например 150, пусто = manifest", type: "", target: "", required: false, values: []}
-  - name: "31-Сменить общий пароль медиасервера"
-    playbook: playbooks/media-password-rotate.yml
-    description: "Верификация либо защищённая native-ротация пароля SMB и медиаприложений; пароль не передаётся в Semaphore"
-    survey_vars:
-      - name: DH_MEDIA_ROTATION_MODE
-        title: "Режим смены общего пароля"
-        type: enum
-        target: ""
-        required: true
-        default_value: preflight
-        values:
-          - {name: "Проверить текущие логины — без смены пароля", value: preflight}
-          - {name: "Сменить пароль — только при наличии защищённого запроса на ZFS", value: apply}
-  - name: "32-Cloudflare Webmin"
-    playbook: playbooks/media-webmin-cloudflare.yml
-    description: "Защищённая публикация Webmin медиасервера через существующий PVE Tunnel и Cloudflare Access"
-    survey_vars:
-      - name: DH_MEDIA_WEBMIN_CF_ACTION
-        title: "Cloudflare Webmin — действие"
+        title: "Медиасервер — режим запуска"
         type: enum
         target: ""
         required: true
         default_value: audit
         values:
           - {name: "Проверить без изменений", value: audit}
-          - {name: "Опубликовать Webmin через защищённый Tunnel", value: apply}
+          - {name: "Настроить медиасервер", value: apply}
+      - name: DH_MEDIA_VM_ACTION
+        title: "Действие с виртуальной машиной"
+        type: enum
+        target: ""
+        required: true
+        default_value: keep
+        values:
+          - {name: "Сохранить существующую VM", value: keep}
+          - {name: "Создать VM (если отсутствует)", value: create}
+          - {name: "УДАЛИТЬ и пересоздать VM", value: recreate}
+      - name: DH_MEDIA_DISK_ACTION
+        title: "Действие с SATA-диском медиасервера"
+        type: enum
+        target: ""
+        required: true
+        default_value: import
+        values:
+          - {name: "Импортировать существующий ZFS-пул без стирания", value: import}
+          - {name: "СТЕРЕТЬ SATA-диск и создать новый ZFS-пул", value: erase}
+      - {name: DH_MEDIA_IP, title: "IP медиасервера HOME (стандарт 192.168.11.223)", type: "", target: "", required: true, default_value: "223", values: []}
+      - {name: DH_MEDIA_VM_CPU_PERCENT, title: "Лимит CPU всей VM, % (пусто — настройки сайта)", type: "", target: "", required: false, values: []}
+      - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "Общий лимит CPU Plex + Jellyfin, % (пусто — настройки сайта)", type: "", target: "", required: false, values: []}
+  - name: "31-Сменить общий пароль медиасервера"
+    playbook: playbooks/media-password-rotate.yml
+    description: "Верификация либо защищённая native-ротация пароля SMB и медиаприложений; пароль не передаётся в Semaphore"
+    survey_vars:
+      - name: DH_MEDIA_ROTATION_MODE
+        title: "Пароль медиасервера — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: preflight
+        values:
+          - {name: "Проверить доступ без изменения пароля", value: preflight}
+          - {name: "Сменить пароль (требуется защищённый запрос на ZFS)", value: apply}
+  - name: "32-Cloudflare Webmin"
+    playbook: playbooks/media-webmin-cloudflare.yml
+    description: "Защищённая публикация Webmin через единый Cloudflare Tunnel объекта и Access"
+    survey_vars:
+      - name: DH_MEDIA_WEBMIN_CF_ACTION
+        title: "Cloudflare — доступ к Webmin"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить без изменений", value: audit}
+          - {name: "Опубликовать Webmin через существующий защищённый туннель", value: apply}
   - name: "33-rclone Web GUI"
     playbook: playbooks/media-rclone-gui.yml
     description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"
+  - name: "60-DigitalHouses Agents"
+    playbook: playbooks/digitalhouses-agents.yml
+    description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"
+    survey_vars:
+      - name: DH_AGENTS_MODE
+        title: "DigitalHouses Agents — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить агентов без изменений", value: audit}
+          - {name: "Установить отсутствующих и настроить агенты", value: apply}
+      - name: DH_AGENTS_UPDATE
+        title: "Обновить существующие агенты до закреплённых версий"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Не обновлять работающие версии", value: "no"}
+          - {name: "Обновить до закреплённых релизов", value: "yes"}

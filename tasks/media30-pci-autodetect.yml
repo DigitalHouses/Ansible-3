@@ -1,0 +1,23 @@
+---
+# PVE PCI addresses are discovered on the actual host, not pinned in site-repo.
+- name: Read PCI devices of this PVE without using historical site PCI IDs
+  ansible.builtin.command:
+    argv: [lspci, -Dnn]
+  register: media30_host_pci
+  changed_when: false
+
+- name: Use the PVE's actual SATA and graphics PCI addresses for this run
+  ansible.builtin.set_fact:
+    media_spec: >-
+      {{ media_spec | combine({
+         'pci': {
+           'sata_controller': (
+             media30_host_pci.stdout |
+             regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+[^\n]*\[0106\]') |
+             first),
+           'gpu': (
+             media30_host_pci.stdout |
+             regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+[^\n]*\[(?:0300|0380)\]') |
+             first)
+         }
+         }, recursive=true) }}

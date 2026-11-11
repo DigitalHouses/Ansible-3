@@ -41,7 +41,9 @@
     - name: Require exact HTTP80 Tunnel origin behind public HTTPS Access
       ansible.builtin.assert:
         that:
-          - "'service: http://127.0.0.1:80' in sem_cf"
           - "'http://127.0.0.1/api/ping' in sem_cf"
-          - "'originRequest:' not in sem_cf"
-          - "'https://127.0.0.1:3000' not in sem_cf"
+          - sem_cf is search("sem_cf_action.*audit")
+          - "'method: PUT' not in sem_cf"
+          - "'method: POST' not in sem_cf"
+          - "'method: DELETE' not in sem_cf"
+          - "'sem_cf_tunnel_name == dev_site_id' in sem_cf"

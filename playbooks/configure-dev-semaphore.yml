@@ -13,7 +13,7 @@
     sem_cf_action: "{{ DH_SEMAPHORE_CF_ACTION | default('skip', true) }}"
     sem_cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     sem_cf_api: https://api.cloudflare.com/client/v4
-    sem_cf_tunnel_name: "{{ dev_site_id }}-semaphore"
+    sem_cf_tunnel_name: "{{ dev_site_id }}"
     sem_cf_hostname: "{{ dev_site_id }}-pve-semaphore.digitalhouses.vip"
     sem_cf_legacy_hostname: "{{ dev_site_id }}-semaphore.digitalhouses.vip"
     sem_cf_headers:
@@ -105,9 +105,16 @@
         that: sem_cf_action in ['skip', 'audit', 'apply']
         fail_msg: "Invalid task 08 Cloudflare action"
 
-    - name: Commission dedicated Cloudflare Tunnel for Semaphore if requested
+    - name: Refuse creation of the removed Semaphore-only Tunnel
+      ansible.builtin.assert:
+        that: sem_cf_action != 'apply'
+        fail_msg: >-
+          Semaphore uses the existing site Tunnel {{ dev_site_id }}.
+          Do not create another connector or Tunnel from task 08.
+
+    - name: Audit existing Semaphore public Access without changing Tunnel
       ansible.builtin.include_tasks: ../tasks/semaphore-cloudflare.yml
-      when: sem_cf_action != 'skip'
+      when: sem_cf_action == 'audit'
 
     - name: Configure public Semaphore HTML base URL after verified Cloudflare Apply
       ansible.builtin.copy:
@@ -117,7 +124,7 @@
         mode: '0640'
         content: |
           {{ ((dev_server_config.content | b64decode | from_json)
-             | combine({'web_host': '/'})) | to_nice_json }}
+             | combine({'web_host': ''})) | to_nice_json }}
       register: sem_public_web_host_config
       no_log: true
       when: sem_cf_action == 'apply'

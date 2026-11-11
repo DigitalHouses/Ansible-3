@@ -1,0 +1,67 @@
+---
+- name: Preserve an existing Prowlarr indexer of this definition
+  ansible.builtin.set_fact:
+    media_public_preexisting: >-
+      {{ media_public_indexers_existing.json
+         | selectattr('definitionName', 'equalto', media_public_id) | list }}
+    media_public_supported: >-
+      {{ media_public_indexer_schemas.json
+         | selectattr('definitionName', 'equalto', media_public_id) | list }}
+
+- name: Prepare the upstream public indexer definition with its default fields
+  ansible.builtin.set_fact:
+    media_public_payload: >-
+      {{ media_public_supported[0] | combine({
+           'name': media_public_supported[0].name,
+           'enable': true,
+           'priority': 25,
+           'appProfileId': media_public_supported[0].appProfileId | default(1, true),
+           'tags': []
+         }) }}
+  when:
+    - media_public_preexisting | length == 0
+    - media_public_supported | length == 1
+
+- name: Ask Prowlarr to test the public source before adding it
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/indexer/test
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    body_format: json
+    body: "{{ media_public_payload }}"
+    use_proxy: false
+    status_code: 200
+    timeout: 35
+  register: media_public_test
+  failed_when: false
+  changed_when: false
+  when:
+    - media_public_preexisting | length == 0
+    - media_public_supported | length == 1
+  no_log: true
+
+- name: Add only the absent and successfully tested public indexer
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9696/api/v1/indexer
+    method: POST
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.prowlarr }}"
+    body_format: json
+    body: "{{ media_public_payload }}"
+    use_proxy: false
+    status_code: [200, 201]
+  register: media_public_added
+  failed_when: false
+  when:
+    - media_public_preexisting | length == 0
+    - media_public_test.status | default(0) == 200
+  no_log: true
+
+- name: Report public indexer configuration without credentials
+  ansible.builtin.debug:
+    msg: >-
+      {{ media_public_id }}={{
+        'EXISTING' if media_public_preexisting | length > 0
+        else 'INSTALLED' if media_public_added.status | default(0) in [200, 201]
+        else 'SKIPPED_NOT_AVAILABLE_OR_TEST_FAILED' }}

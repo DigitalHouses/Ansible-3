@@ -1,5 +1,5 @@
 ---
-# Reconcile one actual Radarr/Sonarr root folder through its official API.
+# Reconcile the selected Servarr app root through its official API.
 - name: Allow native Servarr group to write only its managed library directory
   ansible.builtin.file:
     path: "{{ media_wire_arr.path }}"
@@ -35,6 +35,40 @@
     fail_msg: MEDIA80_ARR_LIBRARY_ROOT_CONFLICT
   no_log: true
 
+- name: Read Lidarr metadata and quality profiles only for a new music root
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8686/api/v1/{{ item }}"
+    headers:
+      X-Api-Key: "{{ media_wire_arr_keys.lidarr }}"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+  loop: [metadataprofile, qualityprofile]
+  register: media_lidarr_root_profiles
+  changed_when: false
+  when:
+    - media_wire_arr.slug == 'lidarr'
+    - >-
+      (media_wire_root_folders_before.json
+       | selectattr('path', 'equalto', media_wire_arr.path) | list | length) == 0
+  no_log: true
+
+- name: Use Lidarr native root-folder fields with existing default profiles
+  ansible.builtin.set_fact:
+    media_lidarr_root_payload:
+      name: Music
+      path: "{{ media_wire_arr.path }}"
+      defaultMetadataProfileId: "{{ media_lidarr_root_profiles.results[0].json[0].id | int }}"
+      defaultQualityProfileId: "{{ media_lidarr_root_profiles.results[1].json[0].id | int }}"
+      defaultMonitorOption: all
+      defaultNewItemMonitorOption: all
+      defaultTags: []
+  when:
+    - media_wire_arr.slug == 'lidarr'
+    - >-
+      (media_wire_root_folders_before.json
+       | selectattr('path', 'equalto', media_wire_arr.path) | list | length) == 0
+
 - name: Add the missing declared ZFS root via the native Servarr API
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ media_wire_arr.port }}/api/{{ media_wire_arr.version }}/rootfolder"
@@ -42,8 +76,9 @@
     headers:
       X-Api-Key: "{{ media_wire_arr_keys[media_wire_arr.slug] }}"
     body_format: json
-    body:
-      path: "{{ media_wire_arr.path }}"
+    body: >-
+      {{ media_lidarr_root_payload if media_wire_arr.slug == 'lidarr'
+         else {'path': media_wire_arr.path} }}
     status_code: [200, 201]
     use_proxy: false
   when: >-

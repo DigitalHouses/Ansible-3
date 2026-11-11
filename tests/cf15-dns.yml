@@ -1,0 +1,30 @@
+---
+- name: Verify DNS rewrite is restricted to the original site Tunnel
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    old_id: 19aa858a-d6ba-4d99-8958-6144337fb097
+    new_id: 11111111-2222-3333-4444-555555555555
+    published:
+      - {name: pve, content: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com}
+      - {name: quantum, content: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com}
+      - {name: ha, content: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com}
+      - {name: router, content: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com}
+    foreign:
+      name: unrelated
+      content: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.cfargotunnel.com
+  tasks:
+    - name: Require all four original CNAMEs are eligible for UUID replacement
+      ansible.builtin.assert:
+        that:
+          - item.content == old_id ~ '.cfargotunnel.com'
+          - item.content != new_id ~ '.cfargotunnel.com'
+      loop: "{{ published }}"
+      loop_control: {label: "{{ item.name }}"}
+
+    - name: Refuse foreign DNS from another Tunnel
+      ansible.builtin.assert:
+        that:
+          - foreign.content != old_id ~ '.cfargotunnel.com'
+          - foreign.content != new_id ~ '.cfargotunnel.com'

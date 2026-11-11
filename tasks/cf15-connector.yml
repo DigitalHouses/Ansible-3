@@ -1,0 +1,303 @@
+---
+# Lifecycle for only the site's remotely-managed Tunnel and Runner connector.
+# Old routes, original order, and CNAMEs survive an explicit recreation.
+
+- name: Remember the existing Tunnel UUID before recreation
+  ansible.builtin.set_fact:
+    cf_old_id: "{{ cf_tunnel_id }}"
+
+- name: Read existing site routes before destructive operations
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_old_config_response
+  changed_when: false
+  no_log: true
+  when: cf_old_id | length > 0
+
+- name: Snapshot the complete previous Tunnel configuration
+  ansible.builtin.set_fact:
+    cf_saved_config: >-
+      {{ cf_old_config_response.json.result.config
+         if cf_old_id | length > 0 else {} }}
+    cf_saved_routes: >-
+      {{ cf_old_config_response.json.result.config.ingress | default([])
+         if cf_old_id | length > 0 else [] }}
+
+- name: Select the original published hostnames
+  ansible.builtin.set_fact:
+    cf_original_hosts: >-
+      {{ cf_saved_routes | selectattr('hostname', 'defined')
+         | map(attribute='hostname') | list }}
+
+- name: Require original ingress has a final 404 and unique hostnames
+  ansible.builtin.assert:
+    that:
+      - >-
+        cf_saved_routes | length == 0 or
+        (cf_saved_routes[-1].service == 'http_status:404'
+         and cf_saved_routes[-1].hostname is not defined)
+      - >-
+        cf_saved_routes | length == 0 or
+        (cf_saved_routes[:-1] | rejectattr('hostname', 'defined') | list | length) == 0
+      - cf_original_hosts | length == cf_original_hosts | unique | list | length
+      - >-
+        cf_original_hosts | reject('match',
+        '^[a-zA-Z0-9*._-]+[.]' ~ (cf_zone_name | regex_escape) ~ '$')
+        | list | length == 0
+      - cf_old_id | length == 0 or cf_saved_routes | length > 0
+    fail_msg: "CF15_UNSUPPORTED_OLD_INGRESS"
+
+- name: Read DNS for every existing route before deletion
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf_original_hosts }}"
+  register: cf_original_dns
+  changed_when: false
+  no_log: true
+
+- name: Refuse foreign DNS records and ambiguous site routes
+  ansible.builtin.assert:
+    that:
+      - item.json.success | bool
+      - item.json.result_info.total_pages | default(1) | int == 1
+      - item.json.result | length <= 1
+      - >-
+        item.json.result | length == 0 or
+        (item.json.result[0].type == 'CNAME'
+         and item.json.result[0].proxied | bool
+         and item.json.result[0].content | lower
+         == (cf_old_id ~ '.cfargotunnel.com') | lower)
+    fail_msg: "CF15_FOREIGN_DNS_ABORT_BEFORE_DELETE"
+  loop: "{{ cf_original_dns.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Inspect locally recorded Tunnel ownership
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/site-cloudflare-tunnel-id
+    follow: false
+  register: cf_owner_file
+  when: cf_old_id | length > 0
+
+- name: Read the protected UUID of the Runner-managed Tunnel
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/site-cloudflare-tunnel-id
+  register: cf_owner_identity
+  no_log: true
+  when:
+    - cf_old_id | length > 0
+    - cf_owner_file.stat.isreg | default(false)
+
+- name: Inspect the managed connector systemd unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/digitalhouses-site-cloudflared.service
+  register: cf_unit_file
+  when: cf_old_id | length > 0
+
+- name: Refuse to remove any Tunnel not owned by this Runner
+  ansible.builtin.assert:
+    that:
+      - cf_owner_file.stat.isreg | default(false)
+      - (cf_owner_identity.content | default('') | b64decode | trim) == cf_old_id
+      - cf_unit_file.stat.isreg | default(false)
+    fail_msg: "CF15_RECREATE_REQUIRES_LOCAL_CONNECTOR_OWNERSHIP"
+  when: cf_old_id | length > 0
+
+- name: Read back original ingress immediately before deletion
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_old_latest
+  changed_when: false
+  no_log: true
+  when: cf_old_id | length > 0
+
+- name: Refuse deletion when old routes were edited concurrently
+  ansible.builtin.assert:
+    that:
+      - cf_old_latest.json.result.config == cf_saved_config
+    fail_msg: "CF15_OLD_INGRESS_CHANGED"
+  when: cf_old_id | length > 0
+
+- name: Retire only the exact old site Tunnel
+  when: cf_old_id | length > 0
+  block:
+    - name: Stop the Runner-owned old connector
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: stopped
+
+    - name: Wait for the original Tunnel to have no active connectors
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_id }}"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_old_down
+      changed_when: false
+      until: cf_old_down.json.result.status in ['down', 'inactive']
+      retries: 12
+      delay: 3
+      no_log: true
+
+    - name: Remove only the original owner-object Tunnel
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_id }}"
+        method: DELETE
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: [200, 204]
+      changed_when: true
+      no_log: true
+  rescue:
+    - name: Resume the original connector on unsuccessful deletion
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: started
+    - name: Explain failure to recreate
+      ansible.builtin.fail:
+        msg: "CF15_OLD_TUNNEL_NOT_DELETED_OR_NOT_INACTIVE"
+
+- name: Create the new canonical remotely managed Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel"
+    method: POST
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      name: "{{ cf_tunnel_name }}"
+      config_src: cloudflare
+    use_proxy: false
+    status_code: 200
+  register: cf_new_tunnel
+  changed_when: true
+  no_log: true
+
+- name: Record new Tunnel ID for route publication
+  ansible.builtin.set_fact:
+    cf_tunnel_id: "{{ cf_new_tunnel.json.result.id }}"
+
+- name: Require canonical name and a fresh UUID
+  ansible.builtin.assert:
+    that:
+      - cf_new_tunnel.json.success | bool
+      - cf_new_tunnel.json.result.name == cf_tunnel_name
+      - cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+      - cf_tunnel_id != cf_old_id
+    fail_msg: "CF15_TUNNEL_CREATE_FAILED"
+
+- name: Read initial new Tunnel configuration
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_new_initial
+  changed_when: false
+  no_log: true
+
+- name: Refuse to overwrite other routes added to the new Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf_new_initial.json.success | bool
+      - cf_new_initial.json.result.config.ingress | default([]) in [[], [{'service':'http_status:404'}]]
+    fail_msg: "CF15_NEW_TUNNEL_WAS_ALREADY_MODIFIED"
+
+- name: Prepare full original ingress or default 404 on a fresh Tunnel
+  ansible.builtin.set_fact:
+    cf_new_config: >-
+      {{ cf_saved_config if cf_old_id | length > 0 else
+         (cf_new_initial.json.result.config
+          | combine({'ingress': [{'service': 'http_status:404'}]})) }}
+
+- name: Restore all original site routes without changing their order
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+    method: PUT
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      config: "{{ cf_new_config }}"
+    use_proxy: false
+    status_code: 200
+  changed_when: true
+  no_log: true
+
+- name: Confirm original routes were restored
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_new_readback
+  changed_when: false
+  no_log: true
+
+- name: Require complete restored Tunnel configuration
+  ansible.builtin.assert:
+    that:
+      - cf_new_readback.json.success | bool
+      - cf_new_readback.json.result.config.ingress == cf_new_config.ingress
+    fail_msg: "CF15_INGRESS_RESTORE_FAILED"
+
+- name: Install the Runner connector for the new site Tunnel
+  ansible.builtin.include_tasks: cf15-runner-install.yml
+
+- name: Redirect only existing original site CNAMEs to the new UUID
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records/{{ item.json.result[0].id }}"
+    method: PATCH
+    headers: "{{ cf_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      name: "{{ item.item }}"
+      proxied: true
+      content: "{{ cf_tunnel_id }}.cfargotunnel.com"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf_original_dns.results }}"
+  when: item.json.result | length == 1
+  changed_when: true
+  no_log: true
+
+- name: Read DNS records of the formerly published routes
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: >-
+    {{ cf_original_dns.results
+       | selectattr('json.result')
+       | map(attribute='item') | list }}
+  register: cf_dns_readback
+  changed_when: false
+  no_log: true
+
+- name: Require every originally published DNS points to the new site Tunnel
+  ansible.builtin.assert:
+    that:
+      - item.json.success | bool
+      - item.json.result | length == 1
+      - item.json.result[0].content | lower == (cf_tunnel_id ~ '.cfargotunnel.com') | lower
+    fail_msg: "CF15_OLD_DNS_REBIND_FAILED"
+  loop: "{{ cf_dns_readback.results }}"
+  no_log: true
+
+- name: Report fresh owner-object Tunnel readiness
+  ansible.builtin.debug:
+    msg:
+      - "CF_TUNNEL={{ cf_tunnel_name }}"
+      - "CF_UUID={{ cf_tunnel_id }}"
+      - "CF_CONNECTOR=RUNNER_ACTIVE"
+      - "CF_RESTORED_ROUTES={{ cf_original_hosts | length }}"

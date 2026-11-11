@@ -19,8 +19,8 @@ timeout_seconds = 3
 library_refresh_seconds = 3600
 
 [mqtt]
-host = {{ media_vm.plex_agent.mqtt.host }}
-port = {{ media_vm.plex_agent.mqtt.port }}
+host = {{ media_mqtt_host }}
+port = 1883
 username = {{ media_mqtt_username }}
 password = {{ media_mqtt_password }}
 topic_prefix = DigitalHouses/Global/digitalhouses_plex_agent

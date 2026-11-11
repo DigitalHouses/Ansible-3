@@ -1,0 +1,7 @@
+---
+# CORE catalog is deliberately separate from HOME to avoid PVE/site cross-configuration.
+# Task 40 and future CORE-only tasks will be registered here when implemented.
+tasks:
+  - name: 00-Обновить список задач
+    playbook: playbooks/update-task-catalog.yml
+    description: Обновить каталог задач CORE из Ansible-3 (без запуска остальных задач)

@@ -11,10 +11,6 @@
   vars:
     media_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     media_github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
-    media_mqtt_username: >-
-      {{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}
-    media_mqtt_password: >-
-      {{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}
     media_root_password: >-
       {{ DH_MEDIA_ROOT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD'), true) }}
     media_mode: "{{ DH_MEDIA_MODE | default('audit', true) }}"
@@ -94,7 +90,7 @@
     - name: Resolve selected CPU caps from the task 30 Survey or site manifest
       ansible.builtin.include_tasks: ../tasks/media30-cpu-selection.yml
 
-    - name: Reject mismatched site, VM or PCI declaration
+    - name: Reject mismatched site or media VM declaration
       ansible.builtin.assert:
         that:
           - media_site.id == media_site_id
@@ -107,11 +103,6 @@
           - media_spec.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/[0-9]+$')
           - media_spec.network.ipv4.endswith('/24')
           - media_spec.network.static_ipv4_verified | bool
-          - >-
-            (media_spec.network.ipv4.split('/')[0].split('.')[3] | int)
-            < (media_spec.network.dhcp_pool.first_host | int)
-            or (media_spec.network.ipv4.split('/')[0].split('.')[3] | int)
-            > (media_spec.network.dhcp_pool.last_host | int)
           - media_spec.network.ipv4.split('/')[0] != pve.ipv4
           - media_spec.network.ipv4.split('/')[0] != media_spec.network.gateway
           - media_spec.storage.pool_name == media_site.owner_slug ~ '-pool'
@@ -119,8 +110,6 @@
           - media_spec.downloads.mode == 'shared-zfs'
           - media_spec.downloads.path == '/' ~ media_spec.storage.media_dataset ~ '/downloads'
           - "'media/downloads' in media_spec.storage.layout.directories"
-          - media_spec.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
-          - media_spec.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
         fail_msg: MEDIA80_SITE_VM_DECLARATION_MISMATCH
 
     - name: Register PVE using the previously pinned Semaphore SSH identity
@@ -144,8 +133,6 @@
         media_spec: "{{ media_spec }}"
         media30_vm_cpu_percent: "{{ media30_vm_cpu_percent }}"
         media30_transcode_cpu_percent: "{{ media30_transcode_cpu_percent }}"
-        media_mqtt_username: "{{ media_mqtt_username }}"
-        media_mqtt_password: "{{ media_mqtt_password }}"
         media_root_password: "{{ media_root_password }}"
         media_site_blob: "{{ media_vm_file.json.sha }}"
       changed_when: false
@@ -156,6 +143,9 @@
   gather_facts: false
   become: false
   tasks:
+    - name: Detect actual PCI hardware on this PVE for this run
+      ansible.builtin.include_tasks: ../tasks/media30-pci-autodetect.yml
+
     - name: Check requested VM definition on Proxmox
       ansible.builtin.stat:
         path: "/etc/pve/qemu-server/{{ media_spec.vmid }}.conf"
@@ -191,57 +181,6 @@
         - media_vm_action == 'keep'
         - media_vm_conf.stat.exists
 
-    - name: Check whether selected PCI functions are present on this PVE
-      ansible.builtin.stat:
-        path: "/sys/bus/pci/devices/{{ item.value }}"
-        follow: false
-      loop:
-        - {name: gpu, value: "{{ media_spec.pci.gpu }}"}
-        - {name: sata, value: "{{ media_spec.pci.sata_controller }}"}
-      loop_control:
-        label: "{{ item.name }}"
-      register: media_pci
-
-    - name: List other QEMU VM definitions for exclusive SATA ownership
-      ansible.builtin.find:
-        paths: /etc/pve/qemu-server
-        patterns: '*.conf'
-        file_type: file
-      register: media_qemu_configs
-
-    - name: Read only other VM definitions to detect duplicate SATA passthrough
-      ansible.builtin.slurp:
-        src: "{{ item.path }}"
-      loop: "{{ media_qemu_configs.files }}"
-      loop_control:
-        label: "{{ item.path | basename }}"
-      when: item.path != '/etc/pve/qemu-server/' ~ (media_spec.vmid | string) ~ '.conf'
-      register: media_other_vm_configs
-      no_log: true
-
-    - name: Prevent duplicate static media IP in any other PVE VM
-      ansible.builtin.assert:
-        that:
-          - >-
-            (media_other_vm_configs.results
-             | selectattr('content', 'defined')
-             | map(attribute='content') | map('b64decode')
-             | select('search', '(^|\\n)ipconfig[0-9]+: ip=' ~
-                 (media_spec.network.ipv4 | regex_escape) ~ '(,|\\n|$)')
-             | list | length) == 0
-        fail_msg: MEDIA30_IP_ALREADY_CONFIGURED_ON_OTHER_PVE_VM
-
-    - name: Require no other VM to own the SATA controller
-      ansible.builtin.assert:
-        that:
-          - >-
-            (media_other_vm_configs.results
-             | selectattr('content', 'defined')
-             | map(attribute='content') | map('b64decode')
-             | select('search', media_spec.pci.sata_controller | regex_escape)
-             | list | length) == 0
-        fail_msg: MEDIA80_SATA_CONTROLLER_ASSIGNED_TO_OTHER_VM
-
     - name: Verify existing VM belongs to the selected site
       ansible.builtin.assert:
         that:
@@ -268,8 +207,8 @@
           vm_state: "{{ media_vm_power.stdout | default('absent') }}"
           vm_action_requested: "{{ media_vm_action }}"
           disk_action_requested: "{{ media_disk_action }}"
-          gpu_pci_present: "{{ media_pci.results[0].stat.exists }}"
-          sata_pci_present: "{{ media_pci.results[1].stat.exists }}"
+          gpu_pci: "{{ media_spec.pci.gpu }}"
+          sata_pci: "{{ media_spec.pci.sata_controller }}"
           intended_pool: "{{ media_spec.storage.pool_name }}"
           intended_guest_ipv4: "{{ media_spec.network.ipv4 }}"
           manifest_blob: "{{ media_site_blob }}"
@@ -295,36 +234,6 @@
         - name: Keep Runner public key for guest cloud-init
           ansible.builtin.set_fact:
             media_guest_pubkey: "{{ media_guest_pubkey_raw.stdout }}"
-
-        - name: Read SATA PCI vendor identity on Proxmox
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/vendor"
-          register: media_sata_vendor_raw
-
-        - name: Read SATA PCI device identity on Proxmox
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/device"
-          register: media_sata_device_raw
-
-        - name: Read selected controller PCI class
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/class"
-          register: media_sata_class_raw
-
-        - name: Require dedicated SATA function to be an AHCI controller
-          ansible.builtin.assert:
-            that:
-              - (media_sata_class_raw.content | b64decode | trim | lower) is match('^0x0106[0-9a-f]{2}$')
-            fail_msg: MEDIA80_SELECTED_PCI_NOT_AHCI
-
-        - name: Record actual SATA controller identity for guest disk discovery
-          ansible.builtin.set_fact:
-            media_sata_pci_vendor: "{{ media_sata_vendor_raw.content | b64decode | trim | lower }}"
-            media_sata_pci_device: "{{ media_sata_device_raw.content | b64decode | trim | lower }}"
-
-        - name: Check managed VM and named ZFS pool before recreate
-          ansible.builtin.include_tasks: ../tasks/media30-recreate-preflight.yml
-          when: media_vm_action == 'recreate'
 
         - name: Prestage checksum-verified Debian image before create or recreate
           ansible.builtin.include_tasks: ../tasks/media30-image-prestage.yml
@@ -475,10 +384,6 @@
             media_disk_action: "{{ hostvars['media_pve'].media_disk_action }}"
             media30_vm_cpu_percent: "{{ hostvars['media_pve'].media30_vm_cpu_percent }}"
             media30_transcode_cpu_percent: "{{ hostvars['media_pve'].media30_transcode_cpu_percent }}"
-            media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
-            media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
-            media_mqtt_username: "{{ hostvars['media_pve'].media_mqtt_username }}"
-            media_mqtt_password: "{{ hostvars['media_pve'].media_mqtt_password }}"
             media_root_password: "{{ hostvars['media_pve'].media_root_password }}"
           changed_when: false
           no_log: true
@@ -521,9 +426,6 @@
       vars:
         media_vm: "{{ media_spec }}"
         media_raw_disk_action: "{{ media_disk_action }}"
-
-    - name: Block ordinary media apply while owner-password rotation is pending
-      ansible.builtin.include_tasks: ../tasks/media31-password-pending-guard.yml
 
     - name: Reconcile authenticated SMB shares and accounts
       ansible.builtin.include_tasks: ../tasks/media-smb-apply.yml

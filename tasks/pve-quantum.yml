@@ -28,155 +28,120 @@
   register: upstream_filebrowser_service
   changed_when: false
 
-- name: Refuse unmanaged or duplicate Quantum instances
-  ansible.builtin.assert:
-    that:
-      - not quantum_service.stat.exists or quantum_config.stat.exists
-      - upstream_filebrowser_service.stdout == 'not-found'
-    fail_msg: "Existing FileBrowser detected; do not run duplicate root-capable instances"
+# Adopt a verified existing service without restarting it. If its listener
+# does not match the required management port/authentication, back up its unit,
+# retire only that service and install the managed Quantum service. The old
+# config/database/binary are never deleted.
+- name: Read independent FileBrowser systemd status
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, is-active, filebrowser.service]
+  register: quantum_legacy_active
+  changed_when: false
+  failed_when: false
+  when: upstream_filebrowser_service.stdout == 'loaded'
 
-- name: Create root-only Quantum configuration/state directory
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: '0700'
-  loop:
-    - /etc/digitalhouses
-    - /var/lib/digitalhouses/filebrowser-quantum
+- name: Inspect current FileBrowser health on the standard management address
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/health"
+    use_proxy: false
+    status_code: 200
+    timeout: 5
+  register: quantum_existing_health
+  changed_when: false
+  failed_when: false
+  when: upstream_filebrowser_service.stdout == 'loaded'
 
-- name: Guard FileBrowser LAN port before opening the listener
-  ansible.builtin.include_tasks: pve-quantum-firewall.yml
+- name: Inspect current FileBrowser login requirement
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/api/users"
+    use_proxy: false
+    status_code: [401, 403]
+    timeout: 5
+  register: quantum_existing_auth
+  changed_when: false
+  failed_when: false
+  when:
+    - upstream_filebrowser_service.stdout == 'loaded'
+    - quantum_existing_health.status | default(0) == 200
 
-- name: Configure management-IP Quantum with indexing disabled for full root
+- name: Verify existing FileBrowser responds independently from the Runner
+  ansible.builtin.uri:
+    url: "http://{{ quantum_bind_ipv4 }}:8090/health"
+    use_proxy: false
+    status_code: 200
+    timeout: 5
+  delegate_to: runner
+  register: quantum_existing_lan
+  changed_when: false
+  failed_when: false
+  when:
+    - upstream_filebrowser_service.stdout == 'loaded'
+    - quantum_existing_health.status | default(0) == 200
+
+- name: Classify the FileBrowser installation
+  ansible.builtin.set_fact:
+    quantum_use_legacy: >-
+      {{ upstream_filebrowser_service.stdout == 'loaded'
+         and not quantum_service.stat.exists
+         and quantum_legacy_active.stdout | default('') == 'active'
+         and quantum_existing_health.status | default(0) == 200
+         and quantum_existing_auth.status | default(0) in [401, 403]
+         and quantum_existing_lan.status | default(0) == 200 }}
+    quantum_replace_legacy: >-
+      {{ upstream_filebrowser_service.stdout == 'loaded'
+         and (quantum_service.stat.exists or
+              quantum_legacy_active.stdout | default('') != 'active' or
+              quantum_existing_health.status | default(0) != 200 or
+              quantum_existing_auth.status | default(0) not in [401, 403] or
+              quantum_existing_lan.status | default(0) != 200) }}
+
+- name: Accept the operationally compatible existing FileBrowser installation
+  ansible.builtin.debug:
+    msg: >-
+      QUANTUM=EXISTING_VERIFIED; service=filebrowser.service;
+      management_ip={{ quantum_bind_ipv4 }}; auth=REQUIRED;
+      existing users/database retained.
+  when: quantum_use_legacy
+
+- name: Report version-update limit for an existing independent FileBrowser
+  ansible.builtin.debug:
+    msg: >-
+      QUANTUM_UPDATE=NOT_MANAGED_HERE; existing filebrowser.service retained
+      with its original database. A forced replacement would need a separate
+      credentials/database migration.
+  when:
+    - quantum_use_legacy
+    - (requested_quantum_update | default('no')) == 'yes'
+
+- name: Inspect original independent FileBrowser service file for backup
+  ansible.builtin.stat:
+    path: /etc/systemd/system/filebrowser.service
+    follow: false
+  register: quantum_legacy_unit
+  when: quantum_replace_legacy
+
+- name: Back up independent FileBrowser unit before takeover
   ansible.builtin.copy:
-    dest: /etc/digitalhouses/filebrowser-quantum.yml
+    src: /etc/systemd/system/filebrowser.service
+    dest: /etc/systemd/system/filebrowser.service.dh-pre-adoption.bak
+    remote_src: true
     owner: root
     group: root
     mode: '0600'
-    content: |
-      http:
-        listen: "{{ quantum_bind_ipv4 }}"
-        port: 8090
-        disableWebDAV: true
-        trustProxyHeaders: false
-        disableRateLimit: false
-      server:
-        disableUpdateCheck: true
-        database:
-          path: "/var/lib/digitalhouses/filebrowser-quantum/filebrowser.sqlite"
-        sources:
-          - path: "/"
-            name: "Proxmox Host"
-            config:
-              defaultEnabled: true
-              private: true
-              rules:
-                - folderPath: "/"
-                  viewable: true
-      auth:
-        adminUsername: admin
-        methods:
-          password:
-            enabled: true
-  register: quantum_config_changed
+    force: false
+  when:
+    - quantum_replace_legacy
+    - quantum_legacy_unit.stat.isreg | default(false)
 
-- name: Download pinned stable Quantum binary with upstream SHA256
-  ansible.builtin.get_url:
-    url: https://github.com/gtsteffaniak/filebrowser/releases/download/v2.0.2-stable/linux-amd64-filebrowser
-    dest: /usr/local/bin/digitalhouses-filebrowser
-    checksum: sha256:5710dc6f51d77f1db884eace44f6952286c49f2ce40b6a59af37e0dc7c4a8bbd
-    owner: root
-    group: root
-    mode: '0755'
-  register: quantum_binary
-
-- name: Install root-only LAN Quantum service
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/digitalhouses-filebrowser.service
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=DigitalHouses FileBrowser Quantum (LAN admin)
-      After=network.target
-      Requires=digitalhouses-filebrowser-firewall.service
-      After=digitalhouses-filebrowser-firewall.service
-
-      [Service]
-      Type=simple
-      User=root
-      WorkingDirectory=/var/lib/digitalhouses/filebrowser-quantum
-      ExecStart=/usr/local/bin/digitalhouses-filebrowser -c /etc/digitalhouses/filebrowser-quantum.yml
-      Restart=on-failure
-      RestartSec=5
-      UMask=0077
-      NoNewPrivileges=true
-      ProtectKernelTunables=true
-      ProtectKernelModules=true
-      ProtectControlGroups=true
-
-      [Install]
-      WantedBy=multi-user.target
-  register: quantum_unit
-
-- name: Enable and start Quantum
-  ansible.builtin.systemd_service:
-    name: digitalhouses-filebrowser.service
-    daemon_reload: "{{ quantum_unit.changed }}"
-    enabled: true
-    state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or quantum_binary.changed else 'started' }}"
-
-- name: Verify the Quantum listener is available on the management address
-  ansible.builtin.wait_for:
-    host: "{{ quantum_bind_ipv4 }}"
-    port: 8090
-    delay: 1
-    timeout: 30
-
-- name: Verify authenticated API remains private
-  ansible.builtin.uri:
-    url: http://{{ quantum_bind_ipv4 }}:8090/api/users
-    method: GET
-    status_code: [401, 403]
-    use_proxy: false
-  register: quantum_unauthenticated_check
-  changed_when: false
-
-- name: Verify Quantum HTTP health endpoint
-  ansible.builtin.uri:
-    url: http://{{ quantum_bind_ipv4 }}:8090/health
-    method: GET
-    status_code: 200
-    use_proxy: false
-  changed_when: false
-
-- name: Verify direct Quantum LAN access from the separate Runner LXC
-  ansible.builtin.uri:
-    url: "http://{{ quantum_bind_ipv4 }}:8090/health"
-    method: GET
-    status_code: 200
-    use_proxy: false
-    timeout: 15
-  delegate_to: runner
-  changed_when: false
-
-- name: Verify anonymous Quantum administration is blocked from the LAN
-  ansible.builtin.uri:
-    url: "http://{{ quantum_bind_ipv4 }}:8090/api/users"
-    method: GET
-    status_code: [401, 403]
-    use_proxy: false
-    timeout: 15
-  delegate_to: runner
-  changed_when: false
-
-- name: Report direct-LAN Quantum readiness
+- name: Report legacy FileBrowser replacement without deleting old data
   ansible.builtin.debug:
-    msg:
-      - "QUANTUM=LAN_READY http://{{ quantum_bind_ipv4 }}:8090 (Cloudflare Access commissioned afterwards)"
-      - "Full / source with indexing DISABLED"
-      - "Initial admin password: retrieve once from root-only systemd journal"
-      - "Cloudflare Access is commissioned later in this same PVE task 10"
+    msg: >-
+      QUANTUM=REPLACING_LEGACY; original service will be disabled
+      only after the replacement binary is ready;
+      original data and binary retained on disk, new managed
+      Quantum instance will be provisioned.
+  when: quantum_replace_legacy
+
+- name: Install or reconcile managed Quantum on the PVE management IP
+  ansible.builtin.include_tasks: pve-quantum-managed.yml
+  when: not quantum_use_legacy

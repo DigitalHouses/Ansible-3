@@ -18,7 +18,7 @@
       Authorization: "Bearer {{ cf_token }}"
       Accept: application/json
     request_action: "{{ DH_MEDIA_WEBMIN_CF_ACTION | default('audit', true) }}"
-    cf_tunnel_name: "{{ site_id }}-pve"
+    cf_tunnel_name: "{{ site_id }}"
     pve_public_hostname: "{{ site_id }}-pve.{{ cf_zone_name }}"
     quantum_hostname: "{{ site_id }}-pve-filebrowser.{{ cf_zone_name }}"
     webmin_hostname: "{{ site_id }}-pve-mediaserver-admin.{{ cf_zone_name }}"
@@ -146,20 +146,28 @@
             noTLSVerify: true
             httpHostHeader: "{{ webmin_hostname }}"
 
-    - name: Ensure no foreign routes or unsafe PVE and FileBrowser changes
+    - name: Verify the shared site Tunnel has unambiguous published routes
       ansible.builtin.assert:
         that:
           - media_cf_current.json.success | bool
-          - media_cf_original.ingress | length in [3, 4]
-          - media_cf_original.ingress[0].hostname == pve_public_hostname
-          - media_cf_original.ingress[0].service == 'https://' ~ pve.ipv4 ~ ':8006'
-          - media_cf_original.ingress[0].originRequest.noTLSVerify is sameas false
-          - media_cf_original.ingress[1].hostname == quantum_hostname
-          - media_cf_original.ingress[1].service == 'http://' ~ pve.ipv4 ~ ':8090'
+          - media_cf_original.ingress | length >= 1
           - media_cf_original.ingress[-1].service == 'http_status:404'
           - media_cf_original.ingress[-1].hostname is not defined
-          - media_cf_original.ingress | length == 3 or media_cf_original.ingress[2] == media_cf_expected_origin
-        fail_msg: MEDIA_WEBMIN_CF_FOREIGN_OR_UNSAFE_INGRESS
+          - >-
+            (media_cf_original.ingress[:-1] | rejectattr('hostname', 'defined')
+             | list | length) == 0
+          - >-
+            (media_cf_original.ingress | selectattr('hostname', 'defined')
+             | selectattr('hostname', 'equalto', webmin_hostname)
+             | list | length) <= 1
+        fail_msg: MEDIA_WEBMIN_CF_SHARED_TUNNEL_INGRESS_INVALID
+
+    - name: Preserve unrelated routes and prepare only the Webmin route
+      ansible.builtin.set_fact:
+        media_cf_desired_ingress: >-
+          {{ (media_cf_original.ingress[:-1]
+              | rejectattr('hostname', 'equalto', webmin_hostname) | list)
+             + [media_cf_expected_origin, media_cf_original.ingress[-1]] }}
 
     - name: Read Cloudflare Access applications before any public change
       ansible.builtin.uri:
@@ -264,15 +272,14 @@
         headers: "{{ cf_headers }}"
         body_format: json
         body:
-          config: >-
-            {{ media_cf_original | combine({'ingress':
-               media_cf_original.ingress[:-1] +
-               [media_cf_expected_origin, media_cf_original.ingress[-1]]}) }}
+          config: "{{ media_cf_original | combine({'ingress': media_cf_desired_ingress}) }}"
         use_proxy: false
         status_code: 200
       changed_when: true
       no_log: true
-      when: request_action == 'apply' and media_cf_original.ingress | length == 3
+      when:
+        - request_action == 'apply'
+        - media_cf_original.ingress != media_cf_desired_ingress
 
     - name: Create CNAME pointing only to the existing protected tunnel
       ansible.builtin.uri:
@@ -307,7 +314,7 @@
       retries: 6
       delay: 3
       until: media_cf_public_dns.status | default(-1) == 200
-      when: request_action == 'apply' or (media_cf_dns.json.result | length == 1 and media_cf_original.ingress | length == 4)
+      when: request_action == 'apply' or media_cf_dns.json.result | length == 1
 
     - name: Select a public Cloudflare Edge IPv4 without changing Runner DNS
       ansible.builtin.set_fact:

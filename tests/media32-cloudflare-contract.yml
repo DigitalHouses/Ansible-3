@@ -6,9 +6,9 @@
   vars:
     root: "{{ playbook_dir | dirname }}"
     cf_playbook: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml') | from_yaml }}"
-    pve_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
-    quantum_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-quantum-cloudflare.yml') }}"
-    hostname_cutover_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-hostname-cutover.yml') }}"
+    cf15_source: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/cloudflare-site.yml') }}"
+    cf15_connector_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-connector.yml') }}"
+    cf15_route_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-publish-route.yml') }}"
     cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
     media_cf_public_proof:
       rc: 0
@@ -20,6 +20,7 @@
           - cf_playbook | length == 1
           - cf_playbook[0].vars.request_action is search("default\('audit'")
           - cf_playbook[0].vars.webmin_hostname is search("-pve-mediaserver-admin")
+          - cf_playbook[0].vars.cf_tunnel_name is search('site_id')
           - >-
             cat.tasks | selectattr('name', 'equalto', '32-Cloudflare Webmin')
             | selectattr('playbook', 'equalto', 'playbooks/media-webmin-cloudflare.yml')
@@ -59,10 +60,14 @@
           - cf_proof.no_log | bool
           - cf_proof.retries | int >= 1
           - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
-          - "'current_cf_config.ingress | length in [2, 3, 4]' in pve_cf_source"
-          - "'quantum_original_config.ingress | length in [2, 3, 4]' in quantum_cf_source"
-          - "'current_cf_config.ingress | length in [3, 4, 5]' in hostname_cutover_source"
-          - "'quantum_original_config.ingress[2:]' in quantum_cf_source"
+          - "'cf_active_tunnels' in cf15_source"
+          - "'site-cloudflare-tunnel-id' in cf15_connector_source"
+          - "'cf_saved_routes' in cf15_connector_source"
+          - "'cf_route_desired_ingress' in cf15_route_source"
+          - "'noTLSVerify' in cf15_route_source"
+          - "'method: DELETE' in cf15_connector_source"
+          - "'method: DELETE' not in cf15_route_source"
+
 
     - name: Verify HTTPS 302 and Cloudflare Access login pattern on fixture
       ansible.builtin.assert:
