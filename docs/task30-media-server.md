@@ -94,6 +94,16 @@ Linux `root` VM — это также вход PBS `root@pam`. Он **не со�
 
 ## Lidarr и публичные русскоязычные индексеры — 11.11.2026
 
+После первого живого запуска Lidarr (Semaphore #34) обнаружилось отличие
+его `POST /api/v1/rootfolder` от Radarr/Sonarr: тело из одного
+`path` возвращало HTTP 400. Исправление использует официальные
+поля Lidarr `RootFolderResource`: `name`, `path`,
+`defaultMetadataProfileId`, `defaultQualityProfileId`,
+`defaultMonitorOption`, `defaultNewItemMonitorOption` и
+`defaultTags: []`. Профили берутся из локального Lidarr API,
+не захардкожены. Другие Servarr запросы не меняются. Этот код
+не создаёт ZFS datasets и не затрагивает существующие медиафайлы.
+
 Lidarr: официальный Linux x64 релиз `v3.1.6.5079`, SHA-256 из
 GitHub release asset, через тот же native Servarr installer, что
 Radarr/Sonarr. Сервис `lidarr.service`, LAN `:8686`,
