@@ -241,20 +241,56 @@
   changed_when: false
   no_log: true
 
+# An operator may remove the obsolete service Tunnel while DNS still
+# references its UUID. Repoint only exact canonical PVE/Quantum CNAMEs,
+# and only after Cloudflare confirms that old site-scoped Tunnel is deleted.
+- name: Find deleted legacy PVE Tunnel for safe DNS adoption
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ site_id }}-pve&is_deleted=true&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_deleted_legacy_pve
+  changed_when: false
+  no_log: true
+  when: requested_mode == 'apply'
+
+- name: Verify deleted legacy Tunnel lookup is complete
+  ansible.builtin.assert:
+    that:
+      - cf_deleted_legacy_pve.json.success | bool
+      - cf_deleted_legacy_pve.json.result_info.total_pages | default(1) | int == 1
+    fail_msg: "Cannot prove deleted legacy site-pve Tunnel ownership"
+  when: requested_mode == 'apply'
+
+- name: Collect UUIDs of deleted matching legacy PVE tunnels
+  ansible.builtin.set_fact:
+    cf_deleted_legacy_pve_ids: >-
+      {{ cf_deleted_legacy_pve.json.result
+         | selectattr('name', 'equalto', site_id ~ '-pve')
+         | selectattr('deleted_at', 'defined')
+         | rejectattr('deleted_at', 'none')
+         | map(attribute='id') | list }}
+  when: requested_mode == 'apply'
+
 - name: Refuse foreign, unproxied or duplicate DNS records
   ansible.builtin.assert:
     that:
       - item.json.success | bool
       - item.json.result_info.total_pages | default(1) | int == 1
       - item.json.result | length <= 1
+      - item.json.result | length == 0 or cf_matching_tunnels | length == 1
       - >-
         item.json.result | length == 0 or
-        (cf_matching_tunnels | length == 1 and
-         item.json.result[0].type == 'CNAME' and
+        (item.json.result[0].type == 'CNAME' and
          item.json.result[0].proxied | bool and
-         (item.json.result[0].content | lower) ==
-         ((cf_matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
-    fail_msg: "Cloudflare hostname is occupied by foreign DNS; do not reassign"
+         ((item.json.result[0].content | lower) ==
+          ((cf_matching_tunnels[0].id ~ '.cfargotunnel.com') | lower) or
+          (item.json.result[0].content | lower | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
+          in cf_deleted_legacy_pve_ids))
+    fail_msg: >-
+      Cloudflare hostname has a foreign DNS target. Only an existing
+      site Tunnel or a provably deleted site-pve Tunnel may be used.
   loop: "{{ cf_dns_preflight.results }}"
   loop_control:
     label: "{{ item.item }}"

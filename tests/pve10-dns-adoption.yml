@@ -1,0 +1,51 @@
+---
+- name: Offline fixture for safe adoption of stale PVE DNS records
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    cf_audit_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
+    cf_apply_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-apply.yml') }}"
+    site_id: serzhan-home
+    canonical_tunnel: 19aa858a-d6ba-4d99-8958-6144337fb097
+    legacy_tunnel: 92ae9f3f-e3ed-454a-8fa9-ecad6bb3987d
+    foreign_tunnel: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+    cf_deleted_legacy_pve_ids:
+      - "{{ legacy_tunnel }}"
+    scenarios:
+      - id: already-current
+        target: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com
+        permitted: true
+      - id: deleted-old
+        target: 92ae9f3f-e3ed-454a-8fa9-ecad6bb3987d.cfargotunnel.com
+        permitted: true
+      - id: unrelated-active
+        target: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.cfargotunnel.com
+        permitted: false
+      - id: arbitrary-host
+        target: other.example.com
+        permitted: false
+  tasks:
+    - name: Confirm only exact deleted legacy PVE UUIDs may be adopted
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((item.target | lower) ==
+              ((canonical_tunnel ~ '.cfargotunnel.com') | lower)
+             or (item.target | lower
+              | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
+                in cf_deleted_legacy_pve_ids) == item.permitted
+      loop: "{{ scenarios }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Verify no Cloudflare resources are deleted by PVE task 10
+      ansible.builtin.assert:
+        that:
+          - "'method: DELETE' not in cf_audit_src"
+          - "'method: DELETE' not in cf_apply_src"
+          - "'method: PATCH' in cf_apply_src"
+          - "'is_deleted=true' in cf_audit_src"
+          - "'item.item == public_hostname or quantum_requested' in cf_apply_src"
+          - "'cf_deleted_legacy_pve_ids' in cf_apply_src"
