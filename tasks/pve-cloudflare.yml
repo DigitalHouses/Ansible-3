@@ -266,6 +266,7 @@
   when:
     - requested_mode == 'apply'
     - item.item == public_hostname or quantum_requested
+  no_log: true
 
 - name: Identify current public PVE origin for audit output
   ansible.builtin.set_fact:
