@@ -100,8 +100,5 @@
 - name: Reconcile native Arr and qBittorrent API integration
   ansible.builtin.include_tasks: media-arr-wire.yml
 
-- name: Install the existing release-pinned DigitalHouses Plex Agent product
-  ansible.builtin.include_tasks: media-native-plex-agent.yml
-
 # Keep unresolved acceptance and credential lifecycle blockers in the final
 # playbook gate, after the built-in read-only task 81 checks have run.

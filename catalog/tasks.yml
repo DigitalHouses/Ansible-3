@@ -37,7 +37,7 @@ tasks:
           - {name: "Проверить маршрут и DNS без изменений", value: audit}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
-    description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, PVE Agent и File Browser Quantum (без Cloudflare)"
+    description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, File Browser Quantum (без агентов и Cloudflare)"
     survey_vars:
       - name: DH_PVE_MODE
         title: "Настройка Proxmox — режим запуска"
@@ -75,15 +75,6 @@ tasks:
         values:
           - {name: "Сохранить установленную версию", value: "no"}
           - {name: "Обновить до закреплённой версии Ansible", value: "yes"}
-      - name: DH_PVE_AGENT_UPDATE
-        title: "DH PVE Agent — обновление версии"
-        type: enum
-        target: ""
-        required: true
-        default_value: "no"
-        values:
-          - {name: "Сохранить установленную версию", value: "no"}
-          - {name: "Обновить до закреплённого релиза Ansible", value: "yes"}
       - name: DH_PVE_NETWORK_ACTION
         title: "IP-адрес управления PVE"
         type: enum
@@ -234,3 +225,25 @@ tasks:
   - name: "33-rclone Web GUI"
     playbook: playbooks/media-rclone-gui.yml
     description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"
+  - name: "60-DigitalHouses Agents"
+    playbook: playbooks/digitalhouses-agents.yml
+    description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"
+    survey_vars:
+      - name: DH_AGENTS_MODE
+        title: "DigitalHouses Agents — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить агентов без изменений", value: audit}
+          - {name: "Установить отсутствующих и настроить агенты", value: apply}
+      - name: DH_AGENTS_UPDATE
+        title: "Обновить существующие агенты до закреплённых версий"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Не обновлять работающие версии", value: "no"}
+          - {name: "Обновить до закреплённых релизов", value: "yes"}

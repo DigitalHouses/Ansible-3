@@ -21,6 +21,24 @@
     system: true
     state: present
 
+- name: Inspect Plex Agent configuration before firstboot
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
+    follow: false
+  register: media_plex_agent_config_before
+
+- name: Inspect legacy Plex monitoring configuration
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_plex_monitoring/digitalhouses_plex_monitoring.conf
+    follow: false
+  register: media_plex_agent_legacy_config
+
+- name: Inspect legacy Plex monitoring state
+  ansible.builtin.stat:
+    path: /var/lib/digitalhouses_plex_monitoring
+    follow: false
+  register: media_plex_agent_legacy_state
+
 - name: Ensure protected Plex Agent configuration location exists
   ansible.builtin.file:
     path: /etc/digitalhouses_plex_agent
@@ -60,10 +78,38 @@
       - not (media_plex_agent_build_stat.stat.islnk | default(false))
     fail_msg: MEDIA80_PLEX_AGENT_BUILD_INFO_UNSAFE
 
+- name: Skip legacy MQTT migration only for a genuinely new Ansible-managed Plex Agent
+  ansible.builtin.file:
+    path: /var/lib/digitalhouses_plex_agent
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - not media_plex_agent_config_before.stat.exists
+    - not media_plex_agent_build_stat.stat.exists
+    - not media_plex_agent_legacy_config.stat.exists
+    - not media_plex_agent_legacy_state.stat.exists
+
+- name: Record a fresh Plex Agent MQTT identity before the upstream installer
+  ansible.builtin.copy:
+    dest: /var/lib/digitalhouses_plex_agent/.ha_mqtt_identity_migrated_v1
+    content: "fresh Ansible-managed Plex Agent; no legacy MQTT identity to migrate\n"
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when:
+    - not media_plex_agent_config_before.stat.exists
+    - not media_plex_agent_build_stat.stat.exists
+    - not media_plex_agent_legacy_config.stat.exists
+    - not media_plex_agent_legacy_state.stat.exists
+
 - name: Determine whether the pinned Plex Agent product installation is required
   ansible.builtin.set_fact:
     media_plex_agent_install_needed: >-
       {{ not media_plex_agent_build_stat.stat.exists or
+         (agents_update | default('no')) == 'yes' and
          'source = digitalhouses_plex_agent-v0.8.5'
          not in (media_plex_agent_build.content | default('') | b64decode) }}
 

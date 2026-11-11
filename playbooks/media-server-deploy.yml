@@ -11,12 +11,6 @@
   vars:
     media_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     media_github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
-    media_mqtt_host: >-
-      {{ DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) }}
-    media_mqtt_username: >-
-      {{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}
-    media_mqtt_password: >-
-      {{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}
     media_root_password: >-
       {{ DH_MEDIA_ROOT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MEDIA_ROOT_PASSWORD'), true) }}
     media_mode: "{{ DH_MEDIA_MODE | default('audit', true) }}"
@@ -139,9 +133,6 @@
         media_spec: "{{ media_spec }}"
         media30_vm_cpu_percent: "{{ media30_vm_cpu_percent }}"
         media30_transcode_cpu_percent: "{{ media30_transcode_cpu_percent }}"
-        media_mqtt_host: "{{ media_mqtt_host }}"
-        media_mqtt_username: "{{ media_mqtt_username }}"
-        media_mqtt_password: "{{ media_mqtt_password }}"
         media_root_password: "{{ media_root_password }}"
         media_site_blob: "{{ media_vm_file.json.sha }}"
       changed_when: false
@@ -393,9 +384,6 @@
             media_disk_action: "{{ hostvars['media_pve'].media_disk_action }}"
             media30_vm_cpu_percent: "{{ hostvars['media_pve'].media30_vm_cpu_percent }}"
             media30_transcode_cpu_percent: "{{ hostvars['media_pve'].media30_transcode_cpu_percent }}"
-            media_mqtt_host: "{{ hostvars['media_pve'].media_mqtt_host }}"
-            media_mqtt_username: "{{ hostvars['media_pve'].media_mqtt_username }}"
-            media_mqtt_password: "{{ hostvars['media_pve'].media_mqtt_password }}"
             media_root_password: "{{ hostvars['media_pve'].media_root_password }}"
           changed_when: false
           no_log: true

@@ -19,7 +19,6 @@
     new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
     quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
     quantum_update: "{{ DH_PVE_QUANTUM_UPDATE | default('no', true) }}"
-    agent_update: "{{ DH_PVE_AGENT_UPDATE | default('no', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
     ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
     ups_host: "{{ DH_PVE_UPS_IP | default('', true) }}"
@@ -34,9 +33,6 @@
     ups_auth_pass: "{{ DH_PVE_SNMP_AUTH_PASSWORD | default('', true) }}"
     ups_priv_pass: "{{ DH_PVE_SNMP_PRIV_PASSWORD | default('', true) }}"
     pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
-    mqtt_host: "{{ DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) }}"
-    mqtt_user: "{{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}"
-    mqtt_password: "{{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}"
   tasks:
     - name: Validate host setup request
       ansible.builtin.assert:
@@ -47,7 +43,6 @@
           - ip_action in ['keep', 'migrate']
           - quantum_action in ['install', 'skip']
           - quantum_update in ['no', 'yes']
-          - agent_update in ['no', 'yes']
           - ip_action != 'migrate' or setup_mode == 'apply'
           - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
           - ups_mode in ['none', 'usb', 'snmp_v2c', 'snmp_v3']
@@ -274,7 +269,6 @@
         requested_quantum_action: "{{ quantum_action }}"
         requested_cf_update: "{{ cf_update }}"
         requested_quantum_update: "{{ quantum_update }}"
-        requested_agent_update: "{{ agent_update }}"
         original_pve_ipv4: "{{ pve.ipv4 }}"
         recorded_pve: "{{ pve }}"
         requested_ups_mode: "{{ ups_mode }}"
@@ -288,9 +282,6 @@
         requested_ups_community: "{{ ups_community }}"
         requested_ups_auth_pass: "{{ ups_auth_pass }}"
         requested_ups_priv_pass: "{{ ups_priv_pass }}"
-        requested_mqtt_host: "{{ mqtt_host }}"
-        requested_mqtt_user: "{{ mqtt_user }}"
-        requested_mqtt_password: "{{ mqtt_password }}"
       no_log: true
 
 - name: 10 - Audit or configure the Proxmox host
@@ -354,9 +345,6 @@
       when:
         - requested_mode == 'apply'
         - requested_ups_mode != 'none'
-    - name: Install or verify the pinned DigitalHouses PVE agent
-      ansible.builtin.include_tasks: ../tasks/pve-agent.yml
-      when: requested_mode == 'apply'
     - name: Migrate PVE management IP with timed rollback and runner verification
       ansible.builtin.include_tasks: ../tasks/pve-network.yml
       when:

@@ -81,16 +81,12 @@ Linux `root` VM — это также вход PBS `root@pam`. Он **не со�
 
 ## Единые MQTT Credentials №05 (11.11.2026)
 
-Оба агента получают MQTT host, username и password **исключительно
-из уже существующих** `DH_MQTT_BROKER_HOST`, `DH_MQTT_USERNAME`,
-`DH_MQTT_PASSWORD` задачи №05 (Semaphore Variable Group).
-Порт — стандартный `1883`, нового поля в №05 нет.
-
-№10 обновляет только MQTT host/username/password в существующем
-конфиге PVE Agent и перезапускает сервис, если они изменились.
-№30 использует те же значения для Plex Agent. Историческое
-`media_vm.plex_agent.mqtt` не используется.
-Изменение этих настроек не затрагивает диски и VM.
+Оба агента получают MQTT host, username и password **исключительно** из
+`DH_MQTT_BROKER_HOST`, `DH_MQTT_USERNAME`, `DH_MQTT_PASSWORD` задачи №05.
+Их установка, обновление и приёмка полностью перенесены в
+[№60 — DigitalHouses Agents](task60-digitalhouses-agents.md) после №30;
+порт MQTT `1883`. Историческое `media_vm.plex_agent.mqtt` игнорируется.
+№30 больше не требует работающего Plex Agent для своей приёмки №81.
 
 ## Lidarr и публичные русскоязычные индексеры — 11.11.2026
 
@@ -133,7 +129,7 @@ RuTracker/Kinozal не включаются — необходима учётн�
 
 ## DigitalHouses Plex Agent (08.11.2026)
 
-Задача №30 **уже устанавливает и запускает** готовый `digitalhouses_plex_agent` v0.8.5 вместе с отдельным GPU helper; использует штатную конфигурацию MQTT и systemd, без изменений исходников агента. Гостевая приёмка дополнительно проверяет автозапуск обеих служб и точный закреплённый релиз (`BUILD_INFO`) — только чтение. Работа MQTT/Plex API подтверждена на живой VM 2232 отдельно, не через искусственные проверки журналов.
+**Историческая реализация перенесена:** Plex Agent v0.8.5, GPU helper и их приёмка теперь находятся только в [№60](task60-digitalhouses-agents.md). №30 отвечает за сам Plex, его библиотеки и настройки, но **не устанавливает агент**.
 
 ## rclone v1.76.0 + официальный Web GUI (08.11.2026)
 
@@ -195,7 +191,7 @@ Import никогда не переходит в Erase автоматическ�
 1. Каноническая site identity, доверенный PVE SSH ключ после №10, точная VM/PCI конфигурация.
 2. Штатный Ansible и qm: keep/create/recreate, Debian 13, 2 vCPU, RAM 4096, boot 64 GiB, balloon off, GPU/SATA passthrough из private site manifest.
 3. QGA для доверенного SSH ключа guest, только один SATA-диск, native zpool/zfs, declared datasets, директории, автомонтирование. Никаких дополнительных технических approvals.
-4. Plex, Jellyfin, qBittorrent, Radarr, Sonarr, Prowlarr, Filestash, Sambee, digitalhouses_plex_agent, локальный портал и авторизация native API/CLI. При необходимости собственного Python сначала отдельное техническое согласование; не копировать старые custom Python tools.
+4. Plex, Jellyfin, qBittorrent, Radarr, Sonarr, Prowlarr, Filestash, Sambee, локальный портал и авторизация native API/CLI. При необходимости собственного Python сначала отдельное техническое согласование; не копировать старые custom Python tools.
 5. SMB shares Media, Documents, Backups, DigitalHouses; Bonjour, Plex autoscan, медиапути, CPU/ARC и GPU. Общий пользовательский пароль 6–8 символов, первичный — 8, без логирования; Plex со своей учёткой. Нельзя открывать смену пароля через незащищённый HTTP.
 6. №81 как приёмка внутри №30: VM, QGA, ZFS, GPU, SMB, приложения/логины/порты, библиотека, повторное исполнение.
 
@@ -217,7 +213,9 @@ PBS datastores/backup jobs, PVE backup jobs, legacy NFS cleanup, изменен�
 - Native Filestash: штатный бинарный сервис, bcrypt admin-hash от единого пароля только при первой настройке, SMB passthrough к `127.0.0.1` с Go-шаблонами username/password, предварительно сохранённый 16-символьный secret_key, реальная проверка расшифрованного middleware через admin API и наличия SMB login form. Конфигурация существующего сервиса не перезаписывается; чужой backend и неправильный пароль блокируют выполнение.
 - Native Sambee: официальный Compose v2 + persistent `/opt/dh-sambee/data`, конфигурация имени владельца без пароля, firstboot `127.0.0.1:8000`, временный пароль берётся только из защищённых Docker logs и меняется официальным API, после подтверждения общего пароля открывается LAN. Для уже опубликованного экземпляра до `compose up` требуется успешная авторизация владельца; SQLite никогда не редактируется.
 - Native Arr wiring: через `ansible.builtin.uri` получаем действующие API keys из локального config.xml, проверяем ZFS root и категории qBittorrent, добавляем отсутствующие rootfolder и QBittorrent download-client providers в Radarr/Sonarr/Prowlarr, а также отсутствующие ссылки Prowlarr→Radarr/Sonarr. Для каждого нового provider используются штатные `/schema`, `/test`, `/POST` и повторный GET. Существующие подключения с теми же именами не перезаписываются. Indexers/торренты не добавляются автоматически.
-- Existing DigitalHouses Plex Agent v0.8.5: продукт устанавливается штатным tagged installer с проверенным SHA256. IP/имя брокера, логин и пароль берутся только из группы №05 (`DH_MQTT_BROKER_HOST`, `DH_MQTT_USERNAME`, `DH_MQTT_PASSWORD`); порт — `1883`. Старые `media_vm.plex_agent.mqtt.host/port` игнорируются. Секреты проходят Runner → PVE → guest в памяти Ansible через `add_host` с `no_log` и записываются в защищённый конфиг `0640` с `no_log`. Системный GPU helper и PMU status проверяются через `slurp`/`from_json`, без новых Python snippets. Plex local admin token обязан существовать; учётную запись Plex не пытаемся захватывать автоматически.
+- DigitalHouses Plex Agent v0.8.5 и его GPU helper **перенесены в №60**,
+  их отсутствие не должно прерывать установку базового медиасервера №30.
+
 - Встроенная №81 оформлена в `tasks/media-accept-pve.yml`, `tasks/media-accept-guest.yml`, `tasks/media-accept-smb.yml` и вызывается в общем playbook после соответствующих стадий. PVE: VM identity, core/RAM/balloon, GPU/SATA PCI, running/QGA. Guest: healthy ZFS, declared datasets и ZFS mount, systemd, TCP endpoints, LAN portal, неавторизованный Arr/qBittorrent API, Jellyfin/Plex libraries, обязательная Plex scan policy и отдельное информационное состояние Plex account-token marker (не условие прохождения №81), реальные входы qBittorrent/Sambee/Filestash, все 4 SMB-шары под owner/admin. Для SMB используются только временные файлы `0600` в `/run`, удаляемые в `always` и скрытые через `no_log`. **Это подготовленные тесты, а не live-приёмка.**
 - `tests/media-native-render.yml` — офлайн-шаблоны, `ok=6, failed=0`. `tests/media-jellyfin-qsv.yml` — заводская QSV/HEVC-перенастройка и идемпотентность, `ok=10, failed=0`. `tests/media-plex-xml.yml` сначала не работал на DEV без `lxml`, затем успешно запущен (`ok=6, failed=0`) в изолированном временном окружении с распакованными Debian `python3-lxml` и `libxslt1.1`. Системные пакеты DEV не менялись. Guest получает `python3-lxml` через нативный Ansible apt. Ни один офлайн-тест не заменяет live E2E.
 - Нового собственного Python или Bash-оркестратора нет. Вся orchestration-логика — Ansible; системные qm/zpool/zfs/openssl/smbpasswd вызываются нативными задачами.

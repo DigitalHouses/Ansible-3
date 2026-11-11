@@ -1,0 +1,308 @@
+---
+# Task 60 runs after the managed PVE and media VM exist. It never changes VM,
+# ZFS, Plex libraries or other media applications.
+- name: "60 | Resolve the declared site and existing agent targets"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
+    agents_mode: "{{ DH_AGENTS_MODE | default('audit', true) }}"
+    agents_update: "{{ DH_AGENTS_UPDATE | default('no', true) }}"
+    mqtt_host: "{{ DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) }}"
+    mqtt_user: "{{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}"
+    mqtt_password: "{{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}"
+    github_base: "https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}"
+  tasks:
+    - name: Require a declared agents action and existing task 05 credentials
+      ansible.builtin.assert:
+        that:
+          - agents_mode in ['audit', 'apply']
+          - agents_update in ['no', 'yes']
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - github_token | length > 0
+          - >-
+            agents_mode == 'audit' or
+            (mqtt_host | length > 0 and mqtt_user | length > 0 and mqtt_password | length > 0)
+        fail_msg: AGENTS60_CONFIGURATION_OR_TASK05_CREDENTIALS_MISSING
+      no_log: true
+
+    - name: Read site declaration from its private repository
+      ansible.builtin.uri:
+        url: "{{ github_base }}/site.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: agent_site_response
+      changed_when: false
+      no_log: true
+
+    - name: Read media VM declaration from the same private repository
+      ansible.builtin.uri:
+        url: "{{ github_base }}/media_vm.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: agent_media_response
+      changed_when: false
+      no_log: true
+
+    - name: Decode site-owned host identities
+      ansible.builtin.set_fact:
+        agent_site: "{{ (agent_site_response.json.content | b64decode | from_yaml).site }}"
+        agent_media: "{{ (agent_media_response.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
+
+    - name: Refuse a foreign site or unexpected media VM address
+      ansible.builtin.assert:
+        that:
+          - agent_site.id == site_id
+          - agent_media.name == 'mediaserver-' ~ agent_site.owner_slug
+          - agent_media.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/24$')
+          - agent_media.network.ipv4.split('/')[0].split('.')[:3] == pve.ipv4.split('.')[:3]
+          - agent_media.vmid | int >= 100
+        fail_msg: AGENTS60_MEDIA_SITE_IDENTITY_MISMATCH
+
+    - name: Register only the pinned site PVE
+      ansible.builtin.add_host:
+        name: agents_pve
+        groups: agents60_pve
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        agents_mode: "{{ agents_mode }}"
+        agents_update: "{{ agents_update }}"
+        requested_agent_update: "{{ agents_update }}"
+        requested_mqtt_host: "{{ mqtt_host }}"
+        requested_mqtt_user: "{{ mqtt_user }}"
+        requested_mqtt_password: "{{ mqtt_password }}"
+        agent_media: "{{ agent_media }}"
+        agent_pve_node: "{{ pve.node }}"
+      changed_when: false
+      no_log: true
+
+- name: "60 | Install or inspect the PVE agent and authenticate media VM"
+  hosts: agents60_pve
+  gather_facts: false
+  tasks:
+    - name: Read actual PVE node identity
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: agent_pve_hostname
+      changed_when: false
+
+    - name: Require declared PVE identity before installing agents
+      ansible.builtin.assert:
+        that: agent_pve_hostname.stdout | trim == agent_pve_node
+        fail_msg: AGENTS60_PVE_NODE_MISMATCH
+
+    - name: Install or update DigitalHouses PVE Agent independently of task 10
+      ansible.builtin.include_tasks: ../tasks/pve-agent.yml
+      when: agents_mode == 'apply'
+
+    - name: Read PVE Agent systemd status without changes
+      ansible.builtin.command:
+        argv: [systemctl, is-active, digitalhouses_pve_agent.service]
+      register: agents_pve_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read PVE Agent enablement without changes
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, digitalhouses_pve_agent.service]
+      register: agents_pve_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect installed PVE Agent release
+      ansible.builtin.stat:
+        path: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+        follow: false
+      register: agents_pve_build_stat
+
+    - name: Read installed PVE Agent release
+      ansible.builtin.slurp:
+        src: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+      register: agents_pve_build
+      when: agents_pve_build_stat.stat.isreg | default(false)
+
+    - name: Require functional PVE Agent after apply
+      ansible.builtin.assert:
+        that:
+          - agents_pve_active.stdout | trim == 'active'
+          - agents_pve_enabled.stdout | trim == 'enabled'
+          - agents_pve_build_stat.stat.isreg | default(false)
+          - "'source = digitalhouses_pve_agent-v' in (agents_pve_build.content | default('') | b64decode)"
+        fail_msg: AGENTS60_PVE_AGENT_NOT_READY
+      when: agents_mode == 'apply'
+
+    - name: Report read-only PVE Agent state
+      ansible.builtin.debug:
+        msg: >-
+          AGENTS60_PVE_AGENT={{ 'PASS' if agents_pve_active.stdout | trim == 'active'
+          and agents_pve_enabled.stdout | trim == 'enabled' and agents_pve_build_stat.stat.isreg | default(false)
+          else 'NOT_READY' }}
+
+    - name: Read the exact managed media VM definition
+      ansible.builtin.command:
+        argv: [qm, config, "{{ agent_media.vmid }}"]
+      register: agents_media_vm_config
+      changed_when: false
+
+    - name: Require VM belongs to the site before accessing its guest
+      ansible.builtin.assert:
+        that:
+          - "('name: ' ~ agent_media.name) in agents_media_vm_config.stdout_lines"
+          - "'agent: enabled=1' in agents_media_vm_config.stdout"
+        fail_msg: AGENTS60_MEDIA_VM_IDENTITY_MISMATCH
+
+    - name: Read media guest SSH identity through Proxmox QGA
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ agent_media.vmid }}"
+          - --
+          - /bin/cat
+          - /etc/ssh/ssh_host_ed25519_key.pub
+      register: agents_guest_qga_identity
+      changed_when: false
+
+    - name: Accept only a complete trusted guest host key
+      ansible.builtin.assert:
+        that:
+          - (agents_guest_qga_identity.stdout | from_json).exitcode | int == 0
+          - not ((agents_guest_qga_identity.stdout | from_json)['out-truncated'] | default(false) | bool)
+          - >-
+            ((agents_guest_qga_identity.stdout | from_json)['out-data'] | trim)
+            is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2} .+$')
+        fail_msg: AGENTS60_QGA_HOST_KEY_UNTRUSTED
+
+    - name: Keep authenticated guest public key in Ansible memory
+      ansible.builtin.set_fact:
+        agents_guest_public_key: >-
+          {{ ((agents_guest_qga_identity.stdout | from_json)['out-data'] | trim)
+             .split()[:2] | join(' ') }}
+
+- name: "60 | Reuse task 30 pinned media SSH identity"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read host key pinned by the last task 30 deployment
+      ansible.builtin.slurp:
+        src: /var/lib/semaphore/.ssh/media80_known_hosts
+      register: agents_media_pin
+
+    - name: Refuse changed or untrusted media guest identity
+      ansible.builtin.assert:
+        that:
+          - >-
+            (agents_media_pin.content | b64decode | trim) ==
+            (hostvars['agents_pve'].agent_media.network.ipv4.split('/')[0] ~ ' '
+             ~ hostvars['agents_pve'].agents_guest_public_key)
+        fail_msg: AGENTS60_MEDIA_HOST_KEY_CHANGED_RUN_TASK30_FIRST
+
+    - name: Add only the verified media VM to inventory
+      ansible.builtin.add_host:
+        name: agents_media_guest
+        groups: agents60_media
+        ansible_host: "{{ hostvars['agents_pve'].agent_media.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/media80_known_hosts
+        agents_mode: "{{ hostvars['agents_pve'].agents_mode }}"
+        agents_update: "{{ hostvars['agents_pve'].agents_update }}"
+        media_spec: "{{ hostvars['agents_pve'].agent_media }}"
+        media_mqtt_host: "{{ hostvars['agents_pve'].requested_mqtt_host }}"
+        media_mqtt_username: "{{ hostvars['agents_pve'].requested_mqtt_user }}"
+        media_mqtt_password: "{{ hostvars['agents_pve'].requested_mqtt_password }}"
+      changed_when: false
+      no_log: true
+
+- name: "60 | Install or inspect Plex Agent in the existing media VM"
+  hosts: agents60_media
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require Plex Media Server before its monitoring agent
+      ansible.builtin.command:
+        argv: [systemctl, is-active, plexmediaserver.service]
+      register: agents_plex_service
+      changed_when: false
+      failed_when: agents_plex_service.stdout | trim != 'active'
+
+    - name: Install or update DigitalHouses Plex Agent independently of task 30
+      ansible.builtin.include_tasks: ../tasks/media-native-plex-agent.yml
+      when: agents_mode == 'apply'
+
+    - name: Read Plex Agent and Intel GPU helper status
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop:
+        - digitalhouses_plex_agent.service
+        - digitalhouses_plex_agent_gpu_helper.service
+      register: agents_plex_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read Plex Agent and helper startup policy
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, "{{ item }}"]
+      loop:
+        - digitalhouses_plex_agent.service
+        - digitalhouses_plex_agent_gpu_helper.service
+      register: agents_plex_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect installed Plex Agent release identity
+      ansible.builtin.stat:
+        path: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+        follow: false
+      register: agents_plex_build_stat
+
+    - name: Read installed Plex Agent release identity
+      ansible.builtin.slurp:
+        src: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+      register: agents_plex_build
+      when: agents_plex_build_stat.stat.isreg | default(false)
+
+    - name: Require functional Plex Agent after apply
+      ansible.builtin.assert:
+        that:
+          - agents_plex_active.results | map(attribute='stdout') | map('trim') | list == ['active', 'active']
+          - agents_plex_enabled.results | map(attribute='stdout') | map('trim') | list == ['enabled', 'enabled']
+          - agents_plex_build_stat.stat.isreg | default(false)
+          - "'source = digitalhouses_plex_agent-v' in (agents_plex_build.content | default('') | b64decode)"
+        fail_msg: AGENTS60_PLEX_AGENT_NOT_READY
+      when: agents_mode == 'apply'
+
+    - name: Report read-only Plex Agent state
+      ansible.builtin.debug:
+        msg: >-
+          AGENTS60_PLEX_AGENT={{ 'PASS' if
+          agents_plex_active.results | map(attribute='stdout') | map('trim') | list == ['active', 'active']
+          and agents_plex_enabled.results | map(attribute='stdout') | map('trim') | list == ['enabled', 'enabled']
+          and agents_plex_build_stat.stat.isreg | default(false) else 'NOT_READY' }}
