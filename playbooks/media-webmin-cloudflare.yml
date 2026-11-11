@@ -36,6 +36,14 @@
         fail_msg: MEDIA_WEBMIN_CF_CREDENTIALS_OR_MODE_INVALID
       no_log: true
 
+    - name: Require migration before any legacy service-Tunnel Webmin write
+      ansible.builtin.assert:
+        that: request_action != 'apply'
+        fail_msg: >-
+          SITE_CF_CONSOLIDATION_REQUIRED: Webmin must be published through
+          the single {{ site_id }} Tunnel, not {{ site_id }}-pve.
+          Audit the site routing and complete the shared Tunnel cutover first.
+
     - name: Read canonical media address from the existing private site repo
       ansible.builtin.uri:
         url: "{{ private_media_url }}"

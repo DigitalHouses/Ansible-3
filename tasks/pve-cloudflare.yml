@@ -289,9 +289,16 @@
       - "DNS_PVE_TARGET={{ (cf_dns_preflight.results[0].json.result | first | default({})).content | default('none') }}"
       - "DNS_QUANTUM_TARGET={{ (cf_dns_preflight.results[1].json.result | first | default({})).content | default('none') }}"
 
-- name: Commission or reconcile only the owned PVE Tunnel
-  ansible.builtin.include_tasks:
-    file: pve-cloudflare-apply.yml
-    apply:
-      become: true
+- name: Audit all site and legacy tunnels for owner-object consolidation
+  ansible.builtin.include_tasks: cloudflare-site-consolidation-audit.yml
+  when: requested_mode == 'audit'
+
+- name: Refuse legacy service-tunnel changes until shared cutover is ready
+  ansible.builtin.assert:
+    that:
+      - false
+    fail_msg: >-
+      SITE_CF_CONSOLIDATION_REQUIRED: use the single {{ site_id }}
+      Tunnel, not {{ site_id }}-pve. Run Cloudflare audit to inventory all
+      existing routes; no service tunnel will be created or modified.
   when: requested_mode == 'apply'

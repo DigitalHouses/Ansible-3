@@ -234,3 +234,25 @@ nftables-таблицей с разрешением management LAN /24. Рабо
 маршрутов PVE/Quantum/Webmin, существующий контракт №32.
 **Живой E2E новой Cloudflare Apply-ветки ещё не подтверждён.**
 Повторное создание bootstrap для исправления Quantum/Cloudflare не требуется.
+
+## Единый Cloudflare Tunnel на owner + object (11.11.2026)
+
+Новый стандарт: **ровно один Tunnel на Site ID**. Для `serzhan-home` это
+`serzhan-home`; PVE `192.168.11.220:8006`, Quantum `:8090`,
+Semaphore `192.168.11.221:80` и Webmin становятся published application
+routes общего Tunnel. Публичные hostname и Access policy сохраняются.
+
+Текущие `serzhan-home-pve` и `serzhan-home-semaphore` являются
+историческими сервисными Tunnel и должны быть выведены из эксплуатации.
+До подтверждённого cutover запуск их `apply` из задач №08/10/32
+заблокирован. Cloudflare read-only audit №10 показывает маршруты, DNS и
+состав Tunnel `serzhan-home`, `serzhan-home-pve`,
+`serzhan-home-semaphore`. После анализа необходимо:
+объединить все ingress, проверить доступность origins с коннектора общего
+Tunnel, проверить доверие к CA PVE, затем обновить CNAME. После проверки
+работы всех сервисов — остановить старые cloudflared, удалить два старых
+Tunnel. **Ни один ресурс Cloudflare при аудите не изменяется.**
+
+Критерий готовности: в Cloudflare у `serzhan-home` один healthy Tunnel,
+отсутствуют два устаревших, все public hostnames работают под Access и
+их DNS указывают на UUID единственного Tunnel.

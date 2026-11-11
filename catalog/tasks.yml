@@ -24,17 +24,17 @@ tasks:
       - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "ИБП SNMP v3 — пароль шифрования (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Опциональное подключение DEV и настройка веб-доступа Semaphore через Cloudflare"
+    description: "Интеграция DEV с Semaphore; публичный Cloudflare — только через общий Tunnel объекта"
     survey_vars:
       - name: DH_SEMAPHORE_CF_ACTION
-        title: "Cloudflare для веб-интерфейса Semaphore"
+        title: "Cloudflare — Semaphore через общий Tunnel объекта"
         type: enum
         target: ""
         required: true
-        default_value: apply
+        default_value: skip
         values:
-          - {name: "Настроить существующий туннель", value: apply}
-          - {name: "Проверить без изменений", value: audit}
+          - {name: "Опубликовать через общий Tunnel (после миграции)", value: apply}
+          - {name: "Проверить текущий доступ без изменений", value: audit}
           - {name: "Не изменять Cloudflare", value: skip}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml

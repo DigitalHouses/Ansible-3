@@ -1,0 +1,140 @@
+---
+# Read-only inventory for migrating service-scoped tunnels into a single site tunnel.
+# No Cloudflare write requests, no token logging, no invented source routes.
+
+- name: Discover site-owned and legacy service tunnels
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_site_all_tunnels
+  changed_when: false
+  no_log: true
+
+- name: Select exact site and legacy service tunnel identities
+  ansible.builtin.set_fact:
+    cf_site_target_names:
+      - "{{ site_id }}"
+      - "{{ site_id }}-pve"
+      - "{{ site_id }}-semaphore"
+    cf_site_found: >-
+      {{ cf_site_all_tunnels.json.result
+         | selectattr('name', 'in',
+             [site_id, site_id ~ '-pve', site_id ~ '-semaphore'])
+         | selectattr('deleted_at', 'none') | list }}
+
+- name: Require unique names in the site tunnel inventory
+  ansible.builtin.assert:
+    that:
+      - cf_site_all_tunnels.json.success | bool
+      - cf_site_all_tunnels.json.result_info.total_pages | default(1) | int == 1
+      - >-
+        (cf_site_found | map(attribute='name') | list | unique | length)
+        == (cf_site_found | length)
+      - >-
+        (cf_site_found | selectattr('config_src', 'equalto', 'cloudflare')
+         | list | length) == (cf_site_found | length)
+    fail_msg: "Site Cloudflare tunnel inventory is ambiguous or locally managed"
+
+- name: Read complete ingress configuration of each site tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ item.id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf_site_found }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cf_site_config_results
+  changed_when: false
+  no_log: true
+
+- name: Collect every published ingress hostname for read-only DNS checks
+  ansible.builtin.set_fact:
+    cf_site_hostname_inventory: >-
+      {{ cf_site_config_results.results
+         | map(attribute='json.result.config.ingress') | flatten
+         | selectattr('hostname', 'defined') | map(attribute='hostname')
+         | unique | list }}
+
+- name: Read currently published DNS without changing records
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf_site_hostname_inventory }}"
+  register: cf_site_dns_results
+  changed_when: false
+  no_log: true
+
+- name: Read connector replica counts for each site tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ item.id }}/connections"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: [200, 403]
+  loop: "{{ cf_site_found }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cf_site_connections
+  changed_when: false
+  no_log: true
+
+- name: Report the site tunnel names and active status
+  ansible.builtin.debug:
+    msg:
+      - "SITE_TUNNEL_CANONICAL={{ site_id }}"
+      - "SITE_TUNNELS_FOUND={{ cf_site_found | map(attribute='name') | list }}"
+      - "SITE_TUNNELS_STATUS={{ cf_site_found | map(attribute='status') | list }}"
+      - "SITE_TUNNEL_COUNT={{ cf_site_found | length }}"
+      - "SITE_INGRESS_HOST_COUNT={{ cf_site_hostname_inventory | length }}"
+      - "SITE_EXPECTED_TUNNELS_AFTER_CUTOVER=1"
+
+- name: Report public hostnames and origins per existing tunnel
+  ansible.builtin.debug:
+    msg:
+      - "TUNNEL={{ item.item.name }}"
+      - >-
+        HOSTNAMES={{ item.json.result.config.ingress
+          | selectattr('hostname', 'defined')
+          | map(attribute='hostname') | list }}
+      - >-
+        ORIGINS={{ item.json.result.config.ingress
+          | selectattr('hostname', 'defined')
+          | map(attribute='service') | list }}
+  loop: "{{ cf_site_config_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Report the actual public DNS target for each published hostname
+  ansible.builtin.debug:
+    msg:
+      - "HOSTNAME={{ item.item }}"
+      - "DNS_COUNT={{ item.json.result | length }}"
+      - "DNS_TYPES={{ item.json.result | map(attribute='type') | list }}"
+      - "DNS_TARGETS={{ item.json.result | map(attribute='content') | list }}"
+  loop: "{{ cf_site_dns_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Report connector replica status without credentials or public IPs
+  ansible.builtin.debug:
+    msg:
+      - "TUNNEL={{ item.item.name }}"
+      - "CONNECTOR_API_HTTP={{ item.status }}"
+      - "CONNECTOR_COUNT={{ item.json.result | default([]) | length }}"
+      - >-
+        CONNECTOR_VERSIONS={{ item.json.result | default([])
+          | map(attribute='version') | list }}
+  loop: "{{ cf_site_connections.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Mark the mandatory cutover gate
+  ansible.builtin.debug:
+    msg: >-
+      SITE_TUNNEL_CUTOVER=NOT_APPLIED;
+      review root tunnel's origins, connector location and TLS before
+      moving DNS. Do not delete source tunnels until all moved routes work.

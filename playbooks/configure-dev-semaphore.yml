@@ -105,9 +105,17 @@
         that: sem_cf_action in ['skip', 'audit', 'apply']
         fail_msg: "Invalid task 08 Cloudflare action"
 
-    - name: Commission dedicated Cloudflare Tunnel for Semaphore if requested
+    - name: Prevent further service-scoped Semaphore Tunnel commissioning
+      ansible.builtin.assert:
+        that: sem_cf_action != 'apply'
+        fail_msg: >-
+          SITE_CF_CONSOLIDATION_REQUIRED: Semaphore must use the single
+          {{ dev_site_id }} Tunnel. Its old separate Tunnel must not be created
+          or updated. Cloudflare publication is paused until site cutover.
+
+    - name: Audit existing Semaphore Cloudflare route without changing it
       ansible.builtin.include_tasks: ../tasks/semaphore-cloudflare.yml
-      when: sem_cf_action != 'skip'
+      when: sem_cf_action == 'audit'
 
     - name: Configure public Semaphore HTML base URL after verified Cloudflare Apply
       ansible.builtin.copy:
