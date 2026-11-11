@@ -50,6 +50,35 @@
       - cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
     fail_msg: "Cloudflare did not return a valid site Tunnel UUID"
 
+# Cloudflare can initialize a newly created Tunnel with a default
+# 404 ingress. Read it as the first write baseline rather than compare
+# it to the empty pre-creation state and mistake it for concurrent edits.
+- name: Read Cloudflare-initialized configuration for a new site Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_new_tunnel_config
+  changed_when: false
+  no_log: true
+  when: cf_matching_tunnels | length == 0
+
+- name: Require an untouched default ingress on the new site Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf_new_tunnel_config.json.success | bool
+      - >-
+        (cf_new_tunnel_config.json.result.config.ingress | default([]))
+        in [[], [{'service': 'http_status:404'}]]
+    fail_msg: "New Tunnel already contains non-default ingress; refusing overwrite"
+  when: cf_matching_tunnels | length == 0
+
+- name: Adopt the just-created Tunnel configuration as write baseline
+  ansible.builtin.set_fact:
+    cf_existing_config: "{{ cf_new_tunnel_config.json.result.config }}"
+  when: cf_matching_tunnels | length == 0
+
 - name: Require unique existing PVE and Quantum routes and a 404 fallback
   ansible.builtin.assert:
     that:

@@ -1,0 +1,47 @@
+---
+- name: Offline contract for Cloudflare's new Tunnel default configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/pve-cloudflare-apply.yml') | from_yaml }}"
+    default_config:
+      ingress:
+        - service: http_status:404
+      warp-routing:
+        enabled: false
+    existing_preflight: {}
+    foreign_config:
+      ingress:
+        - hostname: unrelated.digitalhouses.vip
+          service: http://192.168.11.9:80
+        - service: http_status:404
+    desired_ingress:
+      - hostname: serzhan-home-pve.digitalhouses.vip
+        service: https://192.168.11.220:8006
+      - hostname: serzhan-home-pve-filebrowser.digitalhouses.vip
+        service: http://192.168.11.220:8090
+      - service: http_status:404
+  tasks:
+    - name: Check Cloudflare initializes a safe fallback distinct from empty preflight
+      ansible.builtin.assert:
+        that:
+          - default_config != existing_preflight
+          - default_config.ingress in [[], [{'service':'http_status:404'}]]
+          - foreign_config.ingress not in [[], [{'service':'http_status:404'}]]
+
+    - name: Rebase only the just-created Tunnel and retain untouched settings
+      ansible.builtin.set_fact:
+        cf_existing_config: "{{ default_config }}"
+        cf_desired_config: "{{ default_config | combine({'ingress': desired_ingress}) }}"
+
+    - name: Require post-creation baseline and concurrency guard to both work
+      ansible.builtin.assert:
+        that:
+          - cf_existing_config == default_config
+          - cf_desired_config['warp-routing'] == default_config['warp-routing']
+          - cf_desired_config.ingress == desired_ingress
+          - cf_existing_config != foreign_config
+          - source | selectattr('name', 'equalto', 'Read Cloudflare-initialized configuration for a new site Tunnel') | list | length == 1
+          - source | selectattr('name', 'equalto', 'Require an untouched default ingress on the new site Tunnel') | list | length == 1
+          - source | selectattr('name', 'equalto', 'Refuse concurrent remote edits before applying Tunnel routes') | list | length == 1
