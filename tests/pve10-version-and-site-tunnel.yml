@@ -10,15 +10,16 @@
     agent_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-agent.yml') }}"
     quantum_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-quantum-managed.yml') }}"
     cf_pkg_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cloudflared-package-upgrade.yml') }}"
-    cf_shared_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
+    cf_site_src: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/cloudflare-site.yml') }}"
+    cf_connector_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-connector.yml') }}"
     semaphore_src: "{{ lookup('ansible.builtin.file', root ~ '/tasks/semaphore-cloudflare.yml') }}"
   tasks:
     - name: Check all update survey fields default to no
       ansible.builtin.assert:
         that:
           - >-
-            (task_catalog.tasks | selectattr('name', 'equalto', '10-Настроить PVE')
-            | first).survey_vars | selectattr('name', 'equalto', 'DH_PVE_CF_UPDATE')
+            (task_catalog.tasks | selectattr('name', 'equalto', '15-Cloudflare')
+            | first).survey_vars | selectattr('name', 'equalto', 'DH_CF15_CONNECTOR_UPDATE')
             | first | json_query('default_value') == 'no'
           - >-
             (task_catalog.tasks | selectattr('name', 'equalto', '10-Настроить PVE')
@@ -32,11 +33,11 @@
     - name: Confirm explicit update gating and no extra Cloudflare Tunnel
       ansible.builtin.assert:
         that:
-          - setup_src is search('pve_tunnel_name:.*site_id')
+          - cf_site_src is search('cf_tunnel_name:.*site_id')
           - >-
             lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml')
             is search('cf_tunnel_name:.*site_id')
-          - "'site-cloudflare-tunnel-id' in lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-apply.yml')"
+          - "'site-cloudflare-tunnel-id' in cf_connector_src"
           - "'requested_agent_update' in agent_src"
           - "'requested_quantum_update' in quantum_src"
           - "'state: latest' in cf_pkg_src"

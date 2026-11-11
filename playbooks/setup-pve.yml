@@ -1,5 +1,5 @@
 ---
-# Task 10 configures only the Proxmox host and its own Cloudflare entrypoint.
+# Task 10 configures only Proxmox. Cloudflare belongs to task 15.
 # It never changes existing VM/LXC, pools, or disks.
 # Local inventory is supplied by Semaphore. PVE connection is added dynamically
 # from the public bootstrap identity; SSH trust is pinned during fresh bootstrap.
@@ -18,7 +18,6 @@
     ip_action: "{{ DH_PVE_NETWORK_ACTION | default('keep', true) }}"
     new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
     quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
-    cf_update: "{{ DH_PVE_CF_UPDATE | default('no', true) }}"
     quantum_update: "{{ DH_PVE_QUANTUM_UPDATE | default('no', true) }}"
     agent_update: "{{ DH_PVE_AGENT_UPDATE | default('no', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
@@ -47,7 +46,6 @@
           - upgrade_mode in ['no', 'yes']
           - ip_action in ['keep', 'migrate']
           - quantum_action in ['install', 'skip']
-          - cf_update in ['no', 'yes']
           - quantum_update in ['no', 'yes']
           - agent_update in ['no', 'yes']
           - ip_action != 'migrate' or setup_mode == 'apply'
@@ -379,50 +377,3 @@
           - "Quantum: {{ requested_quantum_action }}"
           - "PBS storage and backup jobs: deferred until PBS deployment"
           - "NUT automated shutdown: not armed by task 10"
-
-# This play runs AFTER PVE management IP migration. Runner's pve.yml is
-# re-read here, so Cloudflare receives the new confirmed management address.
-# Existing PVE audit/apply behavior is unaffected when Cloudflare is skipped.
-- name: 10 - Manage the existing Cloudflare entrypoint for Proxmox if requested
-  hosts: runner
-  connection: local
-  gather_facts: false
-  vars_files:
-    - /etc/digitalhouses/pve.yml
-  vars:
-    requested_mode: "{{ DH_PVE_CF_ACTION | default('skip', true) }}"
-    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
-    cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
-    cf_api: https://api.cloudflare.com/client/v4
-    cf_zone_name: digitalhouses.vip
-    pve_tunnel_name: "{{ site_id }}"
-    public_hostname: "{{ site_id ~ '-pve.' ~ cf_zone_name }}"
-    quantum_public_hostname: "{{ site_id ~ '-pve-filebrowser.' ~ cf_zone_name }}"
-    desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
-    expected_ca_pool: /etc/cloudflared/dh-pve-ca.pem
-    quantum_requested: "{{ (DH_PVE_QUANTUM | default('install', true)) == 'install' and (DH_PVE_MODE | default('audit', true)) == 'apply' }}"
-    cf_headers:
-      Authorization: "Bearer {{ cf_token }}"
-      Accept: application/json
-  tasks:
-    - name: Validate Cloudflare lifecycle mode
-      ansible.builtin.assert:
-        that:
-          - requested_mode in ['skip', 'create', 'recreate']
-          - requested_mode == 'skip' or (DH_PVE_MODE | default('audit', true)) == 'apply'
-        fail_msg: "CF_CREATE_RECREATE_REQUIRES_PVE_APPLY"
-
-    - name: Create or recreate Cloudflare site Tunnel if selected
-      ansible.builtin.include_tasks: ../tasks/pve-cloudflare.yml
-      when: requested_mode != 'skip'
-
-    - name: Upgrade the installed site connector package only when requested
-      ansible.builtin.include_tasks:
-        file: ../tasks/cloudflared-package-upgrade.yml
-        apply:
-          become: true
-      vars:
-        cf_package_host_label: Runner
-      when:
-        - requested_mode != 'skip'
-        - (DH_PVE_CF_UPDATE | default('no', true)) == 'yes'

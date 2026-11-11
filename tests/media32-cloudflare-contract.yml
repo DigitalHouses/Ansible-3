@@ -6,8 +6,9 @@
   vars:
     root: "{{ playbook_dir | dirname }}"
     cf_playbook: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml') | from_yaml }}"
-    pve_cf_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare.yml') }}"
-    pve_cf_apply_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-apply.yml') }}"
+    cf15_source: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/cloudflare-site.yml') }}"
+    cf15_connector_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-connector.yml') }}"
+    cf15_route_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf15-publish-route.yml') }}"
     cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
     media_cf_public_proof:
       rc: 0
@@ -59,14 +60,14 @@
           - cf_proof.no_log | bool
           - cf_proof.retries | int >= 1
           - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
-          - "'cf_matching_tunnels' in pve_cf_source"
-          - "'site-cloudflare-tunnel-id' in pve_cf_apply_source"
-          - "'cf_foreign_ingress' in pve_cf_apply_source"
-          - "'cf_desired_ingress' in pve_cf_apply_source"
-          - "'cf_saved_pve[0].originRequest.noTLSVerify' in pve_cf_apply_source"
-          - "'noTLSVerify' in pve_cf_apply_source"
-          - "'method: DELETE' in pve_cf_apply_source"
-          - "'method: DELETE' not in pve_cf_source"
+          - "'cf_active_tunnels' in cf15_source"
+          - "'site-cloudflare-tunnel-id' in cf15_connector_source"
+          - "'cf_saved_routes' in cf15_connector_source"
+          - "'cf_route_desired_ingress' in cf15_route_source"
+          - "'noTLSVerify' in cf15_route_source"
+          - "'method: DELETE' in cf15_connector_source"
+          - "'method: DELETE' not in cf15_route_source"
+
 
     - name: Verify HTTPS 302 and Cloudflare Access login pattern on fixture
       ansible.builtin.assert:

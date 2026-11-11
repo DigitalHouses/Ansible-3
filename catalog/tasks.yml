@@ -37,7 +37,7 @@ tasks:
           - {name: "Проверить маршрут и DNS без изменений", value: audit}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
-    description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, PVE Agent, File Browser Quantum и Cloudflare"
+    description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, PVE Agent и File Browser Quantum (без Cloudflare)"
     survey_vars:
       - name: DH_PVE_MODE
         title: "Настройка Proxmox — режим запуска"
@@ -66,15 +66,6 @@ tasks:
         values:
           - {name: "Пропустить общее обновление", value: "no"}
           - {name: "Выполнить обновление без перезагрузки", value: "yes"}
-      - name: DH_PVE_CF_UPDATE
-        title: "cloudflared — обновление установленной версии"
-        type: enum
-        target: ""
-        required: true
-        default_value: "no"
-        values:
-          - {name: "Не обновлять", value: "no"}
-          - {name: "Обновить установленный cloudflared на Runner", value: "yes"}
       - name: DH_PVE_QUANTUM_UPDATE
         title: "File Browser Quantum — обновление версии"
         type: enum
@@ -103,16 +94,6 @@ tasks:
           - {name: "Сохранить текущий IP", value: keep}
           - {name: "Сменить IP (с автоматическим откатом)", value: migrate}
       - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (только при выборе смены адреса)", type: "", target: "", required: false, values: []}
-      - name: DH_PVE_CF_ACTION
-        title: "Cloudflare Tunnel объекта"
-        type: enum
-        target: ""
-        required: true
-        default_value: skip
-        values:
-          - {name: "Пропустить — ничего не изменять", value: skip}
-          - {name: "Создать — только если Tunnel отсутствует", value: create}
-          - {name: "ПЕРЕСОЗДАТЬ Tunnel и коннектор (смена UUID)", value: recreate}
       - name: DH_PVE_QUANTUM
         title: "File Browser Quantum на PVE"
         type: enum
@@ -148,6 +129,47 @@ tasks:
           - {name: "bcmxcp_usb — Eaton USB", value: bcmxcp_usb}
           - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
           - {name: "snmp-ups — сетевой", value: snmp-ups}
+  - name: "15-Cloudflare"
+    playbook: playbooks/cloudflare-site.yml
+    description: "Единый Tunnel дома: проверить/создать/пересоздать коннектор, отдельно публиковать PVE и File Browser"
+    survey_vars:
+      - name: DH_CF15_CONNECTOR_ACTION
+        title: "Коннектор общего Cloudflare Tunnel"
+        type: enum
+        target: ""
+        required: true
+        default_value: check
+        values:
+          - {name: "Проверить (без изменений)", value: check}
+          - {name: "Создать (если отсутствует)", value: create}
+          - {name: "ПЕРЕСОЗДАТЬ Tunnel и коннектор (новый UUID)", value: recreate}
+      - name: DH_CF15_PVE_ROUTE
+        title: "Публикация Proxmox PVE"
+        type: enum
+        target: ""
+        required: true
+        default_value: skip
+        values:
+          - {name: "Пропустить", value: skip}
+          - {name: "Создать маршрут в общем Tunnel", value: create}
+      - name: DH_CF15_FILEBROWSER_ROUTE
+        title: "Публикация File Browser Quantum"
+        type: enum
+        target: ""
+        required: true
+        default_value: skip
+        values:
+          - {name: "Пропустить", value: skip}
+          - {name: "Создать маршрут в общем Tunnel", value: create}
+      - name: DH_CF15_CONNECTOR_UPDATE
+        title: "Версия cloudflared на Runner"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Не обновлять", value: "no"}
+          - {name: "Обновить установленный APT-пакет", value: "yes"}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"

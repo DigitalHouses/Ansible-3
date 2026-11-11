@@ -1,0 +1,51 @@
+---
+- name: Offline Cloudflare owned-route reconciliation fixture
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    public_hostname: serzhan-home-pve.digitalhouses.vip
+    quantum_public_hostname: serzhan-home-pve-filebrowser.digitalhouses.vip
+    cf_existing_ingress:
+      - hostname: serzhan-home-pve.digitalhouses.vip
+        service: https://192.168.11.230:8006
+      - hostname: serzhan-home-pve-filebrowser.digitalhouses.vip
+        service: http://192.168.11.230:8090
+      - hostname: serzhan-home-pve-mediaserver-admin.digitalhouses.vip
+        service: https://192.168.11.250:10000
+        originRequest:
+          noTLSVerify: true
+          httpHostHeader: serzhan-home-pve-mediaserver-admin.digitalhouses.vip
+      - service: http_status:404
+    cf_pve_route:
+      hostname: serzhan-home-pve.digitalhouses.vip
+      service: https://192.168.11.220:8006
+      originRequest:
+        caPool: /etc/cloudflared/dh-pve-ca.pem
+        noTLSVerify: false
+    cf_quantum_route:
+      hostname: serzhan-home-pve-filebrowser.digitalhouses.vip
+      service: http://192.168.11.220:8090
+  tasks:
+    - name: Derive the one missing File Browser route without modifying PVE or Webmin
+      ansible.builtin.set_fact:
+        existing_without_quantum: >-
+          {{ (cf_existing_ingress | selectattr('hostname', 'defined')
+              | rejectattr('hostname', 'equalto', quantum_public_hostname)
+              | list) + [{'service': 'http_status:404'}] }}
+
+    - name: Append missing Quantum route before 404
+      ansible.builtin.set_fact:
+        with_quantum: >-
+          {{ existing_without_quantum[:-1] + [cf_quantum_route]
+             + [existing_without_quantum[-1]] }}
+
+    - name: Require full original ingress preservation during route publication
+      ansible.builtin.assert:
+        that:
+          - with_quantum | length == existing_without_quantum | length + 1
+          - with_quantum[0] == existing_without_quantum[0]
+          - with_quantum[1] == existing_without_quantum[1]
+          - with_quantum[2].hostname == quantum_public_hostname
+          - with_quantum[2].service == 'http://192.168.11.220:8090'
+          - with_quantum[-1].service == 'http_status:404'

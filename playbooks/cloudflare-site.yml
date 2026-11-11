@@ -1,0 +1,224 @@
+---
+# Site Cloudflare: one Tunnel, one managed Runner connector, independent routes.
+- name: 15 - Manage the one Cloudflare Tunnel and its PVE routes
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
+    cf_api: https://api.cloudflare.com/client/v4
+    cf_zone_name: digitalhouses.vip
+    cf_tunnel_name: "{{ site_id }}"
+    cf_connector_action: "{{ DH_CF15_CONNECTOR_ACTION | default('check', true) }}"
+    cf_pve_action: "{{ DH_CF15_PVE_ROUTE | default('skip', true) }}"
+    cf_filebrowser_action: "{{ DH_CF15_FILEBROWSER_ROUTE | default('skip', true) }}"
+    cf_update_action: "{{ DH_CF15_CONNECTOR_UPDATE | default('no', true) }}"
+    cf_origin_ca: /etc/cloudflared/dh-pve-ca.pem
+    cf_headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Accept: application/json
+  tasks:
+    - name: Validate task 15 and Cloudflare credentials
+      ansible.builtin.assert:
+        that:
+          - cf_connector_action in ['check', 'create', 'recreate']
+          - cf_pve_action in ['skip', 'create']
+          - cf_filebrowser_action in ['skip', 'create']
+          - cf_update_action in ['no', 'yes']
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - cf_token | length > 0
+        fail_msg: "CF15_INVALID_ACTION_OR_CREDENTIAL"
+      no_log: true
+
+    - name: Find the Cloudflare zone
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones?name={{ cf_zone_name }}&per_page=50"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_zone_response
+      changed_when: false
+      no_log: true
+
+    - name: Select the one zone and its account
+      ansible.builtin.set_fact:
+        cf_zone_matches: "{{ cf_zone_response.json.result | selectattr('name', 'equalto', cf_zone_name) | list }}"
+
+    - name: Require one Cloudflare zone
+      ansible.builtin.assert:
+        that:
+          - cf_zone_response.json.success | bool
+          - cf_zone_matches | length == 1
+        fail_msg: "CF15_ZONE_NOT_FOUND"
+
+    - name: Set Cloudflare account and zone identifiers
+      ansible.builtin.set_fact:
+        cf_zone_id: "{{ cf_zone_matches[0].id }}"
+        cf_account_id: "{{ cf_zone_matches[0].account.id }}"
+
+    - name: Find the sole owner-object site Tunnel
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ cf_tunnel_name }}&per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_existing_tunnels
+      changed_when: false
+      no_log: true
+
+    - name: Select the active site Tunnel
+      ansible.builtin.set_fact:
+        cf_active_tunnels: >-
+          {{ cf_existing_tunnels.json.result
+             | selectattr('name', 'equalto', cf_tunnel_name)
+             | selectattr('deleted_at', 'none') | list }}
+
+    - name: Refuse ambiguous or locally configured Tunnels
+      ansible.builtin.assert:
+        that:
+          - cf_existing_tunnels.json.success | bool
+          - cf_existing_tunnels.json.result_info.total_pages | default(1) | int == 1
+          - cf_active_tunnels | length <= 1
+          - cf_active_tunnels | length == 0 or cf_active_tunnels[0].config_src == 'cloudflare'
+        fail_msg: "CF15_UNEXPECTED_TUNNEL"
+
+    - name: Remember the current site Tunnel UUID
+      ansible.builtin.set_fact:
+        cf_tunnel_id: "{{ cf_active_tunnels[0].id if cf_active_tunnels | length == 1 else '' }}"
+
+    - name: Verify existing site connector service state on Runner
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, is-active, digitalhouses-site-cloudflared.service]
+      register: cf_connector_service
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect Runner's local site Tunnel ownership marker
+      ansible.builtin.stat:
+        path: /etc/digitalhouses/site-cloudflare-tunnel-id
+      become: true
+      register: cf_local_marker
+
+    - name: Read the local managed Tunnel UUID when present
+      ansible.builtin.slurp:
+        src: /etc/digitalhouses/site-cloudflare-tunnel-id
+      register: cf_local_marker_value
+      become: true
+      changed_when: false
+      no_log: true
+      when: cf_local_marker.stat.isreg | default(false)
+
+    - name: Read installed cloudflared version without upgrading
+      ansible.builtin.command:
+        argv: [/usr/bin/cloudflared, --version]
+      register: cf_version
+      changed_when: false
+      failed_when: false
+
+    - name: Report connector status without making changes
+      ansible.builtin.debug:
+        msg:
+          - "CF_SITE_TUNNEL={{ cf_tunnel_name }}"
+          - "CF_TUNNEL_STATUS={{ cf_active_tunnels[0].status if cf_active_tunnels | length == 1 else 'absent' }}"
+          - "CF_RUNNER_CONNECTOR={{ cf_connector_service.stdout | default('absent') }}"
+          - >-
+            CF_RUNNER_TUNNEL_MATCH={{
+              cf_local_marker.stat.isreg | default(false)
+              and cf_tunnel_id | length > 0
+              and (cf_local_marker_value.content | default('') | b64decode | trim)
+                  == cf_tunnel_id
+            }}
+          - "CF_VERSION={{ cf_version.stdout | default('not-installed') }}"
+          - "CF_ACTION={{ cf_connector_action }}"
+
+    - name: Refuse a conflicting local ownership marker on an inactive Tunnel
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (cf_local_marker.stat.isreg | default(false)) or
+            (cf_local_marker_value.content | default('') | b64decode | trim)
+            == cf_tunnel_id
+          - >-
+            (cf_local_marker.stat.isreg | default(false)) or
+            cf_connector_service.stdout != 'active'
+        fail_msg: "CF15_INACTIVE_TUNNEL_LOCAL_ID_CONFLICT"
+      when:
+        - cf_connector_action == 'create'
+        - cf_active_tunnels | length == 1
+        - cf_active_tunnels[0].status not in ['healthy', 'degraded']
+
+    - name: Install missing connector for an existing inactive site Tunnel
+      ansible.builtin.include_tasks:
+        file: ../tasks/cf15-runner-install.yml
+        apply:
+          become: true
+      when:
+        - cf_connector_action == 'create'
+        - cf_active_tunnels | length == 1
+        - cf_active_tunnels[0].status not in ['healthy', 'degraded']
+
+    - name: Create or recreate the site Tunnel and Runner connector
+      ansible.builtin.include_tasks:
+        file: ../tasks/cf15-connector.yml
+        apply:
+          become: true
+      when: >-
+        cf_connector_action == 'recreate' or
+        (cf_connector_action == 'create' and cf_active_tunnels | length == 0)
+
+    - name: Verify a site Tunnel exists before any route publication
+      ansible.builtin.assert:
+        that:
+          - cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+        fail_msg: "CF15_NO_SITE_TUNNEL_SELECT_CREATE"
+      when: cf_pve_action == 'create' or cf_filebrowser_action == 'create'
+
+    - name: Verify a working Tunnel connector before adding routes
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_route_tunnel_health
+      changed_when: false
+      failed_when: >-
+        cf_route_tunnel_health.json.result.status != 'healthy'
+      no_log: true
+      when: cf_pve_action == 'create' or cf_filebrowser_action == 'create'
+
+    - name: Independently publish selected PVE or File Browser route
+      ansible.builtin.include_tasks: ../tasks/cf15-publish-route.yml
+      loop:
+        - action: "{{ cf_pve_action }}"
+          hostname: "{{ site_id }}-pve.{{ cf_zone_name }}"
+          service: "https://{{ pve.ipv4 }}:8006"
+          kind: pve
+        - action: "{{ cf_filebrowser_action }}"
+          hostname: "{{ site_id }}-pve-filebrowser.{{ cf_zone_name }}"
+          service: "http://{{ pve.ipv4 }}:8090"
+          kind: filebrowser
+      loop_control:
+        loop_var: cf_endpoint
+        label: "{{ cf_endpoint.hostname }}"
+      when: cf_endpoint.action == 'create'
+
+    - name: Update only the managed Runner cloudflared APT package if selected
+      ansible.builtin.include_tasks:
+        file: ../tasks/cloudflared-package-upgrade.yml
+        apply:
+          become: true
+      vars:
+        cf_package_host_label: Runner
+      when: cf_update_action == 'yes'
+
+    - name: Report task 15 result
+      ansible.builtin.debug:
+        msg:
+          - "CF15_CONNECTOR_ACTION={{ cf_connector_action }}"
+          - "CF15_SITE_TUNNEL={{ cf_tunnel_name }}"
+          - "CF15_PVE_ROUTE={{ cf_pve_action }}"
+          - "CF15_FILEBROWSER_ROUTE={{ cf_filebrowser_action }}"
+          - "CF15_PACKAGE_UPDATE={{ cf_update_action }}"

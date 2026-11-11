@@ -8,13 +8,6 @@
   changed_when: false
   failed_when: false
 
-- name: Detect the standard active Cloudflare connector service
-  ansible.builtin.command:
-    argv: [/usr/bin/systemctl, is-active, cloudflared.service]
-  register: cf_standard_service
-  changed_when: false
-  failed_when: false
-
 - name: Detect the active DigitalHouses site connector service
   ansible.builtin.command:
     argv: [/usr/bin/systemctl, is-active, digitalhouses-site-cloudflared.service]
@@ -22,15 +15,13 @@
   changed_when: false
   failed_when: false
 
-- name: Select an active packaged connector, if present
+- name: Require an active, Ansible-managed site connector for a safe upgrade
   ansible.builtin.set_fact:
     cf_local_service: >-
       {{ 'digitalhouses-site-cloudflared.service'
-         if cf_site_service.stdout == 'active' else
-         ('cloudflared.service' if cf_standard_service.stdout == 'active' else '') }}
+         if cf_site_service.stdout == 'active' else '' }}
     cf_local_update_available: >-
-      {{ cf_package_before.rc == 0 and
-         (cf_site_service.stdout == 'active' or cf_standard_service.stdout == 'active') }}
+      {{ cf_package_before.rc == 0 and cf_site_service.stdout == 'active' }}
 
 - name: Upgrade only the active, locally packaged cloudflared
   ansible.builtin.apt:

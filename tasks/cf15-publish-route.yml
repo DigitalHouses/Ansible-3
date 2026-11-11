@@ -1,0 +1,276 @@
+---
+# Idempotent publication of one service into the existing owner-object Tunnel.
+# No new Tunnel or connector is ever created from this task.
+
+- name: Read the existing site ingress before publishing the endpoint
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_route_config_response
+  changed_when: false
+  no_log: true
+
+- name: Select the current site routes and the requested hostname
+  ansible.builtin.set_fact:
+    cf_route_config: "{{ cf_route_config_response.json.result.config }}"
+    cf_route_ingress: "{{ cf_route_config_response.json.result.config.ingress | default([]) }}"
+    cf_route_matches: >-
+      {{ cf_route_config_response.json.result.config.ingress | default([])
+         | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', cf_endpoint.hostname) | list }}
+
+- name: Refuse ambiguous ingress or a missing terminal 404
+  ansible.builtin.assert:
+    that:
+      - cf_route_config_response.json.success | bool
+      - cf_route_matches | length <= 1
+      - cf_route_ingress | length >= 1
+      - cf_route_ingress[-1].service == 'http_status:404'
+      - cf_route_ingress[-1].hostname is not defined
+    fail_msg: "CF15_UNEXPECTED_INGRESS_STRUCTURE"
+
+- name: Report an already published route without modifying it
+  ansible.builtin.debug:
+    msg: >-
+      CF15_ROUTE_EXISTS_UNCHANGED={{ cf_endpoint.hostname }}
+      ORIGIN={{ cf_route_matches[0].service }}
+  when: cf_route_matches | length == 1
+
+- name: Publish only a missing route
+  when: cf_route_matches | length == 0
+  block:
+    - name: Verify PVE origin TLS using the bootstrap-provided CA
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --silent
+          - --show-error
+          - --noproxy
+          - '*'
+          - --cacert
+          - "{{ pve.ca_file }}"
+          - --connect-timeout
+          - '5'
+          - --max-time
+          - '15'
+          - --output
+          - /dev/null
+          - --write-out
+          - '%{http_code}'
+          - "{{ cf_endpoint.service }}/api2/json/version"
+      register: cf_tls_result
+      changed_when: false
+      failed_when: cf_tls_result.rc != 0 or cf_tls_result.stdout not in ['200', '401']
+      when: cf_endpoint.kind == 'pve'
+
+    - name: Verify File Browser HTTP health
+      ansible.builtin.uri:
+        url: "{{ cf_endpoint.service }}/health"
+        use_proxy: false
+        status_code: 200
+      changed_when: false
+      when: cf_endpoint.kind == 'filebrowser'
+
+    - name: Refuse anonymous File Browser administration
+      ansible.builtin.uri:
+        url: "{{ cf_endpoint.service }}/api/users"
+        use_proxy: false
+        status_code: [401, 403]
+      changed_when: false
+      when: cf_endpoint.kind == 'filebrowser'
+
+    - name: Read Cloudflare Access applications for this endpoint
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps?per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_route_access_apps
+      changed_when: false
+      no_log: true
+
+    - name: Choose the most specific Cloudflare Access application
+      ansible.builtin.set_fact:
+        cf_exact_access: >-
+          {{ cf_route_access_apps.json.result
+             | selectattr('type', 'equalto', 'self_hosted')
+             | selectattr('domain', 'defined')
+             | selectattr('domain', 'equalto', cf_endpoint.hostname) | list }}
+        cf_wildcard_access: >-
+          {{ cf_route_access_apps.json.result
+             | selectattr('type', 'equalto', 'self_hosted')
+             | selectattr('domain', 'defined')
+             | selectattr('domain', 'equalto', '*.' ~ cf_zone_name) | list }}
+
+    - name: Require a restricted Cloudflare Access application
+      ansible.builtin.assert:
+        that:
+          - cf_route_access_apps.json.success | bool
+          - cf_route_access_apps.json.result_info.total_pages | default(1) | int == 1
+          - cf_exact_access | length <= 1
+          - cf_wildcard_access | length <= 1
+          - cf_exact_access | length == 1 or cf_wildcard_access | length == 1
+        fail_msg: "CF15_CLOUDFLARE_ACCESS_REQUIRED"
+
+    - name: Select the protecting Access app ID
+      ansible.builtin.set_fact:
+        cf_route_access_id: >-
+          {{ (cf_exact_access if cf_exact_access | length == 1
+              else cf_wildcard_access)[0].id }}
+
+    - name: Read Cloudflare Access policies without exposing identities
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps/{{ cf_route_access_id }}/policies?per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_route_access_policies
+      changed_when: false
+      no_log: true
+
+    - name: Refuse Everyone bypass and missing email allowlists
+      ansible.builtin.assert:
+        that:
+          - cf_route_access_policies.json.success | bool
+          - cf_route_access_policies.json.result_info.total_pages | default(1) | int == 1
+          - >-
+            cf_route_access_policies.json.result
+            | selectattr('decision', 'equalto', 'bypass') | list | length == 0
+          - >-
+            cf_route_access_policies.json.result
+            | selectattr('decision', 'equalto', 'allow') | list | length > 0
+          - >-
+            cf_route_access_policies.json.result
+            | map(attribute='include') | flatten
+            | selectattr('everyone', 'defined') | list | length == 0
+          - >-
+            cf_route_access_policies.json.result
+            | selectattr('decision', 'equalto', 'allow')
+            | map(attribute='include') | flatten
+            | selectattr('email', 'defined') | list | length > 0
+        fail_msg: "CF15_UNRESTRICTED_ACCESS_POLICY"
+      no_log: true
+
+    - name: Check exact public DNS record is unoccupied or already site-owned
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ cf_endpoint.hostname }}&per_page=100"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_endpoint_dns
+      changed_when: false
+      no_log: true
+
+    - name: Reject an unrelated or ambiguous CNAME
+      ansible.builtin.assert:
+        that:
+          - cf_endpoint_dns.json.success | bool
+          - cf_endpoint_dns.json.result_info.total_pages | default(1) | int == 1
+          - cf_endpoint_dns.json.result | length <= 1
+          - >-
+            cf_endpoint_dns.json.result | length == 0 or
+            (cf_endpoint_dns.json.result[0].type == 'CNAME'
+             and cf_endpoint_dns.json.result[0].proxied | bool
+             and cf_endpoint_dns.json.result[0].content | lower
+             == (cf_tunnel_id ~ '.cfargotunnel.com') | lower)
+        fail_msg: "CF15_DNS_NOT_OWNED_BY_SITE_TUNNEL"
+
+    - name: Prepare the one new site route with strict origin TLS for PVE
+      ansible.builtin.set_fact:
+        cf_route_entry: >-
+          {{ {'hostname': cf_endpoint.hostname,
+              'service': cf_endpoint.service,
+              'originRequest': {'caPool': cf_origin_ca, 'noTLSVerify': false}}
+             if cf_endpoint.kind == 'pve' else
+             {'hostname': cf_endpoint.hostname, 'service': cf_endpoint.service} }}
+
+    - name: Add only the selected route before terminal 404
+      ansible.builtin.set_fact:
+        cf_route_desired_ingress: >-
+          {{ cf_route_ingress[:-1] + [cf_route_entry] + [cf_route_ingress[-1]] }}
+
+    - name: Confirm ingress still matches the preflight snapshot
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_route_before_write
+      changed_when: false
+      no_log: true
+
+    - name: Refuse concurrent edits to shared site routes
+      ansible.builtin.assert:
+        that:
+          - cf_route_before_write.json.result.config == cf_route_config
+        fail_msg: "CF15_CONCURRENT_INGRESS_EDIT"
+
+    - name: Publish only this new route and preserve all others
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        method: PUT
+        headers: "{{ cf_headers }}"
+        body_format: json
+        body:
+          config: "{{ cf_route_config | combine({'ingress': cf_route_desired_ingress}) }}"
+        use_proxy: false
+        status_code: 200
+      changed_when: true
+      no_log: true
+
+    - name: Confirm the new route exists with the other routes intact
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_route_readback
+      changed_when: false
+      no_log: true
+
+    - name: Require the exact saved plus new ingress
+      ansible.builtin.assert:
+        that:
+          - cf_route_readback.json.result.config.ingress == cf_route_desired_ingress
+        fail_msg: "CF15_ROUTE_CONFIG_NOT_PUBLISHED"
+
+    - name: Create the selected CNAME only when absent
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
+        method: POST
+        headers: "{{ cf_headers }}"
+        body_format: json
+        body:
+          type: CNAME
+          name: "{{ cf_endpoint.hostname }}"
+          proxied: true
+          content: "{{ cf_tunnel_id }}.cfargotunnel.com"
+        use_proxy: false
+        status_code: [200, 201]
+      changed_when: true
+      no_log: true
+      when: cf_endpoint_dns.json.result | length == 0
+
+    - name: Require public URL to redirect anonymously to Cloudflare Access
+      ansible.builtin.uri:
+        url: "https://{{ cf_endpoint.hostname }}/"
+        follow_redirects: none
+        use_proxy: false
+        validate_certs: true
+        status_code: 302
+        timeout: 20
+      register: cf_route_public
+      changed_when: false
+      until: >-
+        cf_route_public.status == 302 and
+        (cf_route_public.location | default('')) is
+        match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
+      retries: 8
+      delay: 3
+      no_log: true
+
+    - name: Report published endpoint
+      ansible.builtin.debug:
+        msg: "CF15_ROUTE_CREATED=https://{{ cf_endpoint.hostname }}/"
