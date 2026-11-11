@@ -1,5 +1,5 @@
 ---
-- name: Offline fixture for safe adoption of stale PVE DNS records
+- name: Offline fixture for safe site Tunnel recreation and PVE DNS recovery
   hosts: localhost
   connection: local
   gather_facts: false
@@ -11,13 +11,21 @@
     canonical_tunnel: 19aa858a-d6ba-4d99-8958-6144337fb097
     legacy_tunnel: 92ae9f3f-e3ed-454a-8fa9-ecad6bb3987d
     foreign_tunnel: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+    cf_deleted_site:
+      json:
+        success: true
+        result_info: {total_pages: 1}
+        result:
+          - name: serzhan-home
+            id: "{{ canonical_tunnel }}"
+            deleted_at: "2026-11-11T01:30:00Z"
     cf_deleted_legacy_pve_ids:
       - "{{ legacy_tunnel }}"
     scenarios:
-      - id: already-current
+      - id: deleted-canonical
         target: 19aa858a-d6ba-4d99-8958-6144337fb097.cfargotunnel.com
         permitted: true
-      - id: deleted-old
+      - id: deleted-legacy
         target: 92ae9f3f-e3ed-454a-8fa9-ecad6bb3987d.cfargotunnel.com
         permitted: true
       - id: unrelated-active
@@ -27,25 +35,42 @@
         target: other.example.com
         permitted: false
   tasks:
-    - name: Confirm only exact deleted legacy PVE UUIDs may be adopted
+    - name: Derive allowlist with no surviving canonical Tunnel
+      ansible.builtin.set_fact:
+        cf_permitted_dns_tunnel_ids: >-
+          {{ (cf_deleted_site.json.result
+              | selectattr('name', 'equalto', site_id)
+              | selectattr('deleted_at', 'defined')
+              | rejectattr('deleted_at', 'none')
+              | map(attribute='id') | list)
+             + cf_deleted_legacy_pve_ids }}
+
+    - name: Only verified deleted site UUIDs may be re-pointed
       ansible.builtin.assert:
         that:
           - >-
-            ((item.target | lower) ==
-              ((canonical_tunnel ~ '.cfargotunnel.com') | lower)
-             or (item.target | lower
-              | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
-                in cf_deleted_legacy_pve_ids) == item.permitted
+            ((item.target | lower | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
+            in cf_permitted_dns_tunnel_ids) == item.permitted
       loop: "{{ scenarios }}"
       loop_control:
         label: "{{ item.id }}"
 
-    - name: Verify no Cloudflare resources are deleted by PVE task 10
+    - name: Refuse to inherit a different active Tunnel after recreation
+      ansible.builtin.assert:
+        that:
+          - foreign_tunnel not in cf_permitted_dns_tunnel_ids
+          - canonical_tunnel in cf_permitted_dns_tunnel_ids
+          - legacy_tunnel in cf_permitted_dns_tunnel_ids
+
+    - name: Verify scope is restricted to PVE and Quantum, never deletion
       ansible.builtin.assert:
         that:
           - "'method: DELETE' not in cf_audit_src"
           - "'method: DELETE' not in cf_apply_src"
           - "'method: PATCH' in cf_apply_src"
           - "'is_deleted=true' in cf_audit_src"
+          - "'cf_deleted_site.json.result' in cf_audit_src"
+          - "'cf_permitted_dns_tunnel_ids' in cf_apply_src"
           - "'item.item == public_hostname or quantum_requested' in cf_apply_src"
-          - "'cf_deleted_legacy_pve_ids' in cf_apply_src"
+          - "'name: digitalhouses-site-cloudflared.service' in cf_apply_src"
+          - "'cf_matching_tunnels | length == 0' in cf_apply_src"
