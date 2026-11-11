@@ -197,6 +197,17 @@
         label: "{{ item.name }}"
       register: media_pci
 
+    - name: Require selected PCI devices to exist before creating a VM
+      ansible.builtin.assert:
+        that:
+          - media_pci.results[0].stat.exists | bool
+          - media_pci.results[1].stat.exists | bool
+        fail_msg: >-
+          MEDIA30_PCI_MISSING: GPU={{ media_spec.pci.gpu }},
+          SATA={{ media_spec.pci.sata_controller }}.
+          Correct stale PCI addresses in the site manifest.
+      when: media_mode == 'apply'
+
     - name: List other QEMU VM definitions for exclusive SATA ownership
       ansible.builtin.find:
         paths: /etc/pve/qemu-server
@@ -290,36 +301,6 @@
         - name: Keep Runner public key for guest cloud-init
           ansible.builtin.set_fact:
             media_guest_pubkey: "{{ media_guest_pubkey_raw.stdout }}"
-
-        - name: Read SATA PCI vendor identity on Proxmox
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/vendor"
-          register: media_sata_vendor_raw
-
-        - name: Read SATA PCI device identity on Proxmox
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/device"
-          register: media_sata_device_raw
-
-        - name: Read selected controller PCI class
-          ansible.builtin.slurp:
-            src: "/sys/bus/pci/devices/{{ media_spec.pci.sata_controller }}/class"
-          register: media_sata_class_raw
-
-        - name: Require dedicated SATA function to be an AHCI controller
-          ansible.builtin.assert:
-            that:
-              - (media_sata_class_raw.content | b64decode | trim | lower) is match('^0x0106[0-9a-f]{2}$')
-            fail_msg: MEDIA80_SELECTED_PCI_NOT_AHCI
-
-        - name: Record actual SATA controller identity for guest disk discovery
-          ansible.builtin.set_fact:
-            media_sata_pci_vendor: "{{ media_sata_vendor_raw.content | b64decode | trim | lower }}"
-            media_sata_pci_device: "{{ media_sata_device_raw.content | b64decode | trim | lower }}"
-
-        - name: Check managed VM and named ZFS pool before recreate
-          ansible.builtin.include_tasks: ../tasks/media30-recreate-preflight.yml
-          when: media_vm_action == 'recreate'
 
         - name: Prestage checksum-verified Debian image before create or recreate
           ansible.builtin.include_tasks: ../tasks/media30-image-prestage.yml
@@ -470,8 +451,6 @@
             media_disk_action: "{{ hostvars['media_pve'].media_disk_action }}"
             media30_vm_cpu_percent: "{{ hostvars['media_pve'].media30_vm_cpu_percent }}"
             media30_transcode_cpu_percent: "{{ hostvars['media_pve'].media30_transcode_cpu_percent }}"
-            media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
-            media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
             media_mqtt_username: "{{ hostvars['media_pve'].media_mqtt_username }}"
             media_mqtt_password: "{{ hostvars['media_pve'].media_mqtt_password }}"
             media_root_password: "{{ hostvars['media_pve'].media_root_password }}"

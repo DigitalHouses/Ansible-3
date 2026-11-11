@@ -1,57 +1,66 @@
 ---
-# Native Ansible offline regression: verify ordering, do not execute VM lifecycle.
-- name: Verify recreate and import ordering
+# Survey disk action is authoritative. Test the two minimal native paths.
+- name: Verify disk choices execute independently and erase never targets guest root
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     deploy: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/media-server-deploy.yml') }}"
     vm_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-vm-apply.yml') }}"
-    zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"
+    zfs_apply: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') | from_yaml }}"
+    zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media-zfs-apply.yml') }}"
   tasks:
-    - name: Require named-pool preflight and Debian image before VM destruction
+    - name: Require VM lifecycle and verified image before explicit recreate
       ansible.builtin.assert:
         that:
-          - "'media_mode in [' in deploy"
           - "'media_vm_action in [' in deploy"
           - "'media_disk_action in [' in deploy"
-          - deploy.find('media30-recreate-preflight.yml') < deploy.find('media30-image-prestage.yml')
+          - "'media30-recreate-preflight.yml' not in deploy"
           - deploy.find('media30-image-prestage.yml') < deploy.find('media-vm-apply.yml')
-          - "'MEDIA30_RECREATE_IMPORT_EXPECTED_POOL_MISSING' in recreate_preflight"
           - "'cloud.debian.org' not in vm_apply"
           - "'media30_image_sha512_preflight' in vm_apply"
-      vars:
-        recreate_preflight: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/media30-recreate-preflight.yml') }}"
 
-    - name: Require independent import and erase actions for a single SATA disk
+    - name: Check import uses native ZFS only and never chooses a disk to erase
       ansible.builtin.assert:
         that:
-          - "'MEDIA_SATA_DISK_COUNT_MUST_EQUAL_ONE' in zfs_apply"
-          - "'MEDIA_SATA_DISK_IS_SYSTEM_DISK' in zfs_apply"
-          - zfs_apply is search('media_raw_disk_action.*import')
-          - zfs_apply is search('media_raw_disk_action.*erase')
-          - "'zpool, destroy' in zfs_apply"
-          - "'media_vm.storage.import_pool_guid' not in zfs_apply"
-          - "'media30-erase-guest-identity.yml' not in zfs_apply"
-          - "\"ansible_facts.services[item].status | default('not-found') != 'not-found'\" in zfs_apply"
+          - >-
+            (zfs_apply | selectattr('name', 'equalto',
+             'Import the requested existing ZFS pool without touching disk contents')
+             | first).when[0] == "media_raw_disk_action == 'import'"
+          - "'zpool' in zfs_source"
+          - "'import_pool_guid' not in zfs_source"
+          - "'media_import_scan' not in zfs_source"
+          - "'MEDIA30_IMPORT_EXPECTED_POOL_NOT_FOUND' not in zfs_source"
+          - "'media_sata_pci_vendor' not in zfs_source"
 
-    - name: Simulate service facts containing installed, dangling and absent units
+    - name: Check erase uses only the explicitly selected physical SATA disk
+      ansible.builtin.assert:
+        that:
+          - "'MEDIA_ERASE_REQUIRES_ONE_SATA_DISK' in zfs_source"
+          - "'MEDIA_ERASE_SYSTEM_DISK_REFUSED' in zfs_source"
+          - >-
+            (zfs_apply | selectattr('name', 'equalto',
+             'Create a fresh ZFS pool on the selected SATA disk')
+             | first).when == "media_raw_disk_action == 'erase'"
+          - >-
+            (zfs_apply | selectattr('name', 'equalto',
+             'Erase the selected SATA disk partition table')
+             | first).when == "media_raw_disk_action == 'erase'"
+          - "'wipefs' in zfs_source"
+          - "'sgdisk' in zfs_source"
+          - "'zpool, destroy' in zfs_source"
+
+    - name: Simulate one SATA drive plus one virtual root disk
       ansible.builtin.set_fact:
-        media30_stoppable_units: "{{ (media30_stoppable_units | default([])) + [item] }}"
-      loop:
-        - nginx.service
-        - nfs-server.service
-        - absent.service
-      vars:
-        ansible_facts:
-          services:
-            nginx.service: {status: enabled}
-            nfs-server.service: {status: not-found}
-      when:
-        - item in ansible_facts.services
-        - ansible_facts.services[item].status | default('not-found') != 'not-found'
+        physical_sata_disks: >-
+          {{ [{'path': '/dev/sda', 'type': 'disk', 'tran': 'sata'},
+              {'path': '/dev/sdb', 'type': 'disk', 'tran': ''}]
+             | selectattr('type', 'equalto', 'disk')
+             | selectattr('tran', 'equalto', 'sata')
+             | map(attribute='path') | list }}
 
-    - name: Require only installed service to be selected for stopping
+    - name: Confirm only the SATA disk may be erased
       ansible.builtin.assert:
         that:
-          - media30_stoppable_units == ['nginx.service']
+          - physical_sata_disks == ['/dev/sda']
+          - "'/dev/sda' not in ['/dev/mapper/root', '/dev/sdb']"
