@@ -75,6 +75,27 @@
           - media_spec.vmid | int == 2250
           - media30_legacy_spec.network.ipv4 == '192.168.11.250/24'
 
+    - name: Simulate customer site with a different LAN subnet
+      ansible.builtin.set_fact:
+        pve: {ipv4: 192.168.22.220}
+        media_spec: >-
+          {{ media30_legacy_spec
+             | combine({'network': {'ipv4': '192.168.22.250/24',
+                'gateway': '192.168.22.1'}}, recursive=true) }}
+
+    - name: Resolve same standard HOME octet in a customer subnet
+      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+      vars:
+        DH_MEDIA_IP: '223'  # noqa: var-naming[pattern]
+
+    - name: Require customer subnet is preserved without reusing owner's LAN
+      ansible.builtin.assert:
+        that:
+          - media30_selected_ipv4 == '192.168.22.223'
+          - media_spec.network.ipv4 == '192.168.22.223/24'
+          - media_spec.vmid | int == 2223
+          - media30_manifest_ipv4 == '192.168.22.250/24'
+
     - name: Refuse a DHCP range address
       block:
         - name: Try a reserved DHCP address
@@ -89,23 +110,23 @@
           ansible.builtin.assert:
             that: media30_ip_choice == '100'
 
-    - name: Refuse an address from another LAN
+    - name: Refuse an address outside the customer's declared LAN
       block:
-        - name: Try 192.168.22.223
+        - name: Try the owner's different LAN
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
-            DH_MEDIA_IP: '192.168.22.223'  # noqa: var-naming[pattern]
+            DH_MEDIA_IP: '192.168.11.223'  # noqa: var-naming[pattern]
         - name: Fail if a foreign subnet is accepted
           ansible.builtin.fail:
             msg: MEDIA30_FOREIGN_IP_WAS_ACCEPTED
       rescue:
         - name: Require the foreign subnet choice was processed
           ansible.builtin.assert:
-            that: media30_ip_choice == '192.168.22.223'
+            that: media30_ip_choice == '192.168.11.223'
 
     - name: Refuse a host address which is PVE itself
       block:
-        - name: Try PVE management address
+        - name: Try customer PVE management address
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
             DH_MEDIA_IP: '220'  # noqa: var-naming[pattern]

@@ -40,7 +40,6 @@
         < (media_spec.network.dhcp_pool.first_host | int)
         or (media30_selected_ipv4.split('.')[3] | int)
         > (media_spec.network.dhcp_pool.last_host | int)
-      - media30_selected_ipv4.split('.')[:3] == ['192', '168', '11']
       - media30_selected_ipv4 != media_spec.network.gateway
       - media30_selected_ipv4 != pve.ipv4
       - media30_selected_ipv4.split('.') | map('int') | map('string') | join('.') == media30_selected_ipv4

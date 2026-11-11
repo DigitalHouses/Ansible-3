@@ -5,7 +5,7 @@ HOME: PVE `.220`, Runner `.221/CT1221`, HAOS `.222/VM2222`,
 Media `.223/VM2223`, PostgreSQL `.224/CT1224`.
 CORE: PVE `.240`, Runner `.241/CT1241`, HAOS `.242/VM2242`,
 Media `.243/VM2243`, PostgreSQL `.244/CT1244`.
-Все адреса — в сети `192.168.11.0/24`; bootstrap создаёт только Runner.
+Подсеть /24 берётся из текущего `vmbr0` объекта. `192.168.11.0/24` — только сеть владельца; клиентские подсети могут быть другими. Bootstrap создаёт только Runner.
 
 Один bootstrap для двух профилей: **HOME** (по умолчанию) и **CORE**.
 Запускать от `root@pve` одной командой. Bootstrap спрашивает профиль,
@@ -15,8 +15,8 @@ Media `.243/VM2243`, PostgreSQL `.244/CT1244`.
 
 | Параметр | HOME | CORE |
 | --- | --- | --- |
-| Целевой PVE IP | `192.168.11.220` | `192.168.11.240` |
-| Ansible/Semaphore IP | `192.168.11.221` | `192.168.11.241` |
+| Целевой PVE IP | `<site-prefix>.220` | `<site-prefix>.240` |
+| Ansible/Semaphore IP | `<site-prefix>.221` | `<site-prefix>.241` |
 | LXC ID | `1221` | `1241` |
 | Hostname | `ansible-<site-id>` | `ansible-dh-core` |
 | Semaphore project | `<site-id>` | `dh-core` |
@@ -66,7 +66,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/Ansible-3/main
 
 Ввод: профиль (ENTER = HOME; `2` = CORE), для HOME — `Site ID`
 (например, `serzhan-home`), затем `y/n`.
-На HOME PVE `192.168.11.220/24` результат — CT1221,
+Например, на HOME PVE владельца `192.168.11.220/24`
+результат — CT1221,
 `ansible-serzhan-home`, `192.168.11.221/24`.
 На CORE PVE `192.168.11.240/24` — CT1241,
 `ansible-dh-core`, `192.168.11.241/24`.
