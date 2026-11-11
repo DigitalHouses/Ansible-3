@@ -62,7 +62,8 @@
           - "'pve-cloudflare-tunnel-id' in pve_cf_source"
           - "'cf_foreign_ingress' in pve_cf_apply_source"
           - "'cf_desired_ingress' in pve_cf_apply_source"
-          - "'noTLSVerify: false' in pve_cf_apply_source"
+          - "'cf_previous_pve[0].originRequest.noTLSVerify' in pve_cf_apply_source"
+          - "'noTLSVerify' in pve_cf_apply_source"
           - "'method: DELETE' not in pve_cf_apply_source"
           - "'method: DELETE' not in pve_cf_source"
 
