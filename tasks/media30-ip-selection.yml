@@ -1,9 +1,9 @@
 ---
-# Task 30: user-selected final octet (default 232) or full LAN IPv4.
+# Task 30: HOME standard .223 / VM2223; explicit overrides are nonstandard.
 # Canonical manifest network/gateway provide the /24 prefix; no Python helpers.
 - name: Normalize media guest address from Semaphore Survey
   ansible.builtin.set_fact:
-    media30_ip_choice: "{{ DH_MEDIA_IP | default('232', true) | string | trim }}"
+    media30_ip_choice: "{{ DH_MEDIA_IP | default('223', true) | string | trim }}"
     media30_manifest_ipv4: "{{ media_spec.network.ipv4 }}"
     media30_manifest_vmid: "{{ media_spec.vmid | int }}"
 
@@ -17,15 +17,12 @@
       - media_spec.network.gateway is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
     fail_msg: MEDIA30_IP_FORMAT_INVALID
 
-- name: Expand final octet or reuse previously commissioned nondefault site IP
+- name: Expand the explicit selection without silently reusing a legacy manifest IP
   ansible.builtin.set_fact:
     media30_selected_ipv4: >-
-      {{ media30_manifest_ipv4.split('/')[0]
-         if media30_ip_choice == '232' and
-            media30_manifest_ipv4.split('/')[0].split('.')[3] != '232'
-         else ((media_spec.network.gateway.split('.')[:3] + [media30_ip_choice]) | join('.')
-               if media30_ip_choice is match('^[0-9]{1,3}$')
-               else media30_ip_choice) }}
+      {{ (media_spec.network.gateway.split('.')[:3] + [media30_ip_choice]) | join('.')
+         if media30_ip_choice is match('^[0-9]{1,3}$')
+         else media30_ip_choice }}
 
 - name: Require host to be within declared LAN outside DHCP and reserved addresses
   ansible.builtin.assert:
@@ -43,12 +40,14 @@
         < (media_spec.network.dhcp_pool.first_host | int)
         or (media30_selected_ipv4.split('.')[3] | int)
         > (media_spec.network.dhcp_pool.last_host | int)
+      - media30_selected_ipv4.split('.')[:3] == ['192', '168', '11']
       - media30_selected_ipv4 != media_spec.network.gateway
       - media30_selected_ipv4 != pve.ipv4
       - media30_selected_ipv4.split('.') | map('int') | map('string') | join('.') == media30_selected_ipv4
     fail_msg: >-
-      MEDIA30_IP_INVALID: choose a free static host in the declared
-      LAN /24, outside the DHCP range and different from gateway/PVE.
+      MEDIA30_IP_INVALID_OR_DHCP_OVERLAP: use the standard HOME .223
+      with verified DHCP exclusion, or an explicitly selected free LAN IP.
+      Do not commission a new VM while the declared DHCP range overlaps.
 
 - name: Derive media VMID from the static IP's last octet
   ansible.builtin.set_fact:

@@ -202,7 +202,7 @@ tasks:
         values:
           - {name: "Импортировать существующий ZFS-пул без стирания", value: import}
           - {name: "СТЕРЕТЬ SATA-диск и создать новый ZFS-пул", value: erase}
-      - {name: DH_MEDIA_IP, title: "IP медиасервера (последний октет или полный IPv4)", type: "", target: "", required: true, default_value: "232", values: []}
+      - {name: DH_MEDIA_IP, title: "IP медиасервера HOME (стандарт 192.168.11.223)", type: "", target: "", required: true, default_value: "223", values: []}
       - {name: DH_MEDIA_VM_CPU_PERCENT, title: "Лимит CPU всей VM, % (пусто — настройки сайта)", type: "", target: "", required: false, values: []}
       - {name: DH_MEDIA_TRANSCODE_CPU_PERCENT, title: "Общий лимит CPU Plex + Jellyfin, % (пусто — настройки сайта)", type: "", target: "", required: false, values: []}
   - name: "31-Сменить общий пароль медиасервера"

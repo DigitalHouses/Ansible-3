@@ -29,7 +29,7 @@
           - >-
             (media30_catalog_matches[0].survey_vars
              | selectattr('name', 'equalto', 'DH_MEDIA_IP')
-             | map(attribute='default_value') | list) == ['232']
+             | map(attribute='default_value') | list) == ['223']
           - >-
             (media30_catalog_matches[0].survey_vars | map(attribute='name') | list)
             == ['DH_MEDIA_MODE', 'DH_MEDIA_VM_ACTION', 'DH_MEDIA_DISK_ACTION',

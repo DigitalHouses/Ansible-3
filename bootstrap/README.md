@@ -1,5 +1,12 @@
 # Ansible-3 — PVE CLI bootstrap
 
+**Обязательный стандарт IPv4 и VM/CT ID:** [S24, ANSIBLE_STANDARDS.md](../ANSIBLE_STANDARDS.md#s24-адресация-и-id-объектов-home--core--согласовано-11112026).
+HOME: PVE `.220`, Runner `.221/CT1221`, HAOS `.222/VM2222`,
+Media `.223/VM2223`, PostgreSQL `.224/CT1224`.
+CORE: PVE `.240`, Runner `.241/CT1241`, HAOS `.242/VM2242`,
+Media `.243/VM2243`, PostgreSQL `.244/CT1244`.
+Все адреса — в сети `192.168.11.0/24`; bootstrap создаёт только Runner.
+
 Один bootstrap для двух профилей: **HOME** (по умолчанию) и **CORE**.
 Запускать от `root@pve` одной командой. Bootstrap спрашивает профиль,
 для HOME — Site ID (`serzhan-home` и т. п.), для CORE использует `dh-core`
@@ -8,8 +15,8 @@
 
 | Параметр | HOME | CORE |
 | --- | --- | --- |
-| Целевой PVE IP | `<subnet>.220` | `<subnet>.240` |
-| Ansible/Semaphore IP | `<subnet>.221` | `<subnet>.241` |
+| Целевой PVE IP | `192.168.11.220` | `192.168.11.240` |
+| Ansible/Semaphore IP | `192.168.11.221` | `192.168.11.241` |
 | LXC ID | `1221` | `1241` |
 | Hostname | `ansible-<site-id>` | `ansible-dh-core` |
 | Semaphore project | `<site-id>` | `dh-core` |
@@ -31,7 +38,7 @@
 
 Bootstrap выполняет только:
 1. Fresh Debian 13 LXC: CT1221 (HOME) или CT1241 (CORE),
-   IP `<PVE-vmbr0-/24-network>.221/.241`, `onboot=1`, `startup order=2`.
+   IP `192.168.11.221/.241`, `onboot=1`, `startup order=2`.
 2. Установку штатного `ansible-core==2.21.4` в LXC, clone
    `DigitalHouses/Ansible-3` в `/opt/ansible-3` и установку
    закреплённых нативных коллекций из `bootstrap/collections.yml`

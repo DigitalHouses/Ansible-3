@@ -1,0 +1,51 @@
+---
+- name: Keep S24 address and instance IDs aligned across HOME and CORE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    standards: "{{ lookup('ansible.builtin.file', root ~ '/ANSIBLE_STANDARDS.md') }}"
+    bootstrap: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/install.sh') }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    ip_selection: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media30-ip-selection.yml') }}"
+    entries:
+      - {service: 'Proxmox PVE', home_ip: '192.168.11.220', home_id: '—', core_ip: '192.168.11.240', core_id: '—'}
+      - {service: 'Ansible + Semaphore', home_ip: '192.168.11.221', home_id: 'CT1221', core_ip: '192.168.11.241', core_id: 'CT1241'}
+      - {service: 'Home Assistant', home_ip: '192.168.11.222', home_id: 'VM2222', core_ip: '192.168.11.242', core_id: 'VM2242'}
+      - {service: 'Media Server', home_ip: '192.168.11.223', home_id: 'VM2223', core_ip: '192.168.11.243', core_id: 'VM2243'}
+      - {service: 'PostgreSQL', home_ip: '192.168.11.224', home_id: 'CT1224', core_ip: '192.168.11.244', core_id: 'CT1244'}
+  tasks:
+    - name: Require every normative address and ID pair in S24
+      ansible.builtin.assert:
+        that:
+          - item.service in standards
+          - item.home_ip in standards
+          - item.home_id in standards
+          - item.core_ip in standards
+          - item.core_id in standards
+          - item.home_ip is match('^192[.]168[.]11[.]')
+          - item.core_ip is match('^192[.]168[.]11[.]')
+      loop: "{{ entries }}"
+      loop_control:
+        label: "{{ item.service }}"
+
+    - name: Require bootstrap to select the normative network and profile octets
+      ansible.builtin.assert:
+        that:
+          - "'NETWORK=192.168.11' in bootstrap"
+          - "'PVE_OCTET=220' in bootstrap"
+          - "'RUNNER_OCTET=221' in bootstrap"
+          - "'PVE_OCTET=240' in bootstrap"
+          - "'RUNNER_OCTET=241' in bootstrap"
+
+    - name: Require media survey default 223 and no legacy manifest fallback
+      ansible.builtin.assert:
+        that:
+          - >-
+            (catalog.tasks | selectattr('name', 'equalto', '30-Медиасервер')
+             | first).survey_vars | selectattr('name', 'equalto', 'DH_MEDIA_IP')
+             | map(attribute='default_value') | list == ['223']
+          - "'DH_MEDIA_IP | default' in ip_selection"
+          - "'223' in ip_selection"
+          - "'2000 + (media30_selected_ipv4.split' in ip_selection"

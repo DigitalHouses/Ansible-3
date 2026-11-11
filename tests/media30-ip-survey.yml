@@ -1,170 +1,132 @@
 ---
-- name: Validate task 30 selectable media IPv4 without touching infrastructure
+- name: Verify standard HOME Media IP and explicit legacy overrides without changes
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
-    pve:
-      ipv4: 192.168.11.230
-    media30_canonical_spec:
-      vmid: 2232
+    pve: {ipv4: 192.168.11.220}
+    # Fixture with the normative HOME .223 excluded from dynamic DHCP.
+    # The real private manifest still claims .50-.229 and must be reconciled.
+    media30_legacy_spec:
+      vmid: 2250
       network:
-        ipv4: 192.168.11.232/24
+        ipv4: 192.168.11.250/24
         gateway: 192.168.11.1
         bridge: vmbr0
         static_ipv4_verified: true
-        dhcp_pool:
-          first_host: 50
-          last_host: 229
+        dhcp_pool: {first_host: 50, last_host: 219}
   tasks:
-    - name: Start with canonical site manifest
+    - name: Read the unchanged legacy media manifest
       ansible.builtin.set_fact:
-        media_spec: "{{ media30_canonical_spec }}"
+        media_spec: "{{ media30_legacy_spec }}"
 
-    - name: Apply default task 30 survey value 232
+    - name: Resolve the standard HOME survey default
       ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
       vars:
-        DH_MEDIA_IP: '232'  # noqa: var-naming[pattern] Semaphore Survey variable
+        DH_MEDIA_IP: '223'  # noqa: var-naming[pattern] Semaphore catalog default
 
-    - name: Check standard LAN address and preservation of manifest
+    - name: Require new HOME VM2223 regardless of old manifest VM2250
       ansible.builtin.assert:
         that:
-          - media30_selected_ipv4 == '192.168.11.232'
-          - media_spec.vmid | int == 2232
-          - media30_manifest_vmid | int == 2232
-          - media_spec.network.ipv4 == '192.168.11.232/24'
-          - media30_manifest_ipv4 == '192.168.11.232/24'
-          - media30_canonical_spec.network.ipv4 == '192.168.11.232/24'
+          - media30_selected_ipv4 == '192.168.11.223'
+          - media30_selected_vmid | int == 2223
+          - media_spec.vmid | int == 2223
+          - media_spec.network.ipv4 == '192.168.11.223/24'
+          - media30_manifest_ipv4 == '192.168.11.250/24'
+          - media30_manifest_vmid | int == 2250
+          - media30_legacy_spec.vmid | int == 2250
 
-    - name: Simulate an existing site already commissioned on another static IP
-      ansible.builtin.set_fact:
-        media_spec: >-
-          {{ media30_canonical_spec
-             | combine({'network': {'ipv4': '192.168.11.233/24'}, 'vmid': 2233},
-                       recursive=True) }}
-
-    - name: Verify default 232 does not readdress the existing nondefault site
-      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-      vars:
-        DH_MEDIA_IP: '232'  # noqa: var-naming[pattern] catalog default
-
-    - name: Confirm the existing site manifest wins over the generic 232 default
-      ansible.builtin.assert:
-        that:
-          - media30_selected_ipv4 == '192.168.11.233'
-          - media_spec.network.ipv4 == '192.168.11.233/24'
-          - media30_manifest_ipv4 == '192.168.11.233/24'
-
-    - name: Reset immutable manifest before custom selection
-      ansible.builtin.set_fact:
-        media_spec: "{{ media30_canonical_spec }}"
-
-    - name: Select another unused media IP in same LAN by final octet
-      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-      vars:
-        DH_MEDIA_IP: '233'  # noqa: var-naming[pattern] Semaphore Survey variable
-
-    - name: Confirm alternate media IP is resolved site-wide
-      ansible.builtin.assert:
-        that:
-          - media30_selected_ipv4 == '192.168.11.233'
-          - media_spec.network.ipv4 == '192.168.11.233/24'
-          - media_spec.network.gateway == '192.168.11.1'
-          - media_spec.vmid | int == 2233
-          - media30_manifest_ipv4 == '192.168.11.232/24'
-
-    - name: Reset manifest for full dotted address
-      ansible.builtin.set_fact:
-        media_spec: "{{ media30_canonical_spec }}"
-
-    - name: Choose same address in full IPv4 notation
-      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-      vars:
-        DH_MEDIA_IP: '192.168.11.234'  # noqa: var-naming[pattern] Semaphore Survey variable
-
-    - name: Confirm explicit IPv4 results in same static LAN
-      ansible.builtin.assert:
-        that:
-          - media_spec.network.ipv4 == '192.168.11.234/24'
-          - media_spec.vmid | int == 2234
-
-    - name: Reset for the requested 192.168.11.250 example
-      ansible.builtin.set_fact:
-        media_spec: "{{ media30_canonical_spec }}"
-
-    - name: Resolve selected IP 192.168.11.250 to VMID 2250
-      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-      vars:
-        DH_MEDIA_IP: '192.168.11.250'  # noqa: var-naming[pattern] Semaphore Survey
-
-    - name: Assert deterministic media IP and VMID
-      ansible.builtin.assert:
-        that:
-          - media_spec.network.ipv4 == '192.168.11.250/24'
-          - media_spec.vmid | int == 2250
-          - media30_selected_vmid | int == 2250
-          - media30_manifest_vmid | int == 2232
-
-    - name: Reject an address already in the LAN DHCP pool
+    - name: Verify the actual legacy DHCP range blocks a new .223 VM
       block:
-        - name: Try DHCP address intentionally
+        - name: Simulate private site DHCP range that includes .223
+          ansible.builtin.set_fact:
+            media_spec: >-
+              {{ media30_legacy_spec
+                 | combine({'network': {'dhcp_pool':
+                   {'first_host': 50, 'last_host': 229}}}, recursive=true) }}
+
+        - name: Try commissioning standard HOME address despite DHCP overlap
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
-            DH_MEDIA_IP: '100'  # noqa: var-naming[pattern] Semaphore Survey variable
+            DH_MEDIA_IP: '223'  # noqa: var-naming[pattern]
 
-        - name: Fail the test if the DHCP address was accepted
+        - name: Fail test if .223 within DHCP pool was accepted
+          ansible.builtin.fail:
+            msg: MEDIA30_STANDARD_ADDRESS_OVERLAP_WAS_ACCEPTED
+      rescue:
+        - name: Require overlapping standard address was rejected
+          ansible.builtin.assert:
+            that: media30_ip_choice == '223'
+
+    - name: Reset to legacy site declaration to test an explicit exception
+      ansible.builtin.set_fact:
+        media_spec: "{{ media30_legacy_spec }}"
+
+    - name: Select legacy VM2250 only when explicitly requested
+      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+      vars:
+        DH_MEDIA_IP: '192.168.11.250'  # noqa: var-naming[pattern]
+
+    - name: Require explicit legacy choice resolves to VM2250
+      ansible.builtin.assert:
+        that:
+          - media30_selected_ipv4 == '192.168.11.250'
+          - media30_selected_vmid | int == 2250
+          - media_spec.vmid | int == 2250
+          - media30_legacy_spec.network.ipv4 == '192.168.11.250/24'
+
+    - name: Refuse a DHCP range address
+      block:
+        - name: Try a reserved DHCP address
+          ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+          vars:
+            DH_MEDIA_IP: '100'  # noqa: var-naming[pattern]
+        - name: Fail if DHCP address is accepted
           ansible.builtin.fail:
             msg: MEDIA30_DHCP_IP_WAS_ACCEPTED
       rescue:
-        - name: Confirm the bad DHCP choice was processed
+        - name: Require invalid DHCP choice was received
           ansible.builtin.assert:
-            that:
-              - media30_ip_choice == '100'
+            that: media30_ip_choice == '100'
 
-    - name: Reject IPv4 from an unrelated LAN
+    - name: Refuse an address from another LAN
       block:
-        - name: Try another /24 subnet intentionally
+        - name: Try 192.168.22.223
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
-            DH_MEDIA_IP: '192.168.22.232'  # noqa: var-naming[pattern] Semaphore Survey variable
-
-        - name: Fail the test if foreign LAN was accepted
+            DH_MEDIA_IP: '192.168.22.223'  # noqa: var-naming[pattern]
+        - name: Fail if a foreign subnet is accepted
           ansible.builtin.fail:
             msg: MEDIA30_FOREIGN_IP_WAS_ACCEPTED
       rescue:
-        - name: Confirm the foreign LAN choice was processed
+        - name: Require the foreign subnet choice was processed
           ansible.builtin.assert:
-            that:
-              - media30_ip_choice == '192.168.22.232'
+            that: media30_ip_choice == '192.168.22.223'
 
-    - name: Reject the PVE host address
+    - name: Refuse a host address which is PVE itself
       block:
-        - name: Try PVE address intentionally
+        - name: Try PVE management address
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
-            DH_MEDIA_IP: '230'  # noqa: var-naming[pattern] Semaphore Survey variable
-
-        - name: Fail the test if PVE address was accepted
+            DH_MEDIA_IP: '220'  # noqa: var-naming[pattern]
+        - name: Fail if PVE IP is accepted
           ansible.builtin.fail:
             msg: MEDIA30_PVE_IP_WAS_ACCEPTED
       rescue:
-        - name: Confirm PVE conflict was processed
+        - name: Require conflicting PVE IP choice was processed
           ansible.builtin.assert:
-            that:
-              - media30_ip_choice == '230'
+            that: media30_ip_choice == '220'
 
-    - name: Reject malformed oversized final octet
+    - name: Reject invalid final octet
       block:
-        - name: Try invalid 256 host
+        - name: Try invalid octet 256
           ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
           vars:
-            DH_MEDIA_IP: '256'  # noqa: var-naming[pattern] Semaphore Survey variable
-
-        - name: Fail the test if 256 was accepted
+            DH_MEDIA_IP: '256'  # noqa: var-naming[pattern]
+        - name: Fail if invalid octet was accepted
           ansible.builtin.fail:
             msg: MEDIA30_IP_256_WAS_ACCEPTED
       rescue:
-        - name: Confirm invalid 256 was processed
+        - name: Require malformed IP choice was processed
           ansible.builtin.assert:
-            that:
-              - media30_ip_choice == '256'
+            that: media30_ip_choice == '256'

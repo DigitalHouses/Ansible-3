@@ -67,7 +67,7 @@ curl --noproxy '*' --silent --show-error --cacert "$PVE_ROOT_CA" \
     echo 'BLOCKED: PVE API certificate is not trusted for vmbr0 IP' >&2; exit 2;
   }
 IFS=. read -r A B C D <<< "$HOST_IPV4"
-NETWORK="${A}.${B}.${C}"
+NETWORK=192.168.11
 RUNNER_IP="${DH_BOOTSTRAP_IP:-$NETWORK.$RUNNER_OCTET}"
 EXPECTED_PVE_IP="$NETWORK.$PVE_OCTET"
 [[ $HOST_IPV4 == "$EXPECTED_PVE_IP" ]] || {
