@@ -1,0 +1,22 @@
+---
+- name: Require Semaphore to provision the native Plex XML module before task 30
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    requested: "{{ lookup('ansible.builtin.file', root ~ '/collections/requirements.yml') | from_yaml }}"
+    bootstrap: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/collections.yml') | from_yaml }}"
+    plex_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-plex-library-scan.yml') | from_yaml }}"
+  tasks:
+    - name: Verify collection requirements are pinned and aligned with bootstrap
+      ansible.builtin.assert:
+        that:
+          - requested == bootstrap
+          - requested.collections | length == 1
+          - requested.collections[0].name == 'community.general'
+          - requested.collections[0].version == '11.2.1'
+          - >-
+            plex_tasks | selectattr('name', 'equalto',
+              'Set Plex\'s native event and periodic library scanning only on drift')
+            | length == 1
