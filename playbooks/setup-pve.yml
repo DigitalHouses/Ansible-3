@@ -34,9 +34,9 @@
     ups_auth_pass: "{{ DH_PVE_SNMP_AUTH_PASSWORD | default('', true) }}"
     ups_priv_pass: "{{ DH_PVE_SNMP_PRIV_PASSWORD | default('', true) }}"
     pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
-    mqtt_host: "{{ lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST') }}"
-    mqtt_user: "{{ lookup('ansible.builtin.env', 'DH_MQTT_USERNAME') }}"
-    mqtt_password: "{{ DH_MQTT_PASSWORD | default('', true) }}"
+    mqtt_host: "{{ DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) }}"
+    mqtt_user: "{{ DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true) }}"
+    mqtt_password: "{{ DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true) }}"
   tasks:
     - name: Validate host setup request
       ansible.builtin.assert:

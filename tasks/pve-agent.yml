@@ -44,7 +44,7 @@
     mode: '0750'
   when: requested_mqtt_host | length > 0
 
-- name: Seed canonical agent config without replacing previously managed identity
+- name: Seed PVE Agent configuration only on first installation
   ansible.builtin.template:
     src: "{{ playbook_dir | dirname }}/templates/pve-agent.conf.j2"
     dest: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
@@ -54,6 +54,23 @@
   when:
     - requested_mqtt_host | length > 0
     - not agent_config_stat.stat.exists
+  register: agent_mqtt_new_config
+  no_log: true
+
+- name: Reconcile only existing PVE Agent MQTT settings from task 05
+  ansible.builtin.lineinfile:
+    path: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+    regexp: "^{{ item.key }}[ \\t]*="
+    line: "{{ item.key }} = {{ item.value }}"
+    insertafter: '^\\[mqtt\\]$'
+  loop:
+    - {key: host, value: "{{ requested_mqtt_host }}"}
+    - {key: username, value: "{{ requested_mqtt_user }}"}
+    - {key: password, value: "{{ requested_mqtt_password }}"}
+  when:
+    - requested_mqtt_host | length > 0
+    - agent_config_stat.stat.exists
+  register: agent_mqtt_existing_config
   no_log: true
 
 - name: Download pinned canonical release installer
@@ -98,7 +115,7 @@
   ansible.builtin.systemd_service:
     name: digitalhouses_pve_agent.service
     enabled: true
-    state: started
+    state: "{{ 'restarted' if (agent_mqtt_new_config.changed | default(false)) or (agent_mqtt_existing_config.changed | default(false)) else 'started' }}"
   when: requested_mqtt_host | length > 0
 
 - name: Report agent readiness
