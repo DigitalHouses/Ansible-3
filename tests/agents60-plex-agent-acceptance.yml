@@ -22,6 +22,9 @@
         fresh_marker: >-
           {{ role | selectattr('name', 'equalto',
              'Record a fresh Plex Agent MQTT identity before the upstream installer') | first }}
+        update_step: >-
+          {{ role | selectattr('name', 'equalto',
+             'Determine whether the pinned Plex Agent product installation is required') | first }}
         start_agent: >-
           {{ role | selectattr('name', 'equalto',
              'Start existing Plex Agent product with protected site MQTT settings') | first }}
@@ -57,7 +60,9 @@
         that:
           - start_agent['ansible.builtin.systemd_service'].enabled | bool
           - role_install.no_log | bool
-          - "'media_plex_agent_current_version is version(' in update_step['ansible.builtin.set_fact'].media_plex_agent_install_needed
+          - >-
+            'media_plex_agent_current_version is version('
+            in update_step['ansible.builtin.set_fact'].media_plex_agent_install_needed
           - "'DIGITALHOUSES_SOURCE_REF' in role_install.environment"
           - "'force' in fresh_marker['ansible.builtin.copy']"
           - not fresh_marker['ansible.builtin.copy'].force | bool
