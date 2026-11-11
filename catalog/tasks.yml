@@ -74,7 +74,7 @@ tasks:
         default_value: "no"
         values:
           - {name: "Не обновлять", value: "no"}
-          - {name: "Обновить APT-пакет на работающем коннекторе PVE/Runner", value: "yes"}
+          - {name: "Обновить установленный cloudflared на Runner", value: "yes"}
       - name: DH_PVE_QUANTUM_UPDATE
         title: "File Browser Quantum — обновление версии"
         type: enum
@@ -104,15 +104,15 @@ tasks:
           - {name: "Сменить IP (с автоматическим откатом)", value: migrate}
       - {name: DH_PVE_NEW_IP, title: "Новый IP PVE (только при выборе смены адреса)", type: "", target: "", required: false, values: []}
       - name: DH_PVE_CF_ACTION
-        title: "Cloudflare — доступ к PVE и File Browser"
+        title: "Cloudflare Tunnel объекта"
         type: enum
         target: ""
         required: true
-        default_value: apply
+        default_value: skip
         values:
-          - {name: "Не изменять Cloudflare", value: skip}
-          - {name: "Проверить существующий туннель и Access", value: audit}
-          - {name: "Настроить туннель (создать, если отсутствует)", value: apply}
+          - {name: "Пропустить — ничего не изменять", value: skip}
+          - {name: "Создать — только если Tunnel отсутствует", value: create}
+          - {name: "ПЕРЕСОЗДАТЬ Tunnel и коннектор (смена UUID)", value: recreate}
       - name: DH_PVE_QUANTUM
         title: "File Browser Quantum на PVE"
         type: enum

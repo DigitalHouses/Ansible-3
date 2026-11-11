@@ -1,18 +1,18 @@
 ---
-# Executed with become:true only for an explicitly chosen CF Apply.
-# Existing site Tunnel and its healthy connector are reused, not recreated.
+# Create / recreate the one remotely-managed owner-object Tunnel.
+# Recreate retains all published ingress and DNS records; only the
+# locally managed Runner connector may be destroyed automatically.
 
-- name: Verify File Browser local health before requesting public ingress
+- name: Verify the requested File Browser origin is healthy
   ansible.builtin.uri:
     url: "http://{{ pve.ipv4 }}:8090/health"
     use_proxy: false
     status_code: 200
     timeout: 10
-  register: cf_quantum_health
   changed_when: false
   when: quantum_requested
 
-- name: Verify File Browser rejects unauthenticated administration
+- name: Verify File Browser does not expose anonymous administration
   ansible.builtin.uri:
     url: "http://{{ pve.ipv4 }}:8090/api/users"
     use_proxy: false
@@ -21,7 +21,200 @@
   changed_when: false
   when: quantum_requested
 
-- name: Create the canonical remotely managed site Tunnel only when missing
+- name: Identify the Tunnel being explicitly recreated, if any
+  ansible.builtin.set_fact:
+    cf_old_tunnel_id: "{{ cf_matching_tunnels[0].id if cf_matching_tunnels | length == 1 else '' }}"
+    cf_old_tunnel_exists: "{{ cf_matching_tunnels | length == 1 }}"
+
+- name: Read existing site configuration before potential deletion
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_old_remote_config
+  changed_when: false
+  no_log: true
+  when: cf_old_tunnel_exists
+
+- name: Snapshot the original Cloudflare settings and ingress in memory
+  ansible.builtin.set_fact:
+    cf_saved_config: >-
+      {{ cf_old_remote_config.json.result.config if cf_old_tunnel_exists else {} }}
+    cf_saved_ingress: >-
+      {{ cf_old_remote_config.json.result.config.ingress | default([])
+         if cf_old_tunnel_exists else [] }}
+
+- name: Select the routes and names to retain across recreation
+  ansible.builtin.set_fact:
+    cf_saved_hostnames: >-
+      {{ cf_saved_ingress | selectattr('hostname', 'defined')
+         | map(attribute='hostname') | list }}
+    cf_required_hostnames: >-
+      {{ [public_hostname] + ([quantum_public_hostname] if quantum_requested else []) }}
+
+- name: Require a safe site-scoped ingress snapshot
+  ansible.builtin.assert:
+    that:
+      - >-
+        cf_saved_ingress | length == 0 or
+        (cf_saved_ingress[-1].service == 'http_status:404'
+         and cf_saved_ingress[-1].hostname is not defined)
+      - >-
+        cf_saved_ingress | length == 0 or
+        (cf_saved_ingress[:-1] | rejectattr('hostname', 'defined')
+         | list | length) == 0
+      - cf_saved_hostnames | length == (cf_saved_hostnames | unique | list | length)
+      - >-
+        (cf_saved_hostnames | reject('match',
+         '^[a-zA-Z0-9*._-]+[.]' ~ (cf_zone_name | regex_escape) ~ '$')
+         | list | length) == 0
+    fail_msg: "CF_RECREATE_UNSUPPORTED_INGRESS_NO_DELETION"
+
+- name: Select all DNS records to preserve or create
+  ansible.builtin.set_fact:
+    cf_dns_hostnames: "{{ (cf_saved_hostnames + cf_required_hostnames) | unique | list }}"
+    cf_saved_pve: >-
+      {{ cf_saved_ingress | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', public_hostname) | list }}
+    cf_saved_quantum: >-
+      {{ cf_saved_ingress | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', quantum_public_hostname) | list }}
+    cf_foreign_ingress: >-
+      {{ cf_saved_ingress | selectattr('hostname', 'defined')
+         | rejectattr('hostname', 'in', [public_hostname, quantum_public_hostname]) | list }}
+
+- name: Reject weakened PVE TLS settings in saved ingress
+  ansible.builtin.assert:
+    that:
+      - cf_saved_pve | length == 0 or (cf_saved_pve[0].originRequest.noTLSVerify | default(false)) is sameas false
+      - cf_saved_pve | length == 0 or cf_saved_pve[0].originRequest.caPool | default('') == expected_ca_pool
+    fail_msg: "CF_PVE_TLS_POLICY_INVALID"
+
+- name: Read each published DNS record before touching a Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf_dns_hostnames }}"
+  register: cf_dns_preflight
+  changed_when: false
+  no_log: true
+
+- name: Refuse unrelated, unproxied or ambiguous DNS before recreation
+  ansible.builtin.assert:
+    that:
+      - item.json.success | bool
+      - item.json.result_info.total_pages | default(1) | int == 1
+      - item.json.result | length <= 1
+      - >-
+        item.json.result | length == 0 or
+        (cf_old_tunnel_exists and item.json.result[0].type == 'CNAME'
+         and item.json.result[0].proxied | bool
+         and (item.json.result[0].content | lower)
+         == ((cf_old_tunnel_id ~ '.cfargotunnel.com') | lower))
+    fail_msg: "CF_DNS_FOREIGN_OR_STALE_REQUIRES_MANUAL_REVIEW"
+  loop: "{{ cf_dns_preflight.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Determine exactly which DNS records existed before recreation
+  ansible.builtin.set_fact:
+    cf_preserved_dns_names: >-
+      {{ cf_dns_preflight.results | selectattr('json.result')
+         | map(attribute='item') | list }}
+
+- name: Read the locally recorded Runner Tunnel identity
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/site-cloudflare-tunnel-id
+  register: cf_local_marker_stat
+  when: cf_old_tunnel_exists
+
+- name: Read the local Runner Tunnel ownership marker
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/site-cloudflare-tunnel-id
+  register: cf_local_marker
+  no_log: true
+  when:
+    - cf_old_tunnel_exists
+    - cf_local_marker_stat.stat.isreg | default(false)
+
+- name: Check the managed connector unit before destructive recreation
+  ansible.builtin.stat:
+    path: /etc/systemd/system/digitalhouses-site-cloudflared.service
+  register: cf_local_service_stat
+  when: cf_old_tunnel_exists
+
+- name: Require proven local ownership before deleting the site Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf_local_marker_stat.stat.isreg | default(false)
+      - (cf_local_marker.content | default('') | b64decode | trim) == cf_old_tunnel_id
+      - cf_local_service_stat.stat.isreg | default(false)
+    fail_msg: "CF_RECREATE_NEEDS_RUNNER_OWNERSHIP_NO_DELETION"
+  when: cf_old_tunnel_exists
+
+- name: Confirm the saved Tunnel configuration has not changed before deletion
+  ansible.builtin.uri:
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_tunnel_id }}/configurations"
+    headers: "{{ cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf_old_predelete_config
+  changed_when: false
+  no_log: true
+  when: cf_old_tunnel_exists
+
+- name: Refuse concurrent modifications to the site Tunnel before recreation
+  ansible.builtin.assert:
+    that:
+      - cf_old_predelete_config.json.result.config == cf_saved_config
+    fail_msg: "CF_TUNNEL_CHANGED_BEFORE_DELETE"
+  when: cf_old_tunnel_exists
+
+- name: Stop and delete the original site Tunnel only after all preflight checks
+  when: cf_old_tunnel_exists
+  block:
+    - name: Stop the locally managed site connector
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: stopped
+
+    - name: Require all old Tunnel connections to close
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_tunnel_id }}"
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf_old_tunnel_down
+      changed_when: false
+      until: cf_old_tunnel_down.json.result.status in ['down', 'inactive']
+      retries: 12
+      delay: 3
+      no_log: true
+
+    - name: Delete only the explicitly selected old site Tunnel
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_old_tunnel_id }}"
+        method: DELETE
+        headers: "{{ cf_headers }}"
+        use_proxy: false
+        status_code: [200, 204]
+      changed_when: true
+      no_log: true
+  rescue:
+    - name: Restart old connector after a failed Tunnel deletion
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: started
+
+    - name: Report failed recreation with original configuration retained
+      ansible.builtin.fail:
+        msg: "CF_RECREATE_DELETE_FAILED_OLD_CONNECTOR_RESTARTED"
+
+- name: Create the one canonical remotely managed Cloudflare Tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel"
     method: POST
@@ -32,140 +225,101 @@
       config_src: cloudflare
     use_proxy: false
     status_code: 200
-    timeout: 30
-  register: cf_tunnel_created
+  register: cf_new_tunnel
   changed_when: true
   no_log: true
-  when: cf_matching_tunnels | length == 0
 
-- name: Resolve the exact owned Tunnel ID
+- name: Remember the new Cloudflare Tunnel UUID
   ansible.builtin.set_fact:
-    cf_tunnel_id: >-
-      {{ cf_matching_tunnels[0].id if cf_matching_tunnels | length == 1
-         else cf_tunnel_created.json.result.id | default('') }}
+    cf_tunnel_id: "{{ cf_new_tunnel.json.result.id }}"
 
-- name: Require a valid Cloudflare Tunnel UUID
+- name: Verify the new Tunnel was created with the canonical identity
   ansible.builtin.assert:
     that:
+      - cf_new_tunnel.json.success | bool
+      - cf_new_tunnel.json.result.name == pve_tunnel_name
       - cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
-    fail_msg: "Cloudflare did not return a valid site Tunnel UUID"
+      - cf_tunnel_id != cf_old_tunnel_id
+    fail_msg: "CF_NEW_TUNNEL_INVALID"
 
-# Cloudflare can initialize a newly created Tunnel with a default
-# 404 ingress. Read it as the first write baseline rather than compare
-# it to the empty pre-creation state and mistake it for concurrent edits.
-- name: Read Cloudflare-initialized configuration for a new site Tunnel
+- name: Read Cloudflare's initial configuration on the new Tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-  register: cf_new_tunnel_config
+  register: cf_initial_config
   changed_when: false
   no_log: true
-  when: cf_matching_tunnels | length == 0
 
-- name: Require an untouched default ingress on the new site Tunnel
+- name: Refuse non-default ingress created by someone else
   ansible.builtin.assert:
     that:
-      - cf_new_tunnel_config.json.success | bool
-      - >-
-        (cf_new_tunnel_config.json.result.config.ingress | default([]))
-        in [[], [{'service': 'http_status:404'}]]
-    fail_msg: "New Tunnel already contains non-default ingress; refusing overwrite"
-  when: cf_matching_tunnels | length == 0
+      - cf_initial_config.json.success | bool
+      - cf_initial_config.json.result.config.ingress | default([]) in [[], [{'service':'http_status:404'}]]
+    fail_msg: "CF_NEW_TUNNEL_ALREADY_MODIFIED"
 
-- name: Adopt the just-created Tunnel configuration as write baseline
+- name: Build canonical PVE and Quantum routes plus preserved foreign routes
   ansible.builtin.set_fact:
-    cf_existing_config: "{{ cf_new_tunnel_config.json.result.config }}"
-  when: cf_matching_tunnels | length == 0
-
-- name: Require unique existing PVE and Quantum routes and a 404 fallback
-  ansible.builtin.assert:
-    that:
-      - >-
-        (cf_existing_ingress | selectattr('hostname', 'defined')
-         | selectattr('hostname', 'equalto', public_hostname) | list | length) <= 1
-      - >-
-        (cf_existing_ingress | selectattr('hostname', 'defined')
-         | selectattr('hostname', 'equalto', quantum_public_hostname) | list | length) <= 1
-      - >-
-        cf_existing_ingress | length == 0 or
-        (cf_existing_ingress[-1].service == 'http_status:404'
-         and cf_existing_ingress[-1].hostname is not defined)
-      - >-
-        cf_existing_ingress | length == 0 or
-        (cf_existing_ingress[:-1] | rejectattr('hostname', 'defined') | list | length == 0)
-    fail_msg: "Unrecognized ingress structure: refusing to replace existing Tunnel configuration"
-
-- name: Preserve all routes not owned by this PVE task
-  ansible.builtin.set_fact:
-    cf_foreign_ingress: >-
-      {{ cf_existing_ingress | selectattr('hostname', 'defined')
-         | rejectattr('hostname', 'in', [public_hostname, quantum_public_hostname]) | list }}
-    cf_previous_quantum: >-
-      {{ cf_existing_ingress | selectattr('hostname', 'defined')
-         | selectattr('hostname', 'equalto', quantum_public_hostname) | list }}
-
-- name: Read the current canonical PVE route for an origin-only change
-  ansible.builtin.set_fact:
-    cf_previous_pve: >-
-      {{ cf_existing_ingress | selectattr('hostname', 'defined')
-         | selectattr('hostname', 'equalto', public_hostname) | list }}
-
-- name: Require existing origin policy to remain secure
-  ansible.builtin.assert:
-    that:
-      - >-
-        cf_previous_pve | length == 0 or
-        (cf_previous_pve[0].originRequest.noTLSVerify | default(false)) is sameas false
-      - >-
-        cf_previous_pve | length == 0 or
-        cf_previous_pve[0].originRequest.caPool | default('') == expected_ca_pool
-    fail_msg: "Existing PVE TLS policy differs; cannot safely repoint it"
-
-- name: Prepare PVE origin update preserving its existing TLS options
-  ansible.builtin.set_fact:
-    cf_pve_route: >-
-      {{ (cf_previous_pve[0] if cf_previous_pve | length == 1 else
-          {'hostname': public_hostname,
-           'originRequest': {'caPool': expected_ca_pool, 'noTLSVerify': false}})
-          | combine({'service': desired_origin}) }}
-    cf_quantum_route: >-
-      {{ (cf_previous_quantum[0] if cf_previous_quantum | length == 1
-          else {'hostname': quantum_public_hostname})
+    cf_new_pve_ingress: >-
+      {{ (cf_saved_pve[0] if cf_saved_pve | length == 1 else
+           {'hostname': public_hostname})
+         | combine({'service': desired_origin,
+                    'originRequest': {'caPool': expected_ca_pool, 'noTLSVerify': false}},
+                   recursive=true) }}
+    cf_new_quantum_ingress: >-
+      {{ (cf_saved_quantum[0] if cf_saved_quantum | length == 1 else
+           {'hostname': quantum_public_hostname})
          | combine({'service': 'http://' ~ pve.ipv4 ~ ':8090'}) }}
 
-- name: Derive exact desired ingress with existing non-PVE routes untouched
+- name: Start from the original ingress order
+  ansible.builtin.set_fact:
+    cf_ordered_ingress: []
+
+- name: Preserve every original route position and unrelated settings
+  ansible.builtin.set_fact:
+    cf_ordered_ingress: >-
+      {{ cf_ordered_ingress +
+         [cf_new_pve_ingress if item.hostname == public_hostname
+          else (cf_new_quantum_ingress if quantum_requested and
+                item.hostname == quantum_public_hostname else item)] }}
+  loop: "{{ cf_saved_ingress | selectattr('hostname', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+
+- name: Add only missing PVE and Quantum routes before the original routes
   ansible.builtin.set_fact:
     cf_desired_ingress: >-
-      {{ [cf_pve_route]
-         + ([cf_quantum_route] if quantum_requested else cf_previous_quantum)
-         + cf_foreign_ingress
+      {{ ([cf_new_pve_ingress] if cf_saved_pve | length == 0 else [])
+         + ([cf_new_quantum_ingress] if quantum_requested and
+            cf_saved_quantum | length == 0 else [])
+         + cf_ordered_ingress
          + [{'service': 'http_status:404'}] }}
 
-- name: Prepare desired Tunnel configuration preserving all other settings
+- name: Prepare the new Tunnel configuration without losing other settings
   ansible.builtin.set_fact:
-    cf_desired_config: "{{ cf_existing_config | combine({'ingress': cf_desired_ingress}) }}"
+    cf_desired_config: >-
+      {{ (cf_saved_config if cf_old_tunnel_exists else
+          cf_initial_config.json.result.config)
+         | combine({'ingress': cf_desired_ingress}) }}
 
-- name: Confirm the tunnel configuration is still unchanged since preflight
+- name: Verify initial configuration remains unchanged before publication
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
     headers: "{{ cf_headers }}"
     use_proxy: false
-    status_code: [200, 404]
-  register: cf_pre_write_config
+    status_code: 200
+  register: cf_before_write
   changed_when: false
   no_log: true
 
-- name: Refuse concurrent remote edits before applying Tunnel routes
+- name: Refuse concurrent changes to the newly created Tunnel
   ansible.builtin.assert:
     that:
-      - >-
-        (cf_pre_write_config.json.result.config | default({}))
-        == cf_existing_config
-    fail_msg: "Tunnel configuration changed concurrently; rerun an audit instead of overwriting"
+      - cf_before_write.json.result.config == cf_initial_config.json.result.config
+    fail_msg: "CF_CONCURRENT_EDIT_ABORT"
 
-- name: Reconcile only site-owned PVE and Quantum ingress
+- name: Publish the rebuilt site ingress
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
     method: PUT
@@ -175,12 +329,10 @@
       config: "{{ cf_desired_config }}"
     use_proxy: false
     status_code: 200
-    timeout: 30
   changed_when: true
   no_log: true
-  when: cf_existing_config != cf_desired_config
 
-- name: Read back the remotely managed ingress
+- name: Read back all routes and preserve the unrelated site ingress
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
     headers: "{{ cf_headers }}"
@@ -190,20 +342,19 @@
   changed_when: false
   no_log: true
 
-- name: Verify the exact route write before running a connector
+- name: Require all saved routes were restored
   ansible.builtin.assert:
     that:
       - cf_committed_config.json.success | bool
       - cf_committed_config.json.result.config.ingress == cf_desired_ingress
-    fail_msg: "Cloudflare route readback differs; connector not started"
+      - >-
+        (cf_committed_config.json.result.config.ingress
+         | selectattr('hostname', 'defined')
+         | rejectattr('hostname', 'in', [public_hostname, quantum_public_hostname])
+         | list) == cf_foreign_ingress
+    fail_msg: "CF_INGRESS_RESTORE_FAILED"
 
-- name: Decide whether this Runner must host the connector
-  ansible.builtin.set_fact:
-    cf_start_connector: >-
-      {{ cf_matching_tunnels | length == 0 or cf_locally_owned
-         or cf_matching_tunnels[0].status not in ['healthy', 'degraded'] }}
-
-- name: Obtain the revocable Cloudflare token for only this Tunnel
+- name: Get only this new Tunnel's connector token
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/token"
     headers: "{{ cf_headers }}"
@@ -212,18 +363,16 @@
   register: cf_pve_token
   changed_when: false
   no_log: true
-  when: cf_start_connector
 
-- name: Install Cloudflare package-signing key
+- name: Install vendor Cloudflare package-signing key
   ansible.builtin.get_url:
     url: https://pkg.cloudflare.com/cloudflare-main.gpg
     dest: /usr/share/keyrings/cloudflare-main.gpg
     owner: root
     group: root
     mode: '0644'
-  when: cf_start_connector
 
-- name: Install the official signed cloudflared APT source
+- name: Configure the signed cloudflared APT repository on Runner
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/cloudflared.list
     content: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
@@ -231,25 +380,25 @@
     group: root
     mode: '0644'
   register: cf_pve_apt_source
-  when: cf_start_connector
 
-- name: Install cloudflared on the site Runner
+- name: Install cloudflared without upgrading an already installed version
   ansible.builtin.apt:
     name: cloudflared
     state: present
     update_cache: "{{ cf_pve_apt_source.changed }}"
-  when: cf_start_connector
 
-- name: Secure the local dedicated Tunnel directory
+- name: Ensure root-only connector and site metadata directories
   ansible.builtin.file:
-    path: /etc/cloudflared
-    state: directory
+    path: "{{ item }}"
     owner: root
     group: root
     mode: '0700'
-  when: cf_start_connector
+    state: directory
+  loop:
+    - /etc/cloudflared
+    - /etc/digitalhouses
 
-- name: Copy the public PVE trust CA for strict Cloudflare origin TLS
+- name: Copy the bootstrap-trusted PVE origin CA to Runner
   ansible.builtin.copy:
     src: "{{ pve.ca_file }}"
     dest: "{{ expected_ca_pool }}"
@@ -257,30 +406,25 @@
     owner: root
     group: root
     mode: '0644'
-  register: cf_pve_ca
-  when: cf_start_connector
 
-- name: Store the site Tunnel token without exposing it in logs
+- name: Store new Tunnel connector token privately
   ansible.builtin.copy:
     dest: /etc/cloudflared/site-token
     content: "{{ cf_pve_token.json.result }}\n"
     owner: root
     group: root
     mode: '0600'
-  register: cf_pve_token_file
   no_log: true
-  when: cf_start_connector
 
-- name: Mark exact site Tunnel ownership locally for safe later runs
+- name: Save exact new Tunnel ownership UUID on Runner
   ansible.builtin.copy:
     dest: /etc/digitalhouses/site-cloudflare-tunnel-id
     content: "{{ cf_tunnel_id }}\n"
     owner: root
     group: root
     mode: '0600'
-  when: cf_start_connector
 
-- name: Install the site connector systemd service on Runner
+- name: Install the standard site cloudflared connector service
   ansible.builtin.copy:
     dest: /etc/systemd/system/digitalhouses-site-cloudflared.service
     owner: root
@@ -300,18 +444,15 @@
 
       [Install]
       WantedBy=multi-user.target
-  register: cf_pve_unit
-  when: cf_start_connector
 
-- name: Start or preserve only the site Cloudflare connector
+- name: Start the new site connector and enable it at boot
   ansible.builtin.systemd_service:
     name: digitalhouses-site-cloudflared.service
-    daemon_reload: "{{ cf_pve_unit.changed }}"
+    daemon_reload: true
+    state: restarted
     enabled: true
-    state: "{{ 'restarted' if cf_pve_unit.changed or cf_pve_token_file.changed or cf_pve_ca.changed else 'started' }}"
-  when: cf_start_connector
 
-- name: Require Cloudflare Tunnel to become healthy
+- name: Verify the new Tunnel becomes healthy
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}"
     headers: "{{ cf_headers }}"
@@ -324,7 +465,7 @@
   delay: 4
   no_log: true
 
-- name: Create only missing public DNS records for selected endpoints
+- name: Publish missing DNS only for requested PVE and Quantum endpoints
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
     method: POST
@@ -339,12 +480,12 @@
     status_code: [200, 201]
   loop: "{{ cf_dns_preflight.results }}"
   when:
-    - item.item == public_hostname or quantum_requested
+    - item.item in cf_required_hostnames
     - item.json.result | length == 0
   changed_when: true
   no_log: true
 
-- name: Repoint only canonical PVE/Quantum DNS from a verified deleted Tunnel
+- name: Move every old site CNAME to the new Tunnel UUID
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records/{{ item.json.result[0].id }}"
     method: PATCH
@@ -352,35 +493,28 @@
     body_format: json
     body:
       type: CNAME
-      name: "{{ item.item }}"
       proxied: true
+      name: "{{ item.item }}"
       content: "{{ cf_tunnel_id }}.cfargotunnel.com"
     use_proxy: false
     status_code: 200
   loop: "{{ cf_dns_preflight.results }}"
-  when:
-    - item.item == public_hostname or quantum_requested
-    - item.json.result | length == 1
-    - (item.json.result[0].content | lower) != ((cf_tunnel_id ~ '.cfargotunnel.com') | lower)
-    - >-
-      (item.json.result[0].content | lower
-       | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
-      in cf_permitted_dns_tunnel_ids
+  when: item.json.result | length == 1
   changed_when: true
   no_log: true
 
-- name: Read published DNS for the selected routes
+- name: Read back the DNS of all previously published site applications
   ansible.builtin.uri:
     url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
-  loop: "{{ [public_hostname] + ([quantum_public_hostname] if quantum_requested else []) }}"
+  loop: "{{ (cf_preserved_dns_names + cf_required_hostnames) | unique | list }}"
   register: cf_dns_readback
   changed_when: false
   no_log: true
 
-- name: Verify all published records point to exactly this Tunnel
+- name: Require every formerly published application points to the new Tunnel
   ansible.builtin.assert:
     that:
       - item.json.success | bool
@@ -388,11 +522,13 @@
       - item.json.result[0].type == 'CNAME'
       - item.json.result[0].proxied | bool
       - (item.json.result[0].content | lower) == ((cf_tunnel_id ~ '.cfargotunnel.com') | lower)
-    fail_msg: "DNS readback is not owned by this PVE Tunnel"
+    fail_msg: "CF_DNS_READBACK_MISMATCH"
   loop: "{{ cf_dns_readback.results }}"
+  loop_control:
+    label: "{{ item.item }}"
   no_log: true
 
-- name: Verify public HTTPS redirects anonymous users to Cloudflare Access
+- name: Require Cloudflare Access challenge for both site admin endpoints
   ansible.builtin.uri:
     url: "https://{{ item }}/"
     follow_redirects: none
@@ -400,7 +536,7 @@
     validate_certs: true
     status_code: 302
     timeout: 20
-  loop: "{{ [public_hostname] + ([quantum_public_hostname] if quantum_requested else []) }}"
+  loop: "{{ cf_required_hostnames }}"
   register: cf_public_challenge
   changed_when: false
   until: >-
@@ -411,13 +547,14 @@
   delay: 3
   no_log: true
 
-- name: Report safe Cloudflare commissioning
+- name: Report newly installed canonical site connector
   ansible.builtin.debug:
     msg:
-      - "CF_PVE=ROUTES_CONFIGURED https://{{ public_hostname }}/"
+      - "CF_ACTION={{ requested_mode | upper }}_COMPLETE"
       - "CF_TUNNEL={{ pve_tunnel_name }}"
       - "CF_TUNNEL_ID={{ cf_tunnel_id }}"
-      - "CF_ORIGIN={{ desired_origin }}"
-      - "CF_QUANTUM={{ 'READY' if quantum_requested else 'NOT_REQUESTED' }}"
-      - "CF_ACCESS=RESTRICTED; FOREIGN_ROUTES=PRESERVED"
-      - "CF_EXTERNAL_ORIGIN_TLS={{ 'CHECK_EXISTING_CONNECTOR_CA' if not cf_start_connector else 'LOCAL_CA_CONFIGURED' }}"
+      - "CF_CONNECTOR=RUNNER"
+      - "CF_OLD_ROUTES_RETAINED={{ cf_foreign_ingress | length }}"
+      - "CF_DNS_REBOUND={{ cf_preserved_dns_names | length }}"
+      - "CF_PVE=https://{{ public_hostname }}/"
+      - "CF_QUANTUM={{ 'READY' if quantum_requested else 'UNCHANGED' }}"

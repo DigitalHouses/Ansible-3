@@ -372,14 +372,6 @@
       when:
         - requested_mode == 'apply'
         - requested_quantum_action == 'install'
-    - name: Update an installed active PVE-host cloudflared package if requested
-      ansible.builtin.include_tasks: ../tasks/cloudflared-package-upgrade.yml
-      vars:
-        cf_package_host_label: PVE
-      when:
-        - requested_mode == 'apply'
-        - requested_cf_update == 'yes'
-
     - name: Report intentionally separate steps
       ansible.builtin.debug:
         msg:
@@ -398,9 +390,7 @@
   vars_files:
     - /etc/digitalhouses/pve.yml
   vars:
-    requested_mode: "{{ 'skip' if (DH_PVE_MODE | default('audit', true)) == 'audit' and
-                    (DH_PVE_CF_ACTION | default('apply', true)) == 'apply'
-                    else (DH_PVE_CF_ACTION | default('apply', true)) }}"
+    requested_mode: "{{ DH_PVE_CF_ACTION | default('skip', true) }}"
     site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     cf_api: https://api.cloudflare.com/client/v4
@@ -415,7 +405,18 @@
       Authorization: "Bearer {{ cf_token }}"
       Accept: application/json
   tasks:
-    - name: Update an installed active Runner cloudflared package if requested
+    - name: Validate Cloudflare lifecycle mode
+      ansible.builtin.assert:
+        that:
+          - requested_mode in ['skip', 'create', 'recreate']
+          - requested_mode == 'skip' or (DH_PVE_MODE | default('audit', true)) == 'apply'
+        fail_msg: "CF_CREATE_RECREATE_REQUIRES_PVE_APPLY"
+
+    - name: Create or recreate Cloudflare site Tunnel if selected
+      ansible.builtin.include_tasks: ../tasks/pve-cloudflare.yml
+      when: requested_mode != 'skip'
+
+    - name: Upgrade the installed site connector package only when requested
       ansible.builtin.include_tasks:
         file: ../tasks/cloudflared-package-upgrade.yml
         apply:
@@ -423,13 +424,5 @@
       vars:
         cf_package_host_label: Runner
       when:
-        - (DH_PVE_MODE | default('audit', true)) == 'apply'
+        - requested_mode != 'skip'
         - (DH_PVE_CF_UPDATE | default('no', true)) == 'yes'
-
-    - name: Validate the PVE Cloudflare action
-      ansible.builtin.assert:
-        that: requested_mode in ['skip', 'audit', 'apply']
-        fail_msg: "Unknown PVE Cloudflare action"
-    - name: Audit or update existing PVE Cloudflare tunnel using native Ansible
-      ansible.builtin.include_tasks: ../tasks/pve-cloudflare.yml
-      when: requested_mode != 'skip'

@@ -1,16 +1,15 @@
 ---
-# PVE and Quantum ingress on the one canonical owner-object Tunnel.
-# Keep all other site routes, Access, connector, and Tunnel ID unchanged.
-# No deletion, token rotation or automatic legacy Tunnel migration.
+# Three Cloudflare lifecycle actions: skip, create, recreate.
+# The only Tunnel per site is owner-object. Cloudflare Access stays unchanged.
 
 - name: Require site and Cloudflare credentials
   ansible.builtin.assert:
     that:
-      - requested_mode in ['audit', 'apply']
+      - requested_mode in ['create', 'recreate']
       - cf_token | length > 0
       - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
       - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
-    fail_msg: "Cloudflare: provide a token using task 05 and choose audit or apply"
+    fail_msg: "Cloudflare: provide a token using task 05 and choose create or recreate"
   no_log: true
 
 - name: Verify the TLS origin with the bootstrap-pinned PVE CA
@@ -140,9 +139,9 @@
   loop: "{{ cf_access_policies.results }}"
   no_log: true
 
-- name: Read exactly the canonical owner-object site Tunnel
+- name: Read the exact owner-object Cloudflare Tunnel
   ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&per_page=50"
+    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&per_page=100"
     headers: "{{ cf_headers }}"
     use_proxy: false
     status_code: 200
@@ -150,209 +149,36 @@
   changed_when: false
   no_log: true
 
-- name: Select active records with the exact site Tunnel name
+- name: Select the one active site Tunnel
   ansible.builtin.set_fact:
     cf_matching_tunnels: >-
-      {{ cf_tunnels.json.result | selectattr('name', 'equalto', pve_tunnel_name)
+      {{ cf_tunnels.json.result
+         | selectattr('name', 'equalto', pve_tunnel_name)
          | selectattr('deleted_at', 'none') | list }}
 
-- name: Refuse ambiguous or non-remotely-managed site tunnels
+- name: Require at most one remotely managed site Tunnel
   ansible.builtin.assert:
     that:
       - cf_tunnels.json.success | bool
+      - cf_tunnels.json.result_info.total_pages | default(1) | int == 1
       - cf_matching_tunnels | length <= 1
       - cf_matching_tunnels | length == 0 or cf_matching_tunnels[0].config_src == 'cloudflare'
-    fail_msg: "Dedicated PVE Tunnel name is occupied or has incompatible management"
+    fail_msg: "CF_SITE_TUNNEL_AMBIGUOUS"
 
-- name: Inspect the local PVE Tunnel ownership marker
-  ansible.builtin.stat:
-    path: /etc/digitalhouses/site-cloudflare-tunnel-id
-    follow: false
-  register: cf_marker_stat
-
-- name: Read the existing local PVE Tunnel identity
-  ansible.builtin.slurp:
-    src: /etc/digitalhouses/site-cloudflare-tunnel-id
-  become: true
-  register: cf_marker
-  no_log: true
-  when: cf_marker_stat.stat.exists
-
-- name: Confirm the local ownership record is unambiguous
-  ansible.builtin.assert:
-    that:
-      - not cf_marker_stat.stat.exists or cf_marker_stat.stat.isreg
-      - not cf_marker_stat.stat.exists or cf_marker_stat.stat.mode == '0600'
-      - >-
-        not cf_marker_stat.stat.exists or
-        (cf_matching_tunnels | length == 1 and
-         (cf_marker.content | b64decode | trim) == cf_matching_tunnels[0].id)
-    fail_msg: "Local Tunnel ownership marker disagrees with Cloudflare; manual audit required"
-
-- name: Read the existing site's Tunnel config without modifying it
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_matching_tunnels[0].id }}/configurations"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: [200, 404]
-  register: cf_tunnel_config_response
-  changed_when: false
-  no_log: true
-  when: cf_matching_tunnels | length == 1
-
-- name: Normalize previously configured ingress
-  ansible.builtin.set_fact:
-    cf_existing_config: >-
-      {{ (cf_tunnel_config_response.json.result.config | default({}))
-          if (cf_matching_tunnels | length == 1 and
-              cf_tunnel_config_response.status == 200) else {} }}
-
-- name: Select existing routes and the ownership state
-  ansible.builtin.set_fact:
-    cf_existing_ingress: "{{ cf_existing_config.ingress | default([]) }}"
-    cf_locally_owned: "{{ cf_marker_stat.stat.exists | bool }}"
-    cf_tunnel_active_elsewhere: >-
-      {{ cf_matching_tunnels | length == 1 and not cf_marker_stat.stat.exists
-         and cf_matching_tunnels[0].status in ['healthy', 'degraded'] }}
-
-# Reuse the exact existing site Tunnel even when its connector runs elsewhere.
-# DNS ownership is checked below, before any API mutation. No new connector is
-# created for an existing healthy Tunnel and no extra ingress is changed.
-- name: Require a safe fallback before editing the shared site Tunnel
-  ansible.builtin.assert:
-    that:
-      - >-
-        cf_existing_ingress | length == 0 or
-        (cf_existing_ingress[-1].service == 'http_status:404' and
-         cf_existing_ingress[-1].hostname is not defined)
-    fail_msg: "Shared site Tunnel must retain its 404 fallback"
-  when: requested_mode == 'apply'
-
-- name: Inspect canonical PVE and Quantum DNS records
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ item }}&per_page=100"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: 200
-  loop:
-    - "{{ public_hostname }}"
-    - "{{ quantum_public_hostname }}"
-  register: cf_dns_preflight
-  changed_when: false
-  no_log: true
-
-# After a Tunnel is deleted by an operator, its DNS CNAMEs may remain
-# pointed at the deleted UUID. Reclaim only the two PVE-owned hostnames.
-# Independently verify all former Tunnel IDs with Cloudflare before repointing.
-- name: Find deleted canonical site Tunnel for safe DNS recovery
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&is_deleted=true&per_page=100"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: 200
-  register: cf_deleted_site
-  changed_when: false
-  no_log: true
-  when: requested_mode == 'apply'
-
-- name: Verify deleted canonical site Tunnel lookup is complete
-  ansible.builtin.assert:
-    that:
-      - cf_deleted_site.json.success | bool
-      - cf_deleted_site.json.result_info.total_pages | default(1) | int == 1
-    fail_msg: "Cannot prove deleted canonical site Tunnel ownership"
-  when: requested_mode == 'apply'
-
-- name: Find deleted legacy PVE Tunnel for safe DNS adoption
-  ansible.builtin.uri:
-    url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ site_id }}-pve&is_deleted=true&per_page=100"
-    headers: "{{ cf_headers }}"
-    use_proxy: false
-    status_code: 200
-  register: cf_deleted_legacy_pve
-  changed_when: false
-  no_log: true
-  when: requested_mode == 'apply'
-
-- name: Verify deleted legacy Tunnel lookup is complete
-  ansible.builtin.assert:
-    that:
-      - cf_deleted_legacy_pve.json.success | bool
-      - cf_deleted_legacy_pve.json.result_info.total_pages | default(1) | int == 1
-    fail_msg: "Cannot prove deleted legacy site-pve Tunnel ownership"
-  when: requested_mode == 'apply'
-
-- name: Collect UUIDs of deleted matching legacy PVE tunnels
-  ansible.builtin.set_fact:
-    cf_deleted_legacy_pve_ids: >-
-      {{ cf_deleted_legacy_pve.json.result
-         | selectattr('name', 'equalto', site_id ~ '-pve')
-         | selectattr('deleted_at', 'defined')
-         | rejectattr('deleted_at', 'none')
-         | map(attribute='id') | list }}
-  when: requested_mode == 'apply'
-
-- name: Collect only Cloudflare-verified current or deleted site Tunnel IDs
-  ansible.builtin.set_fact:
-    cf_permitted_dns_tunnel_ids: >-
-      {{ (cf_matching_tunnels | map(attribute='id') | list)
-         + (cf_deleted_site.json.result
-            | selectattr('name', 'equalto', pve_tunnel_name)
-            | selectattr('deleted_at', 'defined')
-            | rejectattr('deleted_at', 'none')
-            | map(attribute='id') | list)
-         + cf_deleted_legacy_pve_ids }}
-  when: requested_mode == 'apply'
-
-- name: Refuse foreign, unproxied or duplicate DNS records
-  ansible.builtin.assert:
-    that:
-      - item.json.success | bool
-      - item.json.result_info.total_pages | default(1) | int == 1
-      - item.json.result | length <= 1
-      - >-
-        item.json.result | length == 0 or
-        (item.json.result[0].type == 'CNAME' and
-         item.json.result[0].proxied | bool and
-         (item.json.result[0].content | lower
-          | regex_replace('[.]cfargotunnel[.]com[.]?$', ''))
-         in cf_permitted_dns_tunnel_ids)
-    fail_msg: >-
-      Cloudflare hostname points to an unverified Tunnel. Only the current
-      canonical site Tunnel or an independently verified deleted site/site-pve
-      Tunnel is eligible for PVE/Quantum DNS recovery.
-  loop: "{{ cf_dns_preflight.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when:
-    - requested_mode == 'apply'
-    - item.item == public_hostname or quantum_requested
-  no_log: true
-
-- name: Identify current public PVE origin for audit output
-  ansible.builtin.set_fact:
-    cf_current_pve_origin: >-
-      {{ cf_existing_ingress | selectattr('hostname', 'defined')
-         | selectattr('hostname', 'equalto', public_hostname)
-         | map(attribute='service') | list }}
-
-- name: Report read-only Cloudflare state
+- name: Report create on an existing site Tunnel without touching it
   ansible.builtin.debug:
-    msg:
-      - "CLOUDFLARE_MODE={{ requested_mode }}"
-      - "TUNNEL={{ pve_tunnel_name }}"
-      - "TUNNEL_EXISTS={{ cf_matching_tunnels | length == 1 }}"
-      - "TUNNEL_STATUS={{ cf_matching_tunnels[0].status if cf_matching_tunnels | length == 1 else 'absent' }}"
-      - "TUNNEL_LOCAL_OWNER={{ cf_locally_owned }}"
-      - "TUNNEL_REUSE_EXISTING_CONNECTOR={{ cf_tunnel_active_elsewhere }}"
-      - "ORIGIN_CURRENT={{ cf_current_pve_origin }}"
-      - "ORIGIN_DESIRED={{ desired_origin }}"
-      - "DNS_PVE_TARGET={{ (cf_dns_preflight.results[0].json.result | first | default({})).content | default('none') }}"
-      - "DNS_QUANTUM_TARGET={{ (cf_dns_preflight.results[1].json.result | first | default({})).content | default('none') }}"
+    msg: >-
+      CF_ACTION=CREATE_EXISTING_UNCHANGED;
+      TUNNEL={{ pve_tunnel_name }};
+      STATUS={{ cf_matching_tunnels[0].status }}
+  when:
+    - requested_mode == 'create'
+    - cf_matching_tunnels | length == 1
 
-- name: Commission or reconcile only the owned PVE Tunnel
+- name: Prepare a new or explicitly recreated site Tunnel
   ansible.builtin.include_tasks:
     file: pve-cloudflare-apply.yml
     apply:
       become: true
-  when: requested_mode == 'apply'
+  when:
+    - requested_mode == 'recreate' or cf_matching_tunnels | length == 0

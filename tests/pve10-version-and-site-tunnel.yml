@@ -36,7 +36,7 @@
           - >-
             lookup('ansible.builtin.file', root ~ '/playbooks/media-webmin-cloudflare.yml')
             is search('cf_tunnel_name:.*site_id')
-          - "'site-cloudflare-tunnel-id' in cf_shared_src"
+          - "'site-cloudflare-tunnel-id' in lookup('ansible.builtin.file', root ~ '/tasks/pve-cloudflare-apply.yml')"
           - "'requested_agent_update' in agent_src"
           - "'requested_quantum_update' in quantum_src"
           - "'state: latest' in cf_pkg_src"
