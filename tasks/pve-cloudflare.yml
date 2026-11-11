@@ -216,28 +216,18 @@
       {{ cf_matching_tunnels | length == 1 and not cf_marker_stat.stat.exists
          and cf_matching_tunnels[0].status in ['healthy', 'degraded'] }}
 
-- name: Refuse to seize an active tunnel from another PVE connector
-  ansible.builtin.assert:
-    that:
-      - not cf_tunnel_active_elsewhere
-    fail_msg: >-
-      CLOUDFLARE_OWNERSHIP_CONFLICT: the existing site Tunnel has an active
-      connector, but this Runner has no ownership marker. It may still serve
-      another PVE. Do not recreate, rotate or repoint it automatically.
-  when: requested_mode == 'apply'
-
-- name: Refuse taking over a foreign route from an inactive Tunnel
+# Reuse the exact existing site Tunnel even when its connector runs elsewhere.
+# DNS ownership is checked below, before any API mutation. No new connector is
+# created for an existing healthy Tunnel and no extra ingress is changed.
+- name: Validate existing Tunnel has site-owned PVE hostname
   ansible.builtin.assert:
     that:
       - >-
-        (cf_existing_ingress | selectattr('hostname', 'defined')
-         | rejectattr('hostname', 'in', [public_hostname, quantum_public_hostname])
-         | list | length == 0)
+        cf_existing_ingress | selectattr('hostname', 'defined')
+        | selectattr('hostname', 'equalto', public_hostname) | list | length == 1
       - >-
-        cf_existing_ingress | length == 0 or
-        (cf_existing_ingress[-1].service == 'http_status:404'
-         and cf_existing_ingress[-1].hostname is not defined)
-    fail_msg: "Unowned Tunnel has foreign routes or no safe fallback"
+        cf_existing_ingress[-1].service == 'http_status:404'
+    fail_msg: "Existing Tunnel has no canonical PVE route or fallback; refusing takeover"
   when:
     - requested_mode == 'apply'
     - cf_matching_tunnels | length == 1
@@ -292,7 +282,7 @@
       - "TUNNEL_EXISTS={{ cf_matching_tunnels | length == 1 }}"
       - "TUNNEL_STATUS={{ cf_matching_tunnels[0].status if cf_matching_tunnels | length == 1 else 'absent' }}"
       - "TUNNEL_LOCAL_OWNER={{ cf_locally_owned }}"
-      - "TUNNEL_ACTIVE_ELSEWHERE={{ cf_tunnel_active_elsewhere }}"
+      - "TUNNEL_REUSE_EXISTING_CONNECTOR={{ cf_tunnel_active_elsewhere }}"
       - "ORIGIN_CURRENT={{ cf_current_pve_origin }}"
       - "ORIGIN_DESIRED={{ desired_origin }}"
       - "DNS_PVE_TARGET={{ (cf_dns_preflight.results[0].json.result | first | default({})).content | default('none') }}"

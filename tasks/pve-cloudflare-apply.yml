@@ -1,6 +1,6 @@
 ---
 # Executed with become:true only for an explicitly chosen CF Apply.
-# The owner marker is created only on this Runner; never adopt active foreign connectors.
+# Existing site Tunnel and its healthy connector are reused, not recreated.
 
 - name: Verify File Browser local health before requesting public ingress
   ansible.builtin.uri:
@@ -77,17 +77,34 @@
       {{ cf_existing_ingress | selectattr('hostname', 'defined')
          | selectattr('hostname', 'equalto', quantum_public_hostname) | list }}
 
-- name: Prepare strict TLS PVE and optional private Quantum routes
+- name: Read the current canonical PVE route for an origin-only change
   ansible.builtin.set_fact:
-    cf_pve_route:
-      hostname: "{{ public_hostname }}"
-      service: "{{ desired_origin }}"
-      originRequest:
-        caPool: "{{ expected_ca_pool }}"
-        noTLSVerify: false
-    cf_quantum_route:
-      hostname: "{{ quantum_public_hostname }}"
-      service: "http://{{ pve.ipv4 }}:8090"
+    cf_previous_pve: >-
+      {{ cf_existing_ingress | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', public_hostname) | list }}
+
+- name: Require existing origin policy to remain secure
+  ansible.builtin.assert:
+    that:
+      - >-
+        cf_previous_pve | length == 0 or
+        (cf_previous_pve[0].originRequest.noTLSVerify | default(false)) is sameas false
+      - >-
+        cf_previous_pve | length == 0 or
+        cf_previous_pve[0].originRequest.caPool | default('') == expected_ca_pool
+    fail_msg: "Existing PVE TLS policy differs; cannot safely repoint it"
+
+- name: Prepare PVE origin update preserving its existing TLS options
+  ansible.builtin.set_fact:
+    cf_pve_route: >-
+      {{ (cf_previous_pve[0] if cf_previous_pve | length == 1 else
+          {'hostname': public_hostname,
+           'originRequest': {'caPool': expected_ca_pool, 'noTLSVerify': false}})
+          | combine({'service': desired_origin}) }}
+    cf_quantum_route: >-
+      {{ (cf_previous_quantum[0] if cf_previous_quantum | length == 1
+          else {'hostname': quantum_public_hostname})
+         | combine({'service': 'http://' ~ pve.ipv4 ~ ':8090'}) }}
 
 - name: Derive exact desired ingress with existing non-PVE routes untouched
   ansible.builtin.set_fact:
@@ -151,6 +168,12 @@
       - cf_committed_config.json.result.config.ingress == cf_desired_ingress
     fail_msg: "Cloudflare route readback differs; connector not started"
 
+- name: Decide whether this Runner must host the connector
+  ansible.builtin.set_fact:
+    cf_start_connector: >-
+      {{ cf_matching_tunnels | length == 0 or cf_locally_owned
+         or cf_matching_tunnels[0].status not in ['healthy', 'degraded'] }}
+
 - name: Obtain the revocable Cloudflare token for only this Tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/token"
@@ -160,6 +183,7 @@
   register: cf_pve_token
   changed_when: false
   no_log: true
+  when: cf_start_connector
 
 - name: Install Cloudflare package-signing key
   ansible.builtin.get_url:
@@ -168,6 +192,7 @@
     owner: root
     group: root
     mode: '0644'
+  when: cf_start_connector
 
 - name: Install the official signed cloudflared APT source
   ansible.builtin.copy:
@@ -177,12 +202,14 @@
     group: root
     mode: '0644'
   register: cf_pve_apt_source
+  when: cf_start_connector
 
 - name: Install cloudflared on the site Runner
   ansible.builtin.apt:
     name: cloudflared
     state: present
     update_cache: "{{ cf_pve_apt_source.changed }}"
+  when: cf_start_connector
 
 - name: Secure the local dedicated Tunnel directory
   ansible.builtin.file:
@@ -191,6 +218,7 @@
     owner: root
     group: root
     mode: '0700'
+  when: cf_start_connector
 
 - name: Copy the public PVE trust CA for strict Cloudflare origin TLS
   ansible.builtin.copy:
@@ -201,6 +229,7 @@
     group: root
     mode: '0644'
   register: cf_pve_ca
+  when: cf_start_connector
 
 - name: Store the dedicated PVE Tunnel token without exposing it in logs
   ansible.builtin.copy:
@@ -211,6 +240,7 @@
     mode: '0600'
   register: cf_pve_token_file
   no_log: true
+  when: cf_start_connector
 
 - name: Mark exact Tunnel ownership locally for safe later runs
   ansible.builtin.copy:
@@ -219,6 +249,7 @@
     owner: root
     group: root
     mode: '0600'
+  when: cf_start_connector
 
 - name: Install a separate PVE connector systemd service on Runner
   ansible.builtin.copy:
@@ -241,6 +272,7 @@
       [Install]
       WantedBy=multi-user.target
   register: cf_pve_unit
+  when: cf_start_connector
 
 - name: Start or preserve only the dedicated PVE Cloudflare connector
   ansible.builtin.systemd_service:
@@ -248,6 +280,7 @@
     daemon_reload: "{{ cf_pve_unit.changed }}"
     enabled: true
     state: "{{ 'restarted' if cf_pve_unit.changed or cf_pve_token_file.changed or cf_pve_ca.changed else 'started' }}"
+  when: cf_start_connector
 
 - name: Require Cloudflare Tunnel to become healthy
   ansible.builtin.uri:
@@ -327,9 +360,10 @@
 - name: Report safe Cloudflare commissioning
   ansible.builtin.debug:
     msg:
-      - "CF_PVE=READY https://{{ public_hostname }}/"
+      - "CF_PVE=ROUTES_CONFIGURED https://{{ public_hostname }}/"
       - "CF_TUNNEL={{ pve_tunnel_name }}"
       - "CF_TUNNEL_ID={{ cf_tunnel_id }}"
       - "CF_ORIGIN={{ desired_origin }}"
       - "CF_QUANTUM={{ 'READY' if quantum_requested else 'NOT_REQUESTED' }}"
-      - "CF_ACCESS=RESTRICTED; TLS=STRICT; FOREIGN_ROUTES=PRESERVED"
+      - "CF_ACCESS=RESTRICTED; FOREIGN_ROUTES=PRESERVED"
+      - "CF_EXTERNAL_ORIGIN_TLS={{ 'CHECK_EXISTING_CONNECTOR_CA' if not cf_start_connector else 'LOCAL_CA_CONFIGURED' }}"

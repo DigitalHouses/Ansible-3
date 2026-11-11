@@ -87,6 +87,13 @@
       WantedBy=multi-user.target
   register: quantum_unit
 
+- name: Retire the old FileBrowser service only after preparing replacement
+  ansible.builtin.systemd_service:
+    name: filebrowser.service
+    enabled: false
+    state: stopped
+  when: quantum_replace_legacy | default(false) | bool
+
 - name: Enable and start Quantum
   ansible.builtin.systemd_service:
     name: digitalhouses-filebrowser.service
