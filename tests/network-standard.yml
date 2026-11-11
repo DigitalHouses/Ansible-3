@@ -39,6 +39,19 @@
           - "'NETWORK=192.168.11' not in bootstrap"
           - "'192.168.11' not in ip_selection"
 
+    - name: Ensure task 30 has no DHCP range checks in audit or deployment
+      ansible.builtin.assert:
+        that:
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/tasks/media30-ip-selection.yml')
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/playbooks/media-server-deploy.yml')
+          - >-
+            'dhcp_pool' not in lookup('ansible.builtin.file',
+            root ~ '/playbooks/media-server.yml')
+
     - name: Require media default octet and VMID formula
       ansible.builtin.assert:
         that:

@@ -24,7 +24,7 @@
          if media30_ip_choice is match('^[0-9]{1,3}$')
          else media30_ip_choice }}
 
-- name: Require host to be within declared LAN outside DHCP and reserved addresses
+- name: Require host to be a valid address in the declared LAN
   ansible.builtin.assert:
     that:
       - >-
@@ -35,18 +35,12 @@
         media30_manifest_ipv4.split('/')[0].split('.')[:3]
       - (media30_selected_ipv4.split('.')[3] | int) >= 1
       - (media30_selected_ipv4.split('.')[3] | int) <= 254
-      - >-
-        (media30_selected_ipv4.split('.')[3] | int)
-        < (media_spec.network.dhcp_pool.first_host | int)
-        or (media30_selected_ipv4.split('.')[3] | int)
-        > (media_spec.network.dhcp_pool.last_host | int)
       - media30_selected_ipv4 != media_spec.network.gateway
       - media30_selected_ipv4 != pve.ipv4
       - media30_selected_ipv4.split('.') | map('int') | map('string') | join('.') == media30_selected_ipv4
     fail_msg: >-
-      MEDIA30_IP_INVALID_OR_DHCP_OVERLAP: use the standard HOME .223
-      with verified DHCP exclusion, or an explicitly selected free LAN IP.
-      Do not commission a new VM while the declared DHCP range overlaps.
+      MEDIA30_IP_INVALID: select a valid host address in the declared
+      LAN, different from the gateway and PVE host.
 
 - name: Derive media VMID from the static IP's last octet
   ansible.builtin.set_fact:

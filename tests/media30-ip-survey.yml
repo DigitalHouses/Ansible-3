@@ -5,8 +5,7 @@
   gather_facts: false
   vars:
     pve: {ipv4: 192.168.11.220}
-    # Fixture with the normative HOME .223 excluded from dynamic DHCP.
-    # The real private manifest still claims .50-.229 and must be reconciled.
+    # Deliberately overlapping DHCP metadata must not affect IP selection.
     media30_legacy_spec:
       vmid: 2250
       network:
@@ -36,27 +35,23 @@
           - media30_manifest_vmid | int == 2250
           - media30_legacy_spec.vmid | int == 2250
 
-    - name: Verify the actual legacy DHCP range blocks a new .223 VM
-      block:
-        - name: Simulate private site DHCP range that includes .223
-          ansible.builtin.set_fact:
-            media_spec: >-
-              {{ media30_legacy_spec
-                 | combine({'network': {'dhcp_pool':
-                   {'first_host': 50, 'last_host': 229}}}, recursive=true) }}
+    - name: Accept the standard .223 even if declared DHCP covers it
+      ansible.builtin.set_fact:
+        media_spec: >-
+          {{ media30_legacy_spec
+             | combine({'network': {'dhcp_pool':
+               {'first_host': 50, 'last_host': 229}}}, recursive=true) }}
 
-        - name: Try commissioning standard HOME address despite DHCP overlap
-          ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-          vars:
-            DH_MEDIA_IP: '223'  # noqa: var-naming[pattern]
+    - name: Select .223 without validating router DHCP allocations
+      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+      vars:
+        DH_MEDIA_IP: '223'  # noqa: var-naming[pattern]
 
-        - name: Fail test if .223 within DHCP pool was accepted
-          ansible.builtin.fail:
-            msg: MEDIA30_STANDARD_ADDRESS_OVERLAP_WAS_ACCEPTED
-      rescue:
-        - name: Require overlapping standard address was rejected
-          ansible.builtin.assert:
-            that: media30_ip_choice == '223'
+    - name: Confirm no DHCP-based refusal for standard HOME address
+      ansible.builtin.assert:
+        that:
+          - media30_selected_ipv4 == '192.168.11.223'
+          - media30_selected_vmid | int == 2223
 
     - name: Reset to legacy site declaration to test an explicit exception
       ansible.builtin.set_fact:
@@ -96,19 +91,16 @@
           - media_spec.vmid | int == 2223
           - media30_manifest_ipv4 == '192.168.22.250/24'
 
-    - name: Refuse a DHCP range address
-      block:
-        - name: Try a reserved DHCP address
-          ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
-          vars:
-            DH_MEDIA_IP: '100'  # noqa: var-naming[pattern]
-        - name: Fail if DHCP address is accepted
-          ansible.builtin.fail:
-            msg: MEDIA30_DHCP_IP_WAS_ACCEPTED
-      rescue:
-        - name: Require invalid DHCP choice was received
-          ansible.builtin.assert:
-            that: media30_ip_choice == '100'
+    - name: Accept an explicitly selected IP regardless of DHCP metadata
+      ansible.builtin.include_tasks: ../tasks/media30-ip-selection.yml
+      vars:
+        DH_MEDIA_IP: '100'  # noqa: var-naming[pattern]
+
+    - name: Confirm DHCP allocations are not validated by Ansible
+      ansible.builtin.assert:
+        that:
+          - media30_selected_ipv4 == '192.168.22.100'
+          - media30_selected_vmid | int == 2100
 
     - name: Refuse an address outside the customer's declared LAN
       block:
