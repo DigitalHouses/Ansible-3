@@ -19,6 +19,7 @@
           - cf_playbook | length == 1
           - cf_playbook[0].vars.request_action is search("default\('audit'")
           - cf_playbook[0].vars.webmin_hostname is search("-pve-mediaserver-admin")
+          - cf_playbook[0].vars.cf_tunnel_name is search('site_id')
           - >-
             cat.tasks | selectattr('name', 'equalto', '32-Cloudflare Webmin')
             | selectattr('playbook', 'equalto', 'playbooks/media-webmin-cloudflare.yml')
@@ -59,7 +60,7 @@
           - cf_proof.retries | int >= 1
           - cf_access['ansible.builtin.assert'].fail_msg == 'MEDIA_WEBMIN_CF_ACCESS_POLICY_IS_NOT_RESTRICTED'
           - "'cf_tunnel_active_elsewhere' in pve_cf_source"
-          - "'pve-cloudflare-tunnel-id' in pve_cf_source"
+          - "'site-cloudflare-tunnel-id' in pve_cf_source"
           - "'cf_foreign_ingress' in pve_cf_apply_source"
           - "'cf_desired_ingress' in pve_cf_apply_source"
           - "'cf_previous_pve[0].originRequest.noTLSVerify' in pve_cf_apply_source"

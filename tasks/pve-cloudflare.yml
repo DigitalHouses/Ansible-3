@@ -1,8 +1,7 @@
 ---
-# Idempotent, site-scoped PVE Tunnel commissioning.
-# Existing connector with no Runner ownership marker is NEVER taken over while
-# active: the site name can be shared with an older physical server.
-# No tunnel/DNS/Access deletion, no token rotation, no foreign route modification.
+# PVE and Quantum ingress on the one canonical owner-object Tunnel.
+# Keep all other site routes, Access, connector, and Tunnel ID unchanged.
+# No deletion, token rotation or automatic legacy Tunnel migration.
 
 - name: Require site and Cloudflare credentials
   ansible.builtin.assert:
@@ -141,7 +140,7 @@
   loop: "{{ cf_access_policies.results }}"
   no_log: true
 
-- name: Read the exactly named dedicated PVE Tunnel
+- name: Read exactly the canonical owner-object site Tunnel
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ pve_tunnel_name }}&per_page=50"
     headers: "{{ cf_headers }}"
@@ -157,7 +156,7 @@
       {{ cf_tunnels.json.result | selectattr('name', 'equalto', pve_tunnel_name)
          | selectattr('deleted_at', 'none') | list }}
 
-- name: Refuse ambiguous or non-remotely-managed tunnels
+- name: Refuse ambiguous or non-remotely-managed site tunnels
   ansible.builtin.assert:
     that:
       - cf_tunnels.json.success | bool
@@ -167,13 +166,13 @@
 
 - name: Inspect the local PVE Tunnel ownership marker
   ansible.builtin.stat:
-    path: /etc/digitalhouses/pve-cloudflare-tunnel-id
+    path: /etc/digitalhouses/site-cloudflare-tunnel-id
     follow: false
   register: cf_marker_stat
 
 - name: Read the existing local PVE Tunnel identity
   ansible.builtin.slurp:
-    src: /etc/digitalhouses/pve-cloudflare-tunnel-id
+    src: /etc/digitalhouses/site-cloudflare-tunnel-id
   become: true
   register: cf_marker
   no_log: true
@@ -219,19 +218,15 @@
 # Reuse the exact existing site Tunnel even when its connector runs elsewhere.
 # DNS ownership is checked below, before any API mutation. No new connector is
 # created for an existing healthy Tunnel and no extra ingress is changed.
-- name: Validate existing Tunnel has site-owned PVE hostname
+- name: Require a safe fallback before editing the shared site Tunnel
   ansible.builtin.assert:
     that:
       - >-
-        cf_existing_ingress | selectattr('hostname', 'defined')
-        | selectattr('hostname', 'equalto', public_hostname) | list | length == 1
-      - >-
-        cf_existing_ingress[-1].service == 'http_status:404'
-    fail_msg: "Existing Tunnel has no canonical PVE route or fallback; refusing takeover"
-  when:
-    - requested_mode == 'apply'
-    - cf_matching_tunnels | length == 1
-    - not cf_locally_owned
+        cf_existing_ingress | length == 0 or
+        (cf_existing_ingress[-1].service == 'http_status:404' and
+         cf_existing_ingress[-1].hostname is not defined)
+    fail_msg: "Shared site Tunnel must retain its 404 fallback"
+  when: requested_mode == 'apply'
 
 - name: Inspect canonical PVE and Quantum DNS records
   ansible.builtin.uri:
@@ -289,16 +284,9 @@
       - "DNS_PVE_TARGET={{ (cf_dns_preflight.results[0].json.result | first | default({})).content | default('none') }}"
       - "DNS_QUANTUM_TARGET={{ (cf_dns_preflight.results[1].json.result | first | default({})).content | default('none') }}"
 
-- name: Audit all site and legacy tunnels for owner-object consolidation
-  ansible.builtin.include_tasks: cloudflare-site-consolidation-audit.yml
-  when: requested_mode == 'audit'
-
-- name: Refuse legacy service-tunnel changes until shared cutover is ready
-  ansible.builtin.assert:
-    that:
-      - false
-    fail_msg: >-
-      SITE_CF_CONSOLIDATION_REQUIRED: use the single {{ site_id }}
-      Tunnel, not {{ site_id }}-pve. Run Cloudflare audit to inventory all
-      existing routes; no service tunnel will be created or modified.
+- name: Commission or reconcile only the owned PVE Tunnel
+  ansible.builtin.include_tasks:
+    file: pve-cloudflare-apply.yml
+    apply:
+      become: true
   when: requested_mode == 'apply'

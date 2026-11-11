@@ -21,7 +21,7 @@
   changed_when: false
   when: quantum_requested
 
-- name: Create a remotely managed PVE Tunnel only when missing
+- name: Create the canonical remotely managed site Tunnel only when missing
   ansible.builtin.uri:
     url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel"
     method: POST
@@ -48,7 +48,7 @@
   ansible.builtin.assert:
     that:
       - cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
-    fail_msg: "Cloudflare did not return a valid dedicated PVE Tunnel UUID"
+    fail_msg: "Cloudflare did not return a valid site Tunnel UUID"
 
 - name: Require unique existing PVE and Quantum routes and a 404 fallback
   ansible.builtin.assert:
@@ -231,9 +231,9 @@
   register: cf_pve_ca
   when: cf_start_connector
 
-- name: Store the dedicated PVE Tunnel token without exposing it in logs
+- name: Store the site Tunnel token without exposing it in logs
   ansible.builtin.copy:
-    dest: /etc/cloudflared/pve-token
+    dest: /etc/cloudflared/site-token
     content: "{{ cf_pve_token.json.result }}\n"
     owner: root
     group: root
@@ -242,30 +242,30 @@
   no_log: true
   when: cf_start_connector
 
-- name: Mark exact Tunnel ownership locally for safe later runs
+- name: Mark exact site Tunnel ownership locally for safe later runs
   ansible.builtin.copy:
-    dest: /etc/digitalhouses/pve-cloudflare-tunnel-id
+    dest: /etc/digitalhouses/site-cloudflare-tunnel-id
     content: "{{ cf_tunnel_id }}\n"
     owner: root
     group: root
     mode: '0600'
   when: cf_start_connector
 
-- name: Install a separate PVE connector systemd service on Runner
+- name: Install the site connector systemd service on Runner
   ansible.builtin.copy:
-    dest: /etc/systemd/system/digitalhouses-pve-cloudflared.service
+    dest: /etc/systemd/system/digitalhouses-site-cloudflared.service
     owner: root
     group: root
     mode: '0644'
     content: |
       [Unit]
-      Description=DigitalHouses site-owned PVE Cloudflare Tunnel
+      Description=DigitalHouses owner-object Cloudflare Tunnel
       Wants=network-online.target
       After=network-online.target
 
       [Service]
       Type=simple
-      ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/pve-token
+      ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/site-token
       Restart=always
       RestartSec=5
 
@@ -274,9 +274,9 @@
   register: cf_pve_unit
   when: cf_start_connector
 
-- name: Start or preserve only the dedicated PVE Cloudflare connector
+- name: Start or preserve only the site Cloudflare connector
   ansible.builtin.systemd_service:
-    name: digitalhouses-pve-cloudflared.service
+    name: digitalhouses-site-cloudflared.service
     daemon_reload: "{{ cf_pve_unit.changed }}"
     enabled: true
     state: "{{ 'restarted' if cf_pve_unit.changed or cf_pve_token_file.changed or cf_pve_ca.changed else 'started' }}"

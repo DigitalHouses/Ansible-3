@@ -24,18 +24,17 @@ tasks:
       - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "ИБП SNMP v3 — пароль шифрования (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Интеграция DEV с Semaphore; публичный Cloudflare — только через общий Tunnel объекта"
+    description: "Подключение DEV к Semaphore; доступ Cloudflare через единый туннель объекта"
     survey_vars:
       - name: DH_SEMAPHORE_CF_ACTION
-        title: "Cloudflare — Semaphore через общий Tunnel объекта"
+        title: "Cloudflare — Semaphore (общий туннель объекта)"
         type: enum
         target: ""
         required: true
         default_value: skip
         values:
-          - {name: "Опубликовать через общий Tunnel (после миграции)", value: apply}
-          - {name: "Проверить текущий доступ без изменений", value: audit}
           - {name: "Не изменять Cloudflare", value: skip}
+          - {name: "Проверить маршрут и DNS без изменений", value: audit}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
     description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, PVE Agent, File Browser Quantum и Cloudflare"
@@ -67,6 +66,33 @@ tasks:
         values:
           - {name: "Пропустить общее обновление", value: "no"}
           - {name: "Выполнить обновление без перезагрузки", value: "yes"}
+      - name: DH_PVE_CF_UPDATE
+        title: "cloudflared — обновление установленной версии"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Не обновлять", value: "no"}
+          - {name: "Обновить APT-пакет на работающем коннекторе PVE/Runner", value: "yes"}
+      - name: DH_PVE_QUANTUM_UPDATE
+        title: "File Browser Quantum — обновление версии"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Сохранить установленную версию", value: "no"}
+          - {name: "Обновить до закреплённой версии Ansible", value: "yes"}
+      - name: DH_PVE_AGENT_UPDATE
+        title: "DH PVE Agent — обновление версии"
+        type: enum
+        target: ""
+        required: true
+        default_value: "no"
+        values:
+          - {name: "Сохранить установленную версию", value: "no"}
+          - {name: "Обновить до закреплённого релиза Ansible", value: "yes"}
       - name: DH_PVE_NETWORK_ACTION
         title: "IP-адрес управления PVE"
         type: enum
@@ -172,7 +198,7 @@ tasks:
           - {name: "Сменить пароль (требуется защищённый запрос на ZFS)", value: apply}
   - name: "32-Cloudflare Webmin"
     playbook: playbooks/media-webmin-cloudflare.yml
-    description: "Защищённая публикация Webmin медиасервера через существующий PVE Tunnel и Cloudflare Access"
+    description: "Защищённая публикация Webmin через единый Cloudflare Tunnel объекта и Access"
     survey_vars:
       - name: DH_MEDIA_WEBMIN_CF_ACTION
         title: "Cloudflare — доступ к Webmin"

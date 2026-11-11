@@ -27,6 +27,7 @@
   ansible.builtin.set_fact:
     agent_upgrade_required: >-
       {{ not agent_build_stat.stat.exists or
+         (requested_agent_update | default('no')) == 'yes' and
          agent_current_version is version('0.5.75', '<') }}
 
 - name: Check for an existing local PVE Agent configuration

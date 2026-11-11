@@ -18,6 +18,9 @@
     ip_action: "{{ DH_PVE_NETWORK_ACTION | default('keep', true) }}"
     new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
     quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
+    cf_update: "{{ DH_PVE_CF_UPDATE | default('no', true) }}"
+    quantum_update: "{{ DH_PVE_QUANTUM_UPDATE | default('no', true) }}"
+    agent_update: "{{ DH_PVE_AGENT_UPDATE | default('no', true) }}"
     ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
     ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
     ups_host: "{{ DH_PVE_UPS_IP | default('', true) }}"
@@ -44,6 +47,9 @@
           - upgrade_mode in ['no', 'yes']
           - ip_action in ['keep', 'migrate']
           - quantum_action in ['install', 'skip']
+          - cf_update in ['no', 'yes']
+          - quantum_update in ['no', 'yes']
+          - agent_update in ['no', 'yes']
           - ip_action != 'migrate' or setup_mode == 'apply'
           - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
           - ups_mode in ['none', 'usb', 'snmp_v2c', 'snmp_v3']
@@ -268,6 +274,9 @@
         requested_ip_action: "{{ ip_action }}"
         requested_new_ipv4: "{{ new_ipv4 }}"
         requested_quantum_action: "{{ quantum_action }}"
+        requested_cf_update: "{{ cf_update }}"
+        requested_quantum_update: "{{ quantum_update }}"
+        requested_agent_update: "{{ agent_update }}"
         original_pve_ipv4: "{{ pve.ipv4 }}"
         recorded_pve: "{{ pve }}"
         requested_ups_mode: "{{ ups_mode }}"
@@ -363,6 +372,14 @@
       when:
         - requested_mode == 'apply'
         - requested_quantum_action == 'install'
+    - name: Update an installed active PVE-host cloudflared package if requested
+      ansible.builtin.include_tasks: ../tasks/cloudflared-package-upgrade.yml
+      vars:
+        cf_package_host_label: PVE
+      when:
+        - requested_mode == 'apply'
+        - requested_cf_update == 'yes'
+
     - name: Report intentionally separate steps
       ansible.builtin.debug:
         msg:
@@ -388,7 +405,7 @@
     cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     cf_api: https://api.cloudflare.com/client/v4
     cf_zone_name: digitalhouses.vip
-    pve_tunnel_name: "{{ site_id }}-pve"
+    pve_tunnel_name: "{{ site_id }}"
     public_hostname: "{{ site_id ~ '-pve.' ~ cf_zone_name }}"
     quantum_public_hostname: "{{ site_id ~ '-pve-filebrowser.' ~ cf_zone_name }}"
     desired_origin: "{{ 'https://' ~ pve.ipv4 ~ ':8006' }}"
@@ -398,6 +415,17 @@
       Authorization: "Bearer {{ cf_token }}"
       Accept: application/json
   tasks:
+    - name: Update an installed active Runner cloudflared package if requested
+      ansible.builtin.include_tasks:
+        file: ../tasks/cloudflared-package-upgrade.yml
+        apply:
+          become: true
+      vars:
+        cf_package_host_label: Runner
+      when:
+        - (DH_PVE_MODE | default('audit', true)) == 'apply'
+        - (DH_PVE_CF_UPDATE | default('no', true)) == 'yes'
+
     - name: Validate the PVE Cloudflare action
       ansible.builtin.assert:
         that: requested_mode in ['skip', 'audit', 'apply']

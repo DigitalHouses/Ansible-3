@@ -47,6 +47,11 @@
             enabled: true
   register: quantum_config_changed
 
+- name: Inspect managed Quantum binary before optional version update
+  ansible.builtin.stat:
+    path: /usr/local/bin/digitalhouses-filebrowser
+  register: quantum_managed_binary
+
 - name: Download pinned stable Quantum binary with upstream SHA256
   ansible.builtin.get_url:
     url: https://github.com/gtsteffaniak/filebrowser/releases/download/v2.0.2-stable/linux-amd64-filebrowser
@@ -56,6 +61,9 @@
     group: root
     mode: '0755'
   register: quantum_binary
+  when:
+    - not quantum_managed_binary.stat.exists or
+      (requested_quantum_update | default('no')) == 'yes'
 
 - name: Install root-only LAN Quantum service
   ansible.builtin.copy:
@@ -99,7 +107,7 @@
     name: digitalhouses-filebrowser.service
     daemon_reload: "{{ quantum_unit.changed }}"
     enabled: true
-    state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or quantum_binary.changed else 'started' }}"
+    state: "{{ 'restarted' if quantum_unit.changed or quantum_config_changed.changed or (quantum_binary.changed | default(false)) else 'started' }}"
 
 - name: Verify the Quantum listener is available on the management address
   ansible.builtin.wait_for:

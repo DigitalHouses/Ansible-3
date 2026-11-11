@@ -1,500 +1,106 @@
 ---
-# Dedicated Cloudflare Tunnel on the Semaphore Runner; native Ansible only.
-# Cloudflare Access wildcard must be proven restrictive before public DNS.
-- name: Require existing CF credential and site-owned address
+# Task 08 is solely the DEV integration; Cloudflare is read-only here.
+# A site has one Tunnel named owner-object, never a Semaphore-only Tunnel.
+- name: Require Cloudflare audit mode and a configured credential
   ansible.builtin.assert:
     that:
+      - sem_cf_action == 'audit'
       - sem_cf_token | length > 0
-      - dev_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-      - sem_cf_hostname == dev_site_id ~ '-pve-semaphore.digitalhouses.vip'
-    fail_msg: "Task 08: configure Cloudflare credential in task 05 before publishing Semaphore"
+      - sem_cf_tunnel_name == dev_site_id
+    fail_msg: "Task 08 Cloudflare supports read-only audit on the site Tunnel"
   no_log: true
 
-- name: Confirm local Semaphore HTTP origin responds before publishing Cloudflare
+- name: Check local Semaphore HTTP is healthy before Cloudflare audit
   ansible.builtin.uri:
     url: http://127.0.0.1/api/ping
     use_proxy: false
     status_code: 200
     return_content: true
-  register: sem_cf_origin
+  register: sem_origin
   changed_when: false
 
-- name: Require a healthy native HTTP port 80 origin
+- name: Require a healthy local Semaphore origin
   ansible.builtin.assert:
-    that:
-      - sem_cf_origin.content | trim == 'pong'
-    fail_msg: "Semaphore HTTP origin on 127.0.0.1:80 is not healthy"
+    that: sem_origin.content | trim == 'pong'
+    fail_msg: "Semaphore HTTP origin is unavailable on local port 80"
 
-- name: Resolve Cloudflare DNS zone and account from verified token
+- name: Read the exact Cloudflare account zone
   ansible.builtin.uri:
     url: "{{ sem_cf_api }}/zones?name=digitalhouses.vip&per_page=50"
     headers: "{{ sem_cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: sem_cf_zones
+  register: sem_zone
   changed_when: false
   no_log: true
 
-- name: Select the unique managed Cloudflare zone
+- name: Require the canonical Cloudflare zone to be accessible
   ansible.builtin.set_fact:
-    sem_cf_exact_zones: "{{ sem_cf_zones.json.result | selectattr('name', 'equalto', 'digitalhouses.vip') | list }}"
+    sem_exact_zones: "{{ sem_zone.json.result | selectattr('name', 'equalto', 'digitalhouses.vip') | list }}"
 
-- name: Refuse ambiguous Cloudflare zone ownership
+- name: Refuse an ambiguous Cloudflare account zone
   ansible.builtin.assert:
     that:
-      - sem_cf_zones.json.success | bool
-      - sem_cf_exact_zones | length == 1
-    fail_msg: "Cloudflare zone digitalhouses.vip is not uniquely accessible"
+      - sem_zone.json.success | bool
+      - sem_exact_zones | length == 1
 
-- name: Remember site-owned Cloudflare identifiers
-  ansible.builtin.set_fact:
-    sem_cf_zone_id: "{{ sem_cf_exact_zones[0].id }}"
-    sem_cf_account_id: "{{ sem_cf_exact_zones[0].account.id }}"
-
-- name: Read existing Cloudflare Access self-hosted policies
+- name: Read the one owner-object site Tunnel
   ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/access/apps?per_page=100"
+    url: "{{ sem_cf_api }}/accounts/{{ sem_exact_zones[0].account.id }}/cfd_tunnel?name={{ sem_cf_tunnel_name }}&per_page=50"
     headers: "{{ sem_cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: sem_cf_access_apps
+  register: sem_site_tunnels
   changed_when: false
   no_log: true
 
-- name: Select exact or wildcard Access protection
+- name: Select exactly the shared site Tunnel
   ansible.builtin.set_fact:
-    sem_cf_access_exact: >-
-      {{ sem_cf_access_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
-         | selectattr('domain', 'defined')
-         | selectattr('domain', 'equalto', sem_cf_hostname) | list }}
-    sem_cf_access_wildcard: >-
-      {{ sem_cf_access_apps.json.result | selectattr('type', 'equalto', 'self_hosted')
-         | selectattr('domain', 'defined')
-         | selectattr('domain', 'equalto', '*.digitalhouses.vip') | list }}
-
-- name: Require unique pre-existing Access application protecting Semaphore
-  ansible.builtin.assert:
-    that:
-      - sem_cf_access_apps.json.success | bool
-      - sem_cf_access_apps.json.result_info.total_pages | default(1) | int == 1
-      - sem_cf_access_exact | length <= 1
-      - sem_cf_access_wildcard | length <= 1
-      - sem_cf_access_exact | length == 1 or sem_cf_access_wildcard | length == 1
-    fail_msg: "No unique Access protection for Semaphore; refusing public DNS"
-
-- name: Choose the most specific existing Access application
-  ansible.builtin.set_fact:
-    sem_cf_access_app: >-
-      {{ (sem_cf_access_exact if sem_cf_access_exact | length == 1 else sem_cf_access_wildcard) | first }}
-
-- name: Read existing Access app policies without logging identities
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/access/apps/{{ sem_cf_access_app.id }}/policies?per_page=100"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_access_policies
-  changed_when: false
-  no_log: true
-
-- name: Refuse bypass and anonymous Access allowances
-  ansible.builtin.assert:
-    that:
-      - sem_cf_access_policies.json.success | bool
-      - sem_cf_access_policies.json.result_info.total_pages | default(1) | int == 1
-      - sem_cf_access_policies.json.result | selectattr('decision', 'equalto', 'bypass') | list | length == 0
-      - sem_cf_access_policies.json.result | selectattr('decision', 'equalto', 'allow') | list | length > 0
-      - >-
-        sem_cf_access_policies.json.result | map(attribute='include') | flatten
-        | selectattr('everyone', 'defined') | list | length == 0
-      - >-
-        sem_cf_access_policies.json.result | selectattr('decision', 'equalto', 'allow')
-        | map(attribute='include') | flatten
-        | selectattr('email', 'defined') | list | length > 0
-    fail_msg: "Cloudflare Access for Semaphore does not have a verified email-restricted allow policy"
-
-- name: Find the dedicated Semaphore Tunnel by exact site name
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel?name={{ sem_cf_tunnel_name }}&per_page=50"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_tunnels
-  changed_when: false
-  no_log: true
-
-- name: Select only the existing dedicated tunnel
-  ansible.builtin.set_fact:
-    sem_cf_matching_tunnels: >-
-      {{ sem_cf_tunnels.json.result | selectattr('name', 'equalto', sem_cf_tunnel_name)
+    sem_site_tunnel: >-
+      {{ sem_site_tunnels.json.result | selectattr('name', 'equalto', sem_cf_tunnel_name)
          | selectattr('deleted_at', 'none') | list }}
 
-- name: Refuse ambiguous or foreign Cloudflare Tunnel ownership
+- name: Require the active remotely managed site Tunnel
   ansible.builtin.assert:
     that:
-      - sem_cf_tunnels.json.success | bool
-      - sem_cf_matching_tunnels | length <= 1
-      - sem_cf_matching_tunnels | length == 0 or sem_cf_matching_tunnels[0].config_src == 'cloudflare'
-    fail_msg: "Semaphore tunnel name is occupied by an incompatible resource"
+      - sem_site_tunnels.json.success | bool
+      - sem_site_tunnel | length == 1
+      - sem_site_tunnel[0].config_src == 'cloudflare'
 
-- name: Read the exact Semaphore DNS record for safe ownership checks
+- name: Read existing site ingress without modifying routes
   ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
+    url: "{{ sem_cf_api }}/accounts/{{ sem_exact_zones[0].account.id }}/cfd_tunnel/{{ sem_site_tunnel[0].id }}/configurations"
     headers: "{{ sem_cf_headers }}"
     use_proxy: false
     status_code: 200
-    timeout: 20
-  register: sem_cf_dns
+  register: sem_site_ingress
   changed_when: false
   no_log: true
 
-- name: Refuse foreign Semaphore DNS ownership before creating tunnel
-  ansible.builtin.assert:
-    that:
-      - sem_cf_dns.json.success | bool
-      - sem_cf_dns.json.result | length <= 1
-      - >-
-        sem_cf_dns.json.result | length == 0 or
-        (sem_cf_matching_tunnels | length == 1 and
-         sem_cf_dns.json.result[0].type == 'CNAME' and
-         sem_cf_dns.json.result[0].proxied | bool and
-         (sem_cf_dns.json.result[0].content | lower) ==
-         ((sem_cf_matching_tunnels[0].id ~ '.cfargotunnel.com') | lower))
-    fail_msg: "Semaphore public hostname is already owned by a foreign DNS record"
+- name: Find only the existing Semaphore route
+  ansible.builtin.set_fact:
+    sem_route_matches: >-
+      {{ sem_site_ingress.json.result.config.ingress
+         | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', sem_cf_hostname) | list }}
 
-- name: Report the safe dedicated Semaphore plan
+- name: Read the exact Semaphore DNS record
+  ansible.builtin.uri:
+    url: "{{ sem_cf_api }}/zones/{{ sem_exact_zones[0].id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
+    headers: "{{ sem_cf_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: sem_site_dns
+  changed_when: false
+  no_log: true
+
+- name: Report Semaphore route on the shared site Tunnel
   ansible.builtin.debug:
     msg:
-      - "SEMAPHORE_CF_MODE={{ sem_cf_action }}"
-      - "SEMAPHORE_PUBLIC=https://{{ sem_cf_hostname }}/"
-      - "SEMAPHORE_TUNNEL={{ sem_cf_tunnel_name }}"
-      - "SEMAPHORE_TUNNEL_EXISTS={{ sem_cf_matching_tunnels | length == 1 }}"
-      - "SEMAPHORE_DNS_EXISTS={{ sem_cf_dns.json.result | length == 1 }}"
-      - "ACCESS=EMAIL_RESTRICTED; ORIGIN=HTTPS_WITH_PINNED_TLS"
-
-- name: Create dedicated remotely managed Semaphore Tunnel if missing
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel"
-    method: POST
-    headers: "{{ sem_cf_headers }}"
-    body_format: json
-    body:
-      name: "{{ sem_cf_tunnel_name }}"
-      config_src: cloudflare
-    use_proxy: false
-    status_code: 200
-    timeout: 30
-  register: sem_cf_created_tunnel
-  changed_when: true
-  no_log: true
-  when:
-    - sem_cf_action == 'apply'
-    - sem_cf_matching_tunnels | length == 0
-
-- name: Remember the dedicated Semaphore Tunnel ID
-  ansible.builtin.set_fact:
-    sem_cf_tunnel_id: >-
-      {{ sem_cf_matching_tunnels[0].id if sem_cf_matching_tunnels | length == 1
-         else sem_cf_created_tunnel.json.result.id | default('') }}
-  when: sem_cf_action == 'apply' or sem_cf_matching_tunnels | length == 1
-
-- name: Require a single verified remotely managed Semaphore Tunnel
-  ansible.builtin.assert:
-    that:
-      - sem_cf_tunnel_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
-    fail_msg: "Failed to obtain the dedicated Semaphore Cloudflare Tunnel UUID"
-  when: sem_cf_action == 'apply'
-
-- name: Read remote configuration of existing Semaphore Tunnel
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/configurations"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: [200, 404]
-    timeout: 20
-  register: sem_cf_existing_config
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Prepare one local HTTP origin behind public HTTPS and Cloudflare Access
-  ansible.builtin.set_fact:
-    sem_cf_desired_config:
-      ingress:
-        - hostname: "{{ sem_cf_hostname }}"
-          service: http://127.0.0.1:80
-        - service: http_status:404
-  when: sem_cf_action == 'apply'
-
-- name: Migrate legacy Semaphore public hostname with verified Cloudflare Access
-  ansible.builtin.include_tasks: semaphore-cloudflare-hostname-migration.yml
-  when: sem_cf_action == 'apply'
-
-- name: Refresh existing Semaphore Tunnel configuration after hostname migration
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/configurations"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: [200, 404]
-    timeout: 20
-  register: sem_cf_existing_config
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Refresh Semaphore DNS state after any hostname migration
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_dns
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Refuse pre-existing non-Semaphore routes or weakened TLS policy
-  ansible.builtin.assert:
-    that:
-      - sem_cf_existing_config.status == 404 or
-        (sem_cf_existing_config.json.result.config | default({})).ingress | default([]) | length == 0 or
-        sem_cf_existing_config.json.result.config.ingress == sem_cf_desired_config.ingress
-    fail_msg: "Dedicated Semaphore Tunnel has unexpected ingress; refusing overwrite"
-  when: sem_cf_action == 'apply'
-
-- name: Publish the exact HTTP 80 origin if not already present
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/configurations"
-    method: PUT
-    headers: "{{ sem_cf_headers }}"
-    body_format: json
-    body:
-      config: "{{ sem_cf_desired_config }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 30
-  changed_when: true
-  no_log: true
-  when:
-    - sem_cf_action == 'apply'
-    - >-
-      sem_cf_existing_config.status == 404 or
-      (sem_cf_existing_config.json.result.config | default({})).ingress | default([]) | length == 0
-
-- name: Read the remote Semaphore Tunnel configuration after commissioning
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/configurations"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_verified_config
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Require exact dedicated HTTP 80 origin behind Cloudflare Access
-  ansible.builtin.assert:
-    that:
-      - sem_cf_verified_config.json.success | bool
-      - sem_cf_verified_config.json.result.config.ingress == sem_cf_desired_config.ingress
-    fail_msg: "Semaphore Tunnel readback differs from approved HTTPS ingress"
-  when: sem_cf_action == 'apply'
-
-- name: Read the connector token only for the dedicated Tunnel
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}/token"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_connector_secret
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Install Cloudflare signed repository key on the Runner
-  ansible.builtin.get_url:
-    url: https://pkg.cloudflare.com/cloudflare-main.gpg
-    dest: /usr/share/keyrings/cloudflare-main.gpg
-    owner: root
-    group: root
-    mode: '0644'
-  when: sem_cf_action == 'apply'
-
-- name: Configure the signed cloudflared APT source on Debian 13
-  ansible.builtin.copy:
-    dest: /etc/apt/sources.list.d/cloudflared.list
-    content: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
-    owner: root
-    group: root
-    mode: '0644'
-  register: sem_cf_apt_source
-  when: sem_cf_action == 'apply'
-
-- name: Install cloudflared using the vendor-signed package
-  ansible.builtin.apt:
-    name: cloudflared
-    state: present
-    update_cache: "{{ sem_cf_apt_source.changed }}"
-  when: sem_cf_action == 'apply'
-
-- name: Install restricted Cloudflare connector directory
-  ansible.builtin.file:
-    path: /etc/cloudflared
-    state: directory
-    owner: root
-    group: root
-    mode: '0700'
-  when: sem_cf_action == 'apply'
-
-- name: Persist only the dedicated Semaphore Tunnel token on the Runner
-  ansible.builtin.copy:
-    dest: /etc/cloudflared/semaphore-token
-    content: "{{ sem_cf_connector_secret.json.result }}\n"
-    owner: root
-    group: root
-    mode: '0600'
-  register: sem_cf_token_file
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Install isolated cloudflared systemd service for Semaphore
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/digitalhouses-semaphore-cloudflared.service
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=DigitalHouses Semaphore dedicated Cloudflare Tunnel
-      Wants=network-online.target
-      After=network-online.target
-
-      [Service]
-      Type=simple
-      ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/semaphore-token
-      Restart=always
-      RestartSec=5
-
-      [Install]
-      WantedBy=multi-user.target
-  register: sem_cf_unit
-  when: sem_cf_action == 'apply'
-
-- name: Ensure dedicated Semaphore connector starts automatically
-  ansible.builtin.systemd_service:
-    name: digitalhouses-semaphore-cloudflared.service
-    daemon_reload: "{{ sem_cf_unit.changed }}"
-    enabled: true
-    state: "{{ 'restarted' if sem_cf_token_file.changed or sem_cf_unit.changed else 'started' }}"
-  when: sem_cf_action == 'apply'
-
-- name: Check the dedicated tunnel becomes healthy through Cloudflare API
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/accounts/{{ sem_cf_account_id }}/cfd_tunnel/{{ sem_cf_tunnel_id }}"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_health
-  changed_when: false
-  until: sem_cf_health.json.result.status == 'healthy'
-  retries: 12
-  delay: 4
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Create only the absent proxied Semaphore public DNS CNAME
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records"
-    method: POST
-    headers: "{{ sem_cf_headers }}"
-    body_format: json
-    body:
-      type: CNAME
-      proxied: true
-      name: "{{ sem_cf_hostname }}"
-      content: "{{ sem_cf_tunnel_id }}.cfargotunnel.com"
-    use_proxy: false
-    status_code: [200, 201]
-    timeout: 30
-  changed_when: true
-  no_log: true
-  when:
-    - sem_cf_action == 'apply'
-    - sem_cf_dns.json.result | length == 0
-
-- name: Read back the Semaphore public DNS record
-  ansible.builtin.uri:
-    url: "{{ sem_cf_api }}/zones/{{ sem_cf_zone_id }}/dns_records?name={{ sem_cf_hostname }}&per_page=100"
-    headers: "{{ sem_cf_headers }}"
-    use_proxy: false
-    status_code: 200
-    timeout: 20
-  register: sem_cf_dns_final
-  changed_when: false
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Require the DNS record to point to the exact dedicated Tunnel
-  ansible.builtin.assert:
-    that:
-      - sem_cf_dns_final.json.success | bool
-      - sem_cf_dns_final.json.result | length == 1
-      - sem_cf_dns_final.json.result[0].type == 'CNAME'
-      - sem_cf_dns_final.json.result[0].proxied | bool
-      - sem_cf_dns_final.json.result[0].content | lower == (sem_cf_tunnel_id ~ '.cfargotunnel.com') | lower
-    fail_msg: "Semaphore DNS record did not route to the dedicated cloudflared connector"
-  when: sem_cf_action == 'apply'
-
-- name: Resolve existing working PVE hostname for a known Cloudflare edge
-  ansible.builtin.command:
-    argv: [/usr/bin/getent, ahostsv4, "{{ dev_site_id }}-pve.digitalhouses.vip"]
-  register: sem_cf_edge
-  changed_when: false
-  when: sem_cf_action == 'apply'
-
-- name: Prove Semaphore public HTTPS requires restricted Cloudflare Access login
-  ansible.builtin.command:
-    argv:
-      - /usr/bin/curl
-      - --silent
-      - --show-error
-      - --noproxy
-      - '*'
-      - --connect-timeout
-      - '5'
-      - --max-time
-      - '15'
-      - --resolve
-      - "{{ sem_cf_hostname }}:443:{{ sem_cf_edge.stdout_lines[0].split()[0] }}"
-      - --output
-      - /dev/null
-      - --write-out
-      - '%{http_code} %{redirect_url}'
-      - "https://{{ sem_cf_hostname }}/"
-  register: sem_cf_access_challenge
-  changed_when: false
-  until: >-
-    sem_cf_access_challenge.rc == 0 and
-    sem_cf_access_challenge.stdout is
-    match('^302 https://[^/]+\\.cloudflareaccess\\.com/cdn-cgi/access/login/.*')
-  retries: 8
-  delay: 3
-  no_log: true
-  when: sem_cf_action == 'apply'
-
-- name: Report commissioned Semaphore entrypoint with no secrets
-  ansible.builtin.debug:
-    msg:
-      - "SEMAPHORE_PUBLIC=READY https://{{ sem_cf_hostname }}/"
-      - "SEMAPHORE_TUNNEL={{ sem_cf_tunnel_name }}"
-      - "SEMAPHORE_CLOUDFLARED=HEALTHY"
-      - "SEMAPHORE_ACCESS=RESTRICTED; ORIGIN_TLS=STRICT"
-  when: sem_cf_action == 'apply'
+      - "SEMAPHORE_CF_MODE=AUDIT_ONLY"
+      - "SITE_TUNNEL={{ sem_cf_tunnel_name }}"
+      - "SITE_TUNNEL_STATUS={{ sem_site_tunnel[0].status }}"
+      - "SEMAPHORE_ROUTE_PRESENT={{ sem_route_matches | length == 1 }}"
+      - "SEMAPHORE_ROUTE_ORIGIN={{ sem_route_matches[0].service if sem_route_matches | length == 1 else 'absent' }}"
+      - "SEMAPHORE_DNS_TARGET={{ (sem_site_dns.json.result | first | default({})).content | default('absent') }}"
+      - "SITE_TUNNEL_UUID={{ sem_site_tunnel[0].id }}"

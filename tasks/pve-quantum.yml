@@ -103,6 +103,16 @@
       existing users/database retained.
   when: quantum_use_legacy
 
+- name: Report version-update limit for an existing independent FileBrowser
+  ansible.builtin.debug:
+    msg: >-
+      QUANTUM_UPDATE=NOT_MANAGED_HERE; existing filebrowser.service retained
+      with its original database. A forced replacement would need a separate
+      credentials/database migration.
+  when:
+    - quantum_use_legacy
+    - (requested_quantum_update | default('no')) == 'yes'
+
 - name: Inspect original independent FileBrowser service file for backup
   ansible.builtin.stat:
     path: /etc/systemd/system/filebrowser.service
