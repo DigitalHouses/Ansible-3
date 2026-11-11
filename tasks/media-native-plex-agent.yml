@@ -105,13 +105,25 @@
     - not media_plex_agent_legacy_config.stat.exists
     - not media_plex_agent_legacy_state.stat.exists
 
+- name: Read the installed Plex Agent version without assuming a downgrade
+  ansible.builtin.set_fact:
+    media_plex_agent_current_version: >-
+      {{ (media_plex_agent_build.content | default('') | b64decode
+         | regex_findall('(?m)^version = ([0-9]+[.][0-9]+[.][0-9]+)$')
+         | first | default('0.0.0')) }}
+
+- name: Reject an existing Plex Agent with unreadable release version
+  ansible.builtin.assert:
+    that:
+      - not media_plex_agent_build_stat.stat.exists or media_plex_agent_current_version != '0.0.0'
+    fail_msg: AGENTS60_PLEX_AGENT_EXISTING_RELEASE_INVALID
+
 - name: Determine whether the pinned Plex Agent product installation is required
   ansible.builtin.set_fact:
     media_plex_agent_install_needed: >-
       {{ not media_plex_agent_build_stat.stat.exists or
          (agents_update | default('no')) == 'yes' and
-         'source = digitalhouses_plex_agent-v0.8.5'
-         not in (media_plex_agent_build.content | default('') | b64decode) }}
+         media_plex_agent_current_version is version('0.8.5', '<') }}
 
 - name: Download integrity-pinned vendor Plex Agent release installer
   ansible.builtin.get_url:
