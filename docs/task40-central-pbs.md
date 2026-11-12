@@ -192,3 +192,9 @@ CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
 - Ранее созданные TLS материалы `media-account-pki` автоматически
   не перевыпускались. При использовании локального HTTPS-портала
   отдельно проверить, содержит ли сертификат новый IP `.243`.
+
+## Приёмка CORE №40 после переноса VM2243 (12.11.2026)
+
+- CORE Semaphore Job #10 (`audit`): `success`, `core40_pve ok=10 changed=0 failed=0`, `runner ok=2 changed=0 failed=0`. Показано `CORE40_STANDARD_MEDIA_VM2243=PRESENT`, `CORE40_LEGACY_MEDIA_VM2250=ABSENT` и правильный `CORE40_TARGET_GUEST=dh-core/VM2243/192.168.11.243`.
+- CORE Semaphore Job #11 (`prepare`): `success`, `core40_pve ok=28 changed=0 failed=0`, `runner ok=2 changed=0 failed=0`; оба datastore и mountpoint ZFS приняты без повторного создания.
+- Cloudflare на CORE/HOME **не меняли**. Следующий этап туннелей выполняется в профильном чате, по отдельному решению пользователя.
