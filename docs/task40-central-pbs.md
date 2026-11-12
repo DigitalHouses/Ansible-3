@@ -155,3 +155,14 @@ CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
 Проверка CORE транспорта начнётся с `ip route get 192.168.11.223`
 **внутри VM2250**. Отчёт `DIRECT_LAN_NOT_ACCEPTED` — ожидаемое
 состояние до подготовки Cloudflare. Он не означает отказ PBS.
+
+## Приёмка исправления границ проекта (12.11.2026)
+
+- CORE №00 Job #8 `success`; Survey №40 оставляет только `audit` и `prepare`.
+- CORE №40 Job #9 `success`: `runner ok=2 changed=0 failed=0`,
+  `core40_pve ok=10 changed=0 failed=0`.
+- `CORE40_SOURCE_ROUTE=DIRECT_LAN_NOT_ACCEPTED` подтверждён из реальной
+  CORE PBS VM2250. Ранее проверенная локальная TCP-доступность HOME
+  **не считается проверкой Cloudflare**.
+- За пределами CORE не было изменений: HOME-задачи и credential-токены
+  не создавались, PBS Remote/Sync Jobs не активированы.
