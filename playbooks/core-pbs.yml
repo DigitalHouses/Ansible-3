@@ -1,6 +1,6 @@
 ---
-# 40 | Read-only CORE PBS discovery. Never modifies PVE, guests, ZFS or PBS.
-# Central datastore deployment and Pull Sync require a separately accepted plan.
+# 40 | CORE PBS audit or safe preparation of a new datastore within existing VM.
+# Never overwrites legacy PBS, disk configurations, backup jobs or sync remotes.
 - name: "40 | Identify dedicated CORE runner and pinned PVE"
   hosts: runner
   connection: local
@@ -8,12 +8,14 @@
   vars_files:
     - /etc/digitalhouses/pve.yml
   vars:
+    core40_action: "{{ DH_CORE40_ACTION | default('audit', true) }}"
     core40_site: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
     core40_profile: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-profile') | trim }}"
   tasks:
     - name: Refuse execution from a HOME or unexpected CORE runner
       ansible.builtin.assert:
         that:
+          - core40_action in ['audit', 'prepare']
           - core40_site == 'dh-core'
           - core40_profile == 'core'
           - pve.ipv4 is match('^[0-9]+(\\.[0-9]+){3}$')
@@ -33,6 +35,7 @@
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        core40_action: "{{ core40_action }}"
         core40_expected_node: "{{ pve.node }}"
         core40_pve_ipv4: "{{ pve.ipv4 }}"
         core40_home_pbs_ipv4: "{{ pve.ipv4.split('.')[:3] | join('.') }}.223"
@@ -107,14 +110,18 @@
           - core40_storage_central | length <= 1
         fail_msg: CORE40_DUPLICATED_IDENTITY
 
-    - name: Report read-only CORE PBS acceptance findings
+    - name: Prepare dedicated central PBS datastore only when explicitly requested
+      ansible.builtin.include_tasks: ../tasks/core40-pbs-datastore.yml
+      when: core40_action == 'prepare'
+
+    - name: Report CORE PBS audit or separate datastore preparation
       ansible.builtin.debug:
         msg:
-          - "CORE40_MODE=AUDIT (no changes)"
+          - "CORE40_MODE={{ core40_action | upper }}"
           - "CORE40_PVE=dh-core / ASRock PVE {{ core40_pve_ipv4 }}"
           - "CORE40_STANDARD_MEDIA_VM2243={{ 'PRESENT' if core40_media_standard | length else 'ABSENT' }}"
           - "CORE40_LEGACY_MEDIA_VM2250={{ 'PRESENT' if core40_media_legacy | length else 'ABSENT' }}"
           - "CORE40_LEGACY_PBS_SERZHAN={{ 'PRESENT' if core40_storage_legacy | length else 'ABSENT' }}"
           - "CORE40_CENTRAL_PBS_STORAGE={{ 'PRESENT' if core40_storage_central | length else 'NOT_CONFIGURED' }}"
-          - "CORE40_PULL_SYNC=NOT_CONFIGURED; no datastore, remote or sync-job was created"
-          - "NEXT=Determine protected central datastore and source read-only token before Apply"
+          - "CORE40_PULL_SYNC=NOT_CONFIGURED; no remote or sync-job was created"
+          - "NEXT=Provide source DatastoreReader token before creating remote and Pull Sync"

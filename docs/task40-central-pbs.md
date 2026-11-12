@@ -61,3 +61,32 @@ CORE Semaphore `dh-core / Ansible — CT1241, 192.168.11.241`:
 
 Аудит принят; **конфигурация приёма копий и восстановление не проверены**,
 поскольку не создавались Central datastore, Remote или Sync Job.
+
+## Этап 2: отдельный центральный datastore на существующей VM2250
+
+Решение владельца: не пересоздавать и не перенумеровывать legacy
+`dh-core / Media Server + PBS — VM2250, 192.168.11.250`.
+В №40 добавлено отдельное действие `prepare`, по умолчанию остаётся
+`audit`. `prepare` создаёт только **`serzhan-pool/pbs-core`** как новый
+ZFS filesystem и регистрирует PBS datastore **`pbs-core`** на пути
+`/serzhan-pool/pbs-core`. Работает из `dh-core / Semaphore — CT1241,
+192.168.11.241` через pinned SSH к `dh-core / ASRock PVE,
+192.168.11.240` и штатный Proxmox Guest Agent существующей VM2250.
+
+До операции проверяются идентичность VM2250, здоровье пула, datastore
+`pbs-serzhan` и отсутствие конфликтов имени, ZFS-объекта, mountpoint
+или чужих файлов. При повторном запуске совпадающие конфигурации
+сохраняются, чужие — блокируются. Никаких стираний, импорта диска,
+переноса ZFS, удаления backup, изменения PVE Storage, PBS Remotes,
+Sync Jobs, credentials или prune нет.
+
+**Ограничение:** `pbs-core` и `pbs-serzhan` находятся в одном физическом
+пуле `serzhan-pool`, поэтому физически не независимы друг от друга.
+Они логически разделены; независимость копий обеспечит source HOME
+на другой машине и следующий внешний уровень B2. В `pbs-core`
+пока нет собственных Prune/GC/Verify jobs и backup snapshots.
+
+Для первого Pull нужны отдельный source API-токен с `DatastoreReader`
+на `serzhan-home / Local PBS, 192.168.11.223`, закреплённый TLS
+fingerprint и отдельная настройка CORE Remote и Sync Job. Этот этап
+ещё не меняет источник.

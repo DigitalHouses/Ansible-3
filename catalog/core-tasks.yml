@@ -6,4 +6,14 @@ tasks:
     description: Обновить каталог задач CORE из Ansible-3 (без запуска остальных задач)
   - name: 40-Central PBS
     playbook: playbooks/core-pbs.yml
-    description: "Audit only: dh-core PVE, core media VM, legacy PBS, readiness for centralized Pull Sync; no changes"
+    description: "Audit or safely create separate pbs-core datastore on existing VM2250; never touches legacy pbs-serzhan"
+    survey_vars:
+      - name: DH_CORE40_ACTION
+        title: "Central PBS — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить без изменений", value: audit}
+          - {name: "Создать отдельный ZFS dataset и datastore pbs-core", value: prepare}

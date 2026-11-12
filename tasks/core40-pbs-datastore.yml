@@ -1,0 +1,177 @@
+---
+# CORE 40 | Prepare a new, separate PBS datastore inside existing ASRock VM2250.
+# No VM lifecycle, disk passthrough changes, pool import/erase, deletes or prune.
+- name: Verify pinned legacy CORE media VM configuration before guest access
+  ansible.builtin.command:
+    argv: [qm, config, '2250']
+  register: core40_vm_config
+  changed_when: false
+
+- name: Refuse a different VM or changed legacy guest identity
+  ansible.builtin.assert:
+    that:
+      - "'name: mediaserver-serzhan' in core40_vm_config.stdout_lines"
+      - "'agent: enabled=1' in core40_vm_config.stdout_lines"
+      - "'ipconfig0: ip=192.168.11.250/24,gw=192.168.11.1' in core40_vm_config.stdout_lines"
+    fail_msg: CORE40_LEGACY_GUEST_IDENTITY_CHANGED
+
+- name: Verify existing media ZFS pool is online in trusted guest
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, zpool, list, -H, -o, 'name,health', serzhan-pool]
+  register: core40_pool_state
+  changed_when: false
+
+- name: Refuse to operate on a missing or unhealthy media ZFS pool
+  ansible.builtin.assert:
+    that:
+      - (core40_pool_state.stdout | from_json).exitcode | int == 0
+      - ((core40_pool_state.stdout | from_json)['out-data'] | trim).split() == ['serzhan-pool', 'ONLINE']
+    fail_msg: CORE40_EXISTING_ZFS_POOL_NOT_ONLINE
+
+- name: Inspect PBS datastore registration inside existing guest
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, datastore, list, --output-format, json]
+  register: core40_guest_stores_raw
+  changed_when: false
+
+- name: Require successful PBS datastore inventory
+  ansible.builtin.assert:
+    that:
+      - (core40_guest_stores_raw.stdout | from_json).exitcode | int == 0
+      - not ((core40_guest_stores_raw.stdout | from_json)['out-truncated'] | default(false) | bool)
+    fail_msg: CORE40_CANNOT_READ_EXISTING_PBS
+
+- name: Identify old and new datastore independently
+  ansible.builtin.set_fact:
+    core40_guest_stores: "{{ ((core40_guest_stores_raw.stdout | from_json)['out-data'] | trim) | from_json }}"
+
+- name: Require legacy PBS preservation and distinct central target
+  ansible.builtin.assert:
+    that:
+      - (core40_guest_stores | selectattr('name', 'equalto', 'pbs-serzhan') | list | length) == 1
+      - (core40_guest_stores | selectattr('name', 'equalto', 'pbs-serzhan') | first).path == '/serzhan-pool/pbs-serzhan'
+      - (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) <= 1
+      - >-
+        (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+        or (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | first).path == '/serzhan-pool/pbs-core'
+      - >-
+        (core40_guest_stores | selectattr('path', 'equalto', '/serzhan-pool/pbs-core')
+        | rejectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+    fail_msg: CORE40_PBS_NAME_OR_PATH_CONFLICT
+
+- name: Check new ZFS dataset without modifying existing datasets
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, zfs, list, -H, -o, type, serzhan-pool/pbs-core]
+  register: core40_zfs_dataset_raw
+  changed_when: false
+
+- name: Require that the target ZFS name is free or already a filesystem
+  ansible.builtin.assert:
+    that:
+      - (core40_zfs_dataset_raw.stdout | from_json).exitcode | int in [0, 1]
+      - >-
+        (core40_zfs_dataset_raw.stdout | from_json).exitcode | int == 1
+        or ((core40_zfs_dataset_raw.stdout | from_json)['out-data'] | trim) == 'filesystem'
+      - >-
+        (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+        or (core40_zfs_dataset_raw.stdout | from_json).exitcode | int == 0
+    fail_msg: CORE40_ZFS_DATASET_CONFLICT
+
+- name: Check that the future mountpoint is not occupied
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, test, -e, /serzhan-pool/pbs-core]
+  register: core40_path_raw
+  changed_when: false
+
+- name: Refuse mounting over an existing path unless the dataset already exists
+  ansible.builtin.assert:
+    that:
+      - >-
+        (core40_zfs_dataset_raw.stdout | from_json).exitcode | int == 0
+        or (core40_path_raw.stdout | from_json).exitcode | int == 1
+    fail_msg: CORE40_MOUNTPOINT_ALREADY_OCCUPIED
+
+- name: Create only the new CORE PBS ZFS dataset
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, zfs, create, -o, atime=on, serzhan-pool/pbs-core]
+  register: core40_zfs_create
+  changed_when: true
+  failed_when: (core40_zfs_create.stdout | from_json).exitcode | int != 0
+  when: (core40_zfs_dataset_raw.stdout | from_json).exitcode | int == 1
+
+- name: Read CORE dataset mountpoint and GC-compatible atime
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, zfs, get, -H, -o, value, 'mountpoint,atime,mounted', serzhan-pool/pbs-core]
+  register: core40_dataset_properties
+  changed_when: false
+
+- name: Require the intended exact mounted PBS dataset
+  ansible.builtin.assert:
+    that:
+      - (core40_dataset_properties.stdout | from_json).exitcode | int == 0
+      - >-
+        ((core40_dataset_properties.stdout | from_json)['out-data'] | trim).splitlines()
+        == ['/serzhan-pool/pbs-core', 'on', 'yes']
+    fail_msg: CORE40_PBS_ZFS_PROPERTIES_MISMATCH
+
+- name: Check no unknown files are hidden beneath an unregistered datastore
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, find, /serzhan-pool/pbs-core, -mindepth, '1', -maxdepth, '1', -print]
+  register: core40_dataset_contents
+  changed_when: false
+  when: (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+
+- name: Refuse adoption of unknown files without explicit migration
+  ansible.builtin.assert:
+    that:
+      - (core40_dataset_contents.stdout | from_json).exitcode | int == 0
+      - ((core40_dataset_contents.stdout | from_json).get('out-data', '') | trim) == ''
+    fail_msg: CORE40_PBS_DATASET_NONEMPTY
+  when: (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+
+- name: Set PBS service ownership only on the new empty CORE mountpoint
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, chown, backup:backup, /serzhan-pool/pbs-core]
+  register: core40_owner_result
+  changed_when: true
+  failed_when: (core40_owner_result.stdout | from_json).exitcode | int != 0
+  when: (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+
+- name: Register only the new pbs-core datastore on its distinct ZFS dataset
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - '2250'
+      - --
+      - proxmox-backup-manager
+      - datastore
+      - create
+      - pbs-core
+      - /serzhan-pool/pbs-core
+  register: core40_datastore_create
+  changed_when: true
+  failed_when: (core40_datastore_create.stdout | from_json).exitcode | int != 0
+  when: (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
+
+- name: Read central PBS datastore details after preparation
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, datastore, show, pbs-core, --output-format, json]
+  register: core40_datastore_readback
+  changed_when: false
+
+- name: Confirm the new datastore has the correct backing ZFS filesystem
+  ansible.builtin.assert:
+    that:
+      - (core40_datastore_readback.stdout | from_json).exitcode | int == 0
+      - (((core40_datastore_readback.stdout | from_json)['out-data'] | trim) | from_json).path == '/serzhan-pool/pbs-core'
+    fail_msg: CORE40_DATASTORE_READBACK_MISMATCH
+
+- name: Report dedicated central datastore prepared without any Sync Job
+  ansible.builtin.debug:
+    msg:
+      - CORE40_PBS_DATASTORE=PASS
+      - CORE40_CORE_PBS_PATH=/serzhan-pool/pbs-core
+      - CORE40_LEGACY_PBS=UNCHANGED
+      - CORE40_SYNC=NOT_CONFIGURED
