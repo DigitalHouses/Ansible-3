@@ -1,0 +1,46 @@
+# №40 — Central PBS (`dh-core`)
+
+**Этап 1: только аудит, без изменения серверов или хранилищ.**
+В Semaphore CORE есть самостоятельная задача `40-Central PBS`.
+Её нельзя выполнять через `serzhan-home` HOME Semaphore.
+
+## Фактическая база (аудит 12.11.2026)
+
+- `dh-core / ASRock PVE — 192.168.11.240`: отдельный узел, а не Beelink HOME.
+- `dh-core / Ansible + Semaphore — CT1241, 192.168.11.241`: CORE профиль, отдельный каталог.
+- `dh-core / Legacy Media Server — VM2250, 192.168.11.250`: PBS 4.2.9,
+  datastore `pbs-serzhan` на `serzhan-pool/pbs-serzhan` (занято около 315 ГБ).
+  Это работающие копии; **не переиспользовать и не переименовывать** без
+  отдельного плана миграции.
+- `dh-core / Standard Media Server — VM2243, 192.168.11.243`: пока **не создан**.
+- `serzhan-home / Local PBS — VM2223, 192.168.11.223`: TCP 8007 доступен
+  напрямую через LAN; CORE и HOME владельца не требуют Cloudflare-маршрута.
+- В legacy PBS нет Remote и Sync Job. Рабочая PVE Storage `pbs-serzhan`
+  обслуживает существующий старый режим резервирования.
+
+## №40, текущая реализация
+
+Проверяет локальные `site-id=dh-core`, `site-profile=core`, стандарт CORE
+PVE `.240`, pinned SSH из bootstrap; читает PVE VM и Storage через pvesh;
+проверяет только TCP reachability HOME PBS. Выводит статусы в журнал.
+Ничего не создаёт, не удаляет, не запускает копирование, не обновляет
+credentials, не меняет ZFS, VM, диски, firewall, Cloudflare или HOME.
+
+## Следующий этап №40: Apply после отдельного решения
+
+1. Утвердить место и размер **отдельного центрального datastore**, не
+   смешивая его со старым `pbs-serzhan`. Существующий ZFS пул принадлежит
+   legacy VM2250; по S24 целевой CORE Media — VM2243. Нельзя передавать
+   один и тот же сырой диск двум работающим VM.
+2. Подготовить на HOME ограниченный **читающий все требуемые backup groups**
+   PBS identity для CORE. `Datastore.Backup` не даёт читать чужие группы;
+   разрешения должны позволять полный Pull, но не удаление источника.
+3. Создать на CORE Remote на `serzhan-home`, проверить TLS fingerprint,
+   предоставить отдельный datastore namespace для этого HOME и штатный
+   PBS Pull Sync Job. `remove-vanished=false` и независимая retention
+   policy. Сначала ручной пилот, затем расписание и verify/restore.
+4. Добавить остальные HOME по их уникальным подсетям через защищённый
+   Cloudflare Private Network. Данные по объектам из S24.
+
+Не включать автоматический перенос документов и HA до появления самих
+источников архивов на локальном PBS.

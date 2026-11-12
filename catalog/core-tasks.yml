@@ -1,7 +1,9 @@
 ---
-# CORE catalog is deliberately separate from HOME to avoid PVE/site cross-configuration.
-# Task 40 and future CORE-only tasks will be registered here when implemented.
+# CORE-only catalog: never reuse HOME playbooks for central infrastructure.
 tasks:
   - name: 00-Обновить список задач
     playbook: playbooks/update-task-catalog.yml
     description: Обновить каталог задач CORE из Ansible-3 (без запуска остальных задач)
+  - name: 40-Central PBS
+    playbook: playbooks/core-pbs.yml
+    description: "Audit only: dh-core PVE, core media VM, legacy PBS, readiness for centralized Pull Sync; no changes"

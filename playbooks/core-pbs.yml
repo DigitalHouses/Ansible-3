@@ -1,0 +1,120 @@
+---
+# 40 | Read-only CORE PBS discovery. Never modifies PVE, guests, ZFS or PBS.
+# Central datastore deployment and Pull Sync require a separately accepted plan.
+- name: "40 | Identify dedicated CORE runner and pinned PVE"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    core40_site: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    core40_profile: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-profile') | trim }}"
+  tasks:
+    - name: Refuse execution from a HOME or unexpected CORE runner
+      ansible.builtin.assert:
+        that:
+          - core40_site == 'dh-core'
+          - core40_profile == 'core'
+          - pve.ipv4 is match('^[0-9]+(\\.[0-9]+){3}$')
+          - pve.ipv4.split('.')[-1] | int == 240
+          - pve.node | length > 0
+        fail_msg: CORE40_MUST_RUN_FROM_DH_CORE_SEMAPHORE
+
+    - name: Register only the pinned CORE Proxmox host
+      ansible.builtin.add_host:
+        name: core40_pve
+        groups: core40_pve_group
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        core40_expected_node: "{{ pve.node }}"
+        core40_pve_ipv4: "{{ pve.ipv4 }}"
+        core40_home_pbs_ipv4: "{{ pve.ipv4.split('.')[:3] | join('.') }}.223"
+      changed_when: false
+
+    - name: Test reachability of the serzhan-home local PBS without logging in
+      ansible.builtin.wait_for:
+        host: "{{ pve.ipv4.split('.')[:3] | join('.') }}.223"
+        port: 8007
+        state: started
+        connect_timeout: 3
+        timeout: 8
+      register: core40_home_pbs_probe
+      ignore_errors: true
+      changed_when: false
+
+    - name: Report the pilot HOME PBS connection
+      ansible.builtin.debug:
+        msg: >-
+          CORE40_SERZHAN_HOME_PBS={{ 'REACHABLE' if not
+          (core40_home_pbs_probe.failed | default(false)) else 'UNREACHABLE' }}
+          (serzhan-home / Local PBS, {{ pve.ipv4.split('.')[:3] | join('.') }}.223:8007)
+
+- name: "40 | Audit central PBS target without touching existing backups"
+  hosts: core40_pve_group
+  gather_facts: false
+  tasks:
+    - name: Read actual CORE PVE node name
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: core40_hostname
+      changed_when: false
+
+    - name: Refuse a PVE different from the pinned CORE bootstrap
+      ansible.builtin.assert:
+        that:
+          - core40_hostname.stdout | trim == core40_expected_node
+        fail_msg: CORE40_PINNED_PVE_IDENTITY_MISMATCH
+
+    - name: List existing virtual machines without changing them
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ core40_expected_node }}/qemu", --output-format, json]
+      register: core40_qemu_raw
+      changed_when: false
+
+    - name: Read CORE PVE storage availability without credentials
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ core40_expected_node }}/storage", --output-format, json]
+      register: core40_storage_raw
+      changed_when: false
+
+    - name: Locate only the standard CORE target and previously installed legacy resources
+      ansible.builtin.set_fact:
+        core40_media_standard: >-
+          {{ (core40_qemu_raw.stdout | from_json)
+             | selectattr('vmid', 'equalto', 2243) | list }}
+        core40_media_legacy: >-
+          {{ (core40_qemu_raw.stdout | from_json)
+             | selectattr('vmid', 'equalto', 2250) | list }}
+        core40_storage_legacy: >-
+          {{ (core40_storage_raw.stdout | from_json)
+             | selectattr('storage', 'equalto', 'pbs-serzhan') | list }}
+        core40_storage_central: >-
+          {{ (core40_storage_raw.stdout | from_json)
+             | selectattr('storage', 'equalto', 'pbs-core') | list }}
+
+    - name: Require the standard CORE VM identity if it already exists
+      ansible.builtin.assert:
+        that:
+          - core40_media_standard | length <= 1
+          - core40_media_legacy | length <= 1
+          - core40_storage_central | length <= 1
+        fail_msg: CORE40_DUPLICATED_IDENTITY
+
+    - name: Report read-only CORE PBS acceptance findings
+      ansible.builtin.debug:
+        msg:
+          - "CORE40_MODE=AUDIT (no changes)"
+          - "CORE40_PVE=dh-core / ASRock PVE {{ core40_pve_ipv4 }}"
+          - "CORE40_STANDARD_MEDIA_VM2243={{ 'PRESENT' if core40_media_standard | length else 'ABSENT' }}"
+          - "CORE40_LEGACY_MEDIA_VM2250={{ 'PRESENT' if core40_media_legacy | length else 'ABSENT' }}"
+          - "CORE40_LEGACY_PBS_SERZHAN={{ 'PRESENT' if core40_storage_legacy | length else 'ABSENT' }}"
+          - "CORE40_CENTRAL_PBS_STORAGE={{ 'PRESENT' if core40_storage_central | length else 'NOT_CONFIGURED' }}"
+          - "CORE40_PULL_SYNC=NOT_CONFIGURED; no datastore, remote or sync-job was created"
+          - "NEXT=Determine protected central datastore and source read-only token before Apply"
