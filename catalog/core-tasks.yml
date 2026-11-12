@@ -17,3 +17,16 @@ tasks:
         values:
           - {name: "Проверить без изменений", value: audit}
           - {name: "Создать отдельный ZFS dataset и datastore pbs-core", value: prepare}
+          - {name: "Настроить HOME Remote + ручной Pull Sync", value: configure}
+      - name: DH_CORE40_SOURCE_TOKEN
+        title: "HOME PBS — секрет токена core-sync@pbs!dh-core (только Configure)"
+        type: secret
+        target: env
+        required: false
+        values: []
+      - name: DH_CORE40_SOURCE_FINGERPRINT
+        title: "HOME PBS — SHA256 сертификата (только Configure)"
+        type: ""
+        target: env
+        required: false
+        values: []

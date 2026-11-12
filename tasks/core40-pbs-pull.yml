@@ -1,0 +1,214 @@
+---
+# CORE 40 | Create only a pinned, read-only-source PBS Remote and unscheduled Pull Sync.
+# Requires a separately issued source token with DatastoreReader privileges.
+# No backups are transferred automatically by this stage.
+- name: Read existing PBS datastores in CORE legacy media guest
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, datastore, list, --output-format, json]
+  register: core40_pull_stores_raw
+  changed_when: false
+
+- name: Verify separate and unchanged CORE datastore before configuring Pull
+  ansible.builtin.assert:
+    that:
+      - (core40_pull_stores_raw.stdout | from_json).exitcode | int == 0
+      - >-
+        (((core40_pull_stores_raw.stdout | from_json)['out-data'] | trim | from_json)
+        | selectattr('name', 'equalto', 'pbs-core') | list | length) == 1
+      - >-
+        (((core40_pull_stores_raw.stdout | from_json)['out-data'] | trim | from_json)
+        | selectattr('name', 'equalto', 'pbs-core') | first).path == '/serzhan-pool/pbs-core'
+      - >-
+        (((core40_pull_stores_raw.stdout | from_json)['out-data'] | trim | from_json)
+        | selectattr('name', 'equalto', 'pbs-serzhan') | first).path == '/serzhan-pool/pbs-serzhan'
+    fail_msg: CORE40_CENTRAL_DATASTORE_MISSING_OR_LEGACY_CONFLICT
+
+- name: Inspect configured remotes without exposing passwords
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, remote, list, --output-format, json]
+  register: core40_remotes_raw
+  changed_when: false
+
+- name: Require valid remote inventory
+  ansible.builtin.assert:
+    that:
+      - (core40_remotes_raw.stdout | from_json).exitcode | int == 0
+      - not ((core40_remotes_raw.stdout | from_json)['out-truncated'] | default(false) | bool)
+    fail_msg: CORE40_REMOTE_INVENTORY_FAILED
+
+- name: Identify one exact serzhan-home remote
+  ansible.builtin.set_fact:
+    core40_remotes: "{{ ((core40_remotes_raw.stdout | from_json)['out-data'] | trim) | from_json }}"
+    core40_remote_name: serzhan-home
+    core40_source_store: pbs-serzhan
+    core40_target_store: pbs-core
+    core40_sync_id: pull-serzhan-home
+
+- name: Require that an existing Remote does not point to a different source
+  ansible.builtin.assert:
+    that:
+      - (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) <= 1
+      - >-
+        (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) == 0
+        or (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | first).host == core40_home_pbs_ipv4
+      - >-
+        (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) == 0
+        or (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | first)['auth-id'] == 'core-sync@pbs!dh-core'
+    fail_msg: CORE40_PBS_REMOTE_IDENTITY_CONFLICT
+
+- name: Require a fresh token and pinned SHA256 fingerprint for first Remote setup
+  ansible.builtin.assert:
+    that:
+      - core40_pull_secret | length >= 20
+      - core40_pull_fingerprint is match('^([0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$')
+    fail_msg: CORE40_PBS_SOURCE_TOKEN_AND_FINGERPRINT_REQUIRED
+  when: (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) == 0
+  no_log: true
+
+- name: Refuse a different fingerprint on a previously configured Remote
+  ansible.builtin.assert:
+    that:
+      - >-
+        core40_pull_fingerprint | length == 0 or
+        (core40_remotes | selectattr('name', 'equalto', core40_remote_name)
+        | first).fingerprint | lower == core40_pull_fingerprint | lower
+    fail_msg: CORE40_PBS_REMOTE_CERTIFICATE_CHANGED
+  when: (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) == 1
+
+- name: Add only the read-token-authenticated serzhan-home Remote
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - '2250'
+      - --
+      - proxmox-backup-manager
+      - remote
+      - create
+      - serzhan-home
+      - --auth-id
+      - core-sync@pbs!dh-core
+      - --host
+      - "{{ core40_home_pbs_ipv4 }}"
+      - --port
+      - '8007'
+      - --password
+      - "{{ core40_pull_secret }}"
+      - --fingerprint
+      - "{{ core40_pull_fingerprint }}"
+  register: core40_remote_created
+  changed_when: true
+  failed_when: (core40_remote_created.stdout | from_json).exitcode | int != 0
+  when: (core40_remotes | selectattr('name', 'equalto', core40_remote_name) | list | length) == 0
+  no_log: true
+
+- name: Confirm newly configured Remote without outputting credentials
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, remote, list, --output-format, json]
+  register: core40_remote_confirm_raw
+  changed_when: false
+  no_log: true
+
+- name: Require one pinned source and expected read-only identity
+  ansible.builtin.assert:
+    that:
+      - (core40_remote_confirm_raw.stdout | from_json).exitcode | int == 0
+      - >-
+        ((((core40_remote_confirm_raw.stdout | from_json)['out-data'] | trim | from_json)
+          | selectattr('name', 'equalto', 'serzhan-home') | list) | length) == 1
+      - >-
+        (((core40_remote_confirm_raw.stdout | from_json)['out-data'] | trim | from_json)
+          | selectattr('name', 'equalto', 'serzhan-home') | first).host == core40_home_pbs_ipv4
+      - >-
+        (((core40_remote_confirm_raw.stdout | from_json)['out-data'] | trim | from_json)
+          | selectattr('name', 'equalto', 'serzhan-home') | first)['auth-id'] == 'core-sync@pbs!dh-core'
+    fail_msg: CORE40_REMOTE_READBACK_INVALID
+  no_log: true
+
+- name: Read existing PBS sync jobs
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, sync-job, list, --output-format, json]
+  register: core40_syncs_raw
+  changed_when: false
+
+- name: Identify target Pull Sync Job
+  ansible.builtin.set_fact:
+    core40_existing_syncs: >-
+      {{ ((core40_syncs_raw.stdout | from_json)['out-data'] | trim | from_json)
+         | selectattr('id', 'equalto', core40_sync_id) | list }}
+
+- name: Reject a different backup-sync configuration under the managed job name
+  ansible.builtin.assert:
+    that:
+      - core40_existing_syncs | length <= 1
+      - core40_existing_syncs | length == 0 or core40_existing_syncs[0].store == 'pbs-core'
+      - core40_existing_syncs | length == 0 or core40_existing_syncs[0].remote == 'serzhan-home'
+      - core40_existing_syncs | length == 0 or core40_existing_syncs[0]['remote-store'] == 'pbs-serzhan'
+      - core40_existing_syncs | length == 0 or core40_existing_syncs[0].ns == 'serzhan-home'
+      - core40_existing_syncs | length == 0 or not (core40_existing_syncs[0]['remove-vanished'] | default(false) | bool)
+      - core40_existing_syncs | length == 0 or not (core40_existing_syncs[0].schedule | default('', true) | length > 0)
+    fail_msg: CORE40_PBS_SYNC_JOB_CONFLICT
+
+- name: Create manual-only Pull Sync to dedicated serzhan-home namespace
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - '2250'
+      - --
+      - proxmox-backup-manager
+      - sync-job
+      - create
+      - pull-serzhan-home
+      - --remote
+      - serzhan-home
+      - --remote-store
+      - pbs-serzhan
+      - --store
+      - pbs-core
+      - --ns
+      - serzhan-home
+      - --sync-direction
+      - pull
+      - --remove-vanished
+      - 'false'
+  register: core40_sync_created
+  changed_when: true
+  failed_when: (core40_sync_created.stdout | from_json).exitcode | int != 0
+  when: core40_existing_syncs | length == 0
+
+- name: Verify sync-job creation and absence of scheduled or destructive sync
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, sync-job, list, --output-format, json]
+  register: core40_sync_confirm_raw
+  changed_when: false
+
+- name: Require safe Pull Sync job configuration
+  ansible.builtin.set_fact:
+    core40_sync_confirm: >-
+      {{ ((core40_sync_confirm_raw.stdout | from_json)['out-data'] | trim | from_json)
+         | selectattr('id', 'equalto', core40_sync_id) | list }}
+
+- name: Verify the final manual-only Pull Sync job
+  ansible.builtin.assert:
+    that:
+      - core40_sync_confirm | length == 1
+      - core40_sync_confirm[0].remote == 'serzhan-home'
+      - core40_sync_confirm[0].store == 'pbs-core'
+      - core40_sync_confirm[0]['remote-store'] == 'pbs-serzhan'
+      - core40_sync_confirm[0].ns == 'serzhan-home'
+      - not (core40_sync_confirm[0]['remove-vanished'] | default(false) | bool)
+      - core40_sync_confirm[0].schedule | default('', true) | length == 0
+    fail_msg: CORE40_SYNC_JOB_READBACK_FAILED
+
+- name: Confirm central Pull Sync is configured but not yet executed
+  ansible.builtin.debug:
+    msg:
+      - CORE40_PULL_CONFIG=PASS
+      - CORE40_REMOTE=serzhan-home
+      - CORE40_DESTINATION=pbs-core/serzhan-home
+      - CORE40_REMOVE_VANISHED=false
+      - CORE40_SCHEDULE=none
+      - CORE40_FIRST_PULL=NOT_RUN
