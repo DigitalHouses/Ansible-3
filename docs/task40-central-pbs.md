@@ -116,81 +116,42 @@ CORE Semaphore `dh-core / Ansible + Semaphore — CT1241, 192.168.11.241`:
 CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
 запустить ручной пилот и отдельно настроить retention/Verify/GC.
 
-## Этап 3: первый Pull Sync с `serzhan-home` (подготовлен, требует токен HOME)
+## Транспорт для всех HOME (решение владельца, 12.11.2026)
 
-Новый выбор `configure` в №40 создаёт **только** закреплённый по TLS
-Remote `serzhan-home` и ручной (без расписания) Sync Job
-`pull-serzhan-home` из `serzhan-home / Local PBS — VM2223,
-192.168.11.223`, datastore `pbs-serzhan`, в datastore `pbs-core`,
-namespace `serzhan-home` в CORE. `remove-vanished=false`.
-Первую синхронизацию нужно отдельно запускать и проверять.
+**Этот репозиторий/чат развивает только CORE №40.** Любые задачи HOME,
+включая подготовку локального PBS, Cloudflare Tunnel и выдачу credential,
+реализуются в соответствующих HOME-чатах. CORE здесь только потребитель
+готового HOME-подключения. Никаких HOME-файлов или HOME-заданий из этого
+чата не создаём.
 
-### Однократное действие на исходном HOME
+Каждый HOME, включая `serzhan-home`, считается удалённым для синхронизации:
 
-У CORE DEV пока нет подтверждённого SSH/API-доступа к новому
-`serzhan-home / Beelink S12 PVE — 192.168.11.220`; старый токен DEV
-со старого `serzhan-home / Semaphore` другой машины не подходит.
-Не копировать root-пароли или старые backup-client tokens.
+- На HOME существующий `cloudflared` устанавливает исходящее соединение
+  к Cloudflare. HOME-часть обсуждается и реализуется отдельно.
+- На `dh-core / существующий Media/PBS — VM2250, 192.168.11.250`
+  клиент Cloudflare One должен направлять трафик к адресу PBS HOME
+  через private network route (для PBS достаточно адреса /32).
+  CORE №40 отвечает только за клиент, проверку маршрута и Pull Sync.
+- `serzhan-home / PBS — VM2223, 192.168.11.223` — первый пилот.
+  Из-за общей физической LAN `192.168.11.0/24` маршрут /32 должен
+  приоритетно идти через Cloudflare, а не через `eth0`. Это проверяем
+  именно из CORE PBS VM, не по IP-ответу из CORE Runner.
+- Подключение к PBS использует нативный протокол HTTPS на TCP 8007
+  и штатную PBS-аутентификацию. Без дополнительных SSH proxy/forced
+  commands, ручного ввода токенов, Access service token headers или
+  отдельного публичного прокси для PBS.
+- PBS Remote и Pull Sync создаём только после подтверждённого маршрута
+  и получения из HOME корректного параметра авторизации по согласованному
+  стандартному контракту (его готовит отдельный HOME-чат). Никаких
+  `remove-vanished`, автоматических удалений или нового пользовательского
+  самописного кода.
 
-На консоли **`serzhan-home / Beelink S12 PVE — 192.168.11.220`**
-под root выполнить (при условии, что локальный PBS уже развёрнут
-как **VM2223, 192.168.11.223**):
+В текущей реализации CORE №40 оставлены работающие режимы `audit`
+(по умолчанию) и `prepare` (создать отдельный datastore). Прежний,
+не запущенный режим `configure` с ручным вводом PBS-токена удалён
+из каталога, пока не согласован штатный источник credentials. Старые
+данные `pbs-serzhan` и новый `pbs-core` сохраняются без изменений.
 
-```bash
-qm guest exec 2223 -- /bin/bash -lc '
-set -e
-proxmox-backup-manager datastore show pbs-serzhan --output-format json >/dev/null
-proxmox-backup-manager user create core-sync@pbs --comment "Read-only CORE Pull Sync"
-proxmox-backup-manager acl update /datastore/pbs-serzhan DatastoreReader --auth-id core-sync@pbs
-proxmox-backup-manager user generate-token core-sync@pbs dh-core
-proxmox-backup-manager acl update /datastore/pbs-serzhan DatastoreReader --auth-id "core-sync@pbs!dh-core"
-proxmox-backup-manager user permissions "core-sync@pbs!dh-core" --path /datastore/pbs-serzhan
-proxmox-backup-manager cert info | grep "Fingerprint (sha256)"
-'
-```
-
-Команда однократная: **если `core-sync@pbs` уже существует — остановится**;
-не удаляйте пользователя/токен ради повторного запуска. Секрет
-`value` из ответа `generate-token` отображается **только один раз**;
-скопировать его локально и **не посылать в чат, Git или логи**.
-
-В `dh-core / Semaphore — CT1241, 192.168.11.241` открыть задачу №40:
-
-- Режим: **Настроить HOME Remote + ручной Pull Sync** (`configure`).
-- `HOME PBS — токен`: только секрет `value` из `generate-token`.
-- `HOME PBS — SHA256 сертификата`: полное значение из `cert info`,
-  формат 32 пар шестнадцатеричных цифр через двоеточия.
-
-Имя токена уже определено задачей: `core-sync@pbs!dh-core`.
-Секрет обрабатывается как **secret Survey/env** (`no_log`); в командном
-вызове PBS Guest Agent появляется кратковременно, а PBS хранит Remote
-configuration в root-controlled `/etc/proxmox-backup/remote.cfg`.
-
-После успешного `configure` CORE Job создаётся **без расписания** и
-**без автоматического переноса**. Далее вручную запускается:
-
-```bash
-proxmox-backup-manager sync-job run pull-serzhan-home
-```
-
-внутри **dh-core / Media Server+PBS — VM2250, 192.168.11.250**.
-Приёмка: реальное количество source/target backup groups и snapshots,
-успешный запуск и тестовое восстановление данных. Расписание и
-retention/GC/Verify для нового datastore пока не активируются.
-
-Обе PBS находятся в домашней LAN; отдельного Cloudflare-туннеля между
-этими двумя серверами не нужно. Для других домов — отдельные маршруты
-и свои source tokens.
-
-## Приёмка публикации этапа 3 (12.11.2026)
-
-- Коммит CORE `98502da`: настройка `configure`, `tasks/core40-pbs-pull.yml`,
-  Survey c секретом токена и SHA256 сертификата.
-- Локально: `ansible-playbook --syntax-check` и `ansible-lint --offline`
-  пройдены. В Ansible-3 нет нового собственного Python.
-- CORE Semaphore №00 Job #7: `success`. Задача №40 имеет три действия
-  `audit`, `prepare`, `configure`; SECRET Survey имеет `target=env`.
-- **Ожидание source credential:** у DEV пока нет допустимого управления
-  Beelink HOME, поэтому `configure` **не запускали** и не создавали
-  ни Remote, ни Sync Job, ни расписание. Существующие archives и
-  оба datastore остаются неизменными.
+Проверка CORE транспорта начнётся с `ip route get 192.168.11.223`
+**внутри VM2250**. Отчёт `DIRECT_LAN_NOT_ACCEPTED` — ожидаемое
+состояние до подготовки Cloudflare. Он не означает отказ PBS.

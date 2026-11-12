@@ -6,7 +6,7 @@ tasks:
     description: Обновить каталог задач CORE из Ansible-3 (без запуска остальных задач)
   - name: 40-Central PBS
     playbook: playbooks/core-pbs.yml
-    description: "Audit or safely create separate pbs-core datastore on existing VM2250; never touches legacy pbs-serzhan"
+    description: "Audit CORE PBS and Cloudflare route, or prepare pbs-core; no HOME changes"
     survey_vars:
       - name: DH_CORE40_ACTION
         title: "Central PBS — действие"
@@ -17,16 +17,3 @@ tasks:
         values:
           - {name: "Проверить без изменений", value: audit}
           - {name: "Создать отдельный ZFS dataset и datastore pbs-core", value: prepare}
-          - {name: "Настроить HOME Remote + ручной Pull Sync", value: configure}
-      - name: DH_CORE40_SOURCE_TOKEN
-        title: "HOME PBS — секрет токена core-sync@pbs!dh-core (только Configure)"
-        type: secret
-        target: env
-        required: false
-        values: []
-      - name: DH_CORE40_SOURCE_FINGERPRINT
-        title: "HOME PBS — SHA256 сертификата (только Configure)"
-        type: ""
-        target: env
-        required: false
-        values: []
