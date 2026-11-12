@@ -44,3 +44,20 @@ credentials, не меняет ZFS, VM, диски, firewall, Cloudflare или 
 
 Не включать автоматический перенос документов и HA до появления самих
 источников архивов на локальном PBS.
+
+## Живая приёмка этапа 1 (12.11.2026)
+
+CORE Semaphore `dh-core / Ansible — CT1241, 192.168.11.241`:
+
+- №00: Job #2 `success`, каталог пополнился `40-Central PBS`.
+- №40: Job #3 `success`, `runner ok=4`, `core40_pve ok=7`,
+  `changed=0`, `failed=0`.
+- Вывод: `CORE40_SERZHAN_HOME_PBS=REACHABLE`,
+  `CORE40_STANDARD_MEDIA_VM2243=ABSENT`,
+  `CORE40_LEGACY_MEDIA_VM2250=PRESENT`,
+  `CORE40_LEGACY_PBS_SERZHAN=PRESENT`,
+  `CORE40_CENTRAL_PBS_STORAGE=NOT_CONFIGURED`,
+  `CORE40_PULL_SYNC=NOT_CONFIGURED`.
+
+Аудит принят; **конфигурация приёма копий и восстановление не проверены**,
+поскольку не создавались Central datastore, Remote или Sync Job.
