@@ -99,7 +99,7 @@
 
     - name: Inspect route to HOME PBS from actual CORE PBS VM
       ansible.builtin.command:
-        argv: [qm, guest, exec, '2250', --, ip, -4, route, get, '192.168.11.223']
+        argv: [qm, guest, exec, '2243', --, ip, -4, route, get, '192.168.11.223']
       register: core40_source_route_raw
       changed_when: false
 
@@ -119,7 +119,7 @@
             else 'NON_LAN_ROUTE_REQUIRES_CLOUDFLARE_VERIFICATION' }}
           - CORE40_EXPECTED_TRANSPORT=Cloudflare_Tunnel_private_route_to_HOME_PBS_32
           - CORE40_SOURCE_PRIVATE_IPV4=192.168.11.223
-          - CORE40_TARGET_GUEST=dh-core/VM2250/192.168.11.250
+          - CORE40_TARGET_GUEST=dh-core/VM2243/192.168.11.243
 
     - name: Report CORE PBS audit or separate datastore preparation
       ansible.builtin.debug:

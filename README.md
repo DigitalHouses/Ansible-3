@@ -28,8 +28,8 @@ X570D4U-2L2T, **`192.168.11.240`** (сменён с `192.168.11.230` 12.11.2026)
 | `serzhan-home` — Ansible + Semaphore | `192.168.11.221` | `CT1221` |
 | `serzhan-home` — Media Server, local PBS | `192.168.11.223` | `VM2223` |
 | `dh-core` — Proxmox PVE (ASRock, подтверждён) | `192.168.11.240` | физический сервер |
-| `dh-core` — Ansible + Semaphore (план) | `192.168.11.241` | `CT1241` |
-| `dh-core` — Media Server (план) | `192.168.11.243` | `VM2243` |
+| `dh-core` — Ansible + Semaphore (подтверждён) | `192.168.11.241` | `CT1241` |
+| `dh-core` — Media Server + PBS (подтверждён) | `192.168.11.243` | `VM2243` |
 
 Полная таблица — в S24. Legacy VM не меняются автоматически. Правило
 читаемого отображения IP и VM/CT ID — в S25.

@@ -1,9 +1,9 @@
 ---
-# CORE 40 | Prepare a new, separate PBS datastore inside existing ASRock VM2250.
+# CORE 40 | Prepare a new, separate PBS datastore inside existing ASRock VM2243.
 # No VM lifecycle, disk passthrough changes, pool import/erase, deletes or prune.
-- name: Verify pinned legacy CORE media VM configuration before guest access
+- name: Verify pinned CORE media VM configuration before guest access
   ansible.builtin.command:
-    argv: [qm, config, '2250']
+    argv: [qm, config, '2243']
   register: core40_vm_config
   changed_when: false
 
@@ -12,12 +12,12 @@
     that:
       - "'name: mediaserver-serzhan' in core40_vm_config.stdout_lines"
       - "'agent: enabled=1' in core40_vm_config.stdout_lines"
-      - "'ipconfig0: ip=192.168.11.250/24,gw=192.168.11.1' in core40_vm_config.stdout_lines"
+      - "'ipconfig0: ip=192.168.11.243/24,gw=192.168.11.1' in core40_vm_config.stdout_lines"
     fail_msg: CORE40_LEGACY_GUEST_IDENTITY_CHANGED
 
 - name: Verify existing media ZFS pool is online in trusted guest
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, zpool, list, -H, -o, 'name,health', serzhan-pool]
+    argv: [qm, guest, exec, '2243', --, zpool, list, -H, -o, 'name,health', serzhan-pool]
   register: core40_pool_state
   changed_when: false
 
@@ -30,7 +30,7 @@
 
 - name: Inspect PBS datastore registration inside existing guest
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, datastore, list, --output-format, json]
+    argv: [qm, guest, exec, '2243', --, proxmox-backup-manager, datastore, list, --output-format, json]
   register: core40_guest_stores_raw
   changed_when: false
 
@@ -61,7 +61,7 @@
 
 - name: Check new ZFS dataset without modifying existing datasets
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, zfs, list, -H, -o, type, serzhan-pool/pbs-core]
+    argv: [qm, guest, exec, '2243', --, zfs, list, -H, -o, type, serzhan-pool/pbs-core]
   register: core40_zfs_dataset_raw
   changed_when: false
 
@@ -79,7 +79,7 @@
 
 - name: Check that the future mountpoint is not occupied
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, test, -e, /serzhan-pool/pbs-core]
+    argv: [qm, guest, exec, '2243', --, test, -e, /serzhan-pool/pbs-core]
   register: core40_path_raw
   changed_when: false
 
@@ -93,7 +93,7 @@
 
 - name: Create only the new CORE PBS ZFS dataset
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, zfs, create, -o, atime=on, serzhan-pool/pbs-core]
+    argv: [qm, guest, exec, '2243', --, zfs, create, -o, atime=on, serzhan-pool/pbs-core]
   register: core40_zfs_create
   changed_when: true
   failed_when: (core40_zfs_create.stdout | from_json).exitcode | int != 0
@@ -101,7 +101,7 @@
 
 - name: Read CORE dataset mountpoint and GC-compatible atime
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, zfs, get, -H, -o, value, 'mountpoint,atime,mounted', serzhan-pool/pbs-core]
+    argv: [qm, guest, exec, '2243', --, zfs, get, -H, -o, value, 'mountpoint,atime,mounted', serzhan-pool/pbs-core]
   register: core40_dataset_properties
   changed_when: false
 
@@ -116,7 +116,7 @@
 
 - name: Check no unknown files are hidden beneath an unregistered datastore
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, find, /serzhan-pool/pbs-core, -mindepth, '1', -maxdepth, '1', -print]
+    argv: [qm, guest, exec, '2243', --, find, /serzhan-pool/pbs-core, -mindepth, '1', -maxdepth, '1', -print]
   register: core40_dataset_contents
   changed_when: false
   when: (core40_guest_stores | selectattr('name', 'equalto', 'pbs-core') | list | length) == 0
@@ -131,7 +131,7 @@
 
 - name: Set PBS service ownership only on the new empty CORE mountpoint
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, chown, backup:backup, /serzhan-pool/pbs-core]
+    argv: [qm, guest, exec, '2243', --, chown, backup:backup, /serzhan-pool/pbs-core]
   register: core40_owner_result
   changed_when: true
   failed_when: (core40_owner_result.stdout | from_json).exitcode | int != 0
@@ -143,7 +143,7 @@
       - qm
       - guest
       - exec
-      - '2250'
+      - '2243'
       - --
       - proxmox-backup-manager
       - datastore
@@ -157,7 +157,7 @@
 
 - name: Read central PBS datastore details after preparation
   ansible.builtin.command:
-    argv: [qm, guest, exec, '2250', --, proxmox-backup-manager, datastore, show, pbs-core, --output-format, json]
+    argv: [qm, guest, exec, '2243', --, proxmox-backup-manager, datastore, show, pbs-core, --output-format, json]
   register: core40_datastore_readback
   changed_when: false
 

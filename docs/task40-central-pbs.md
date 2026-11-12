@@ -1,6 +1,8 @@
 # №40 — Central PBS (`dh-core`)
 
-**Этап 1: только аудит, без изменения серверов или хранилищ.**
+**Актуальное состояние (12.11.2026):** `dh-core / Media Server + PBS — VM2243, 192.168.11.243` реально работает. Перенесён из VM2250/.250 без пересоздания ОС и без изменения физического ZFS-диска. Сохранены оба datastore `pbs-serzhan`, `pbs-core`; PVE Storage `pbs-serzhan` перенаправлен на `.243`, а PVE Backup Job исключает VM2243. Ниже сохранены исторические записи исходных аудитов до миграции.
+
+**Этап 1 (история): только аудит, без изменения серверов или хранилищ.**
 В Semaphore CORE есть самостоятельная задача `40-Central PBS`.
 Её нельзя выполнять через `serzhan-home` HOME Semaphore.
 
@@ -128,7 +130,7 @@ CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
 
 - На HOME существующий `cloudflared` устанавливает исходящее соединение
   к Cloudflare. HOME-часть обсуждается и реализуется отдельно.
-- На `dh-core / существующий Media/PBS — VM2250, 192.168.11.250`
+- На `dh-core / Media/PBS — VM2243, 192.168.11.243`
   клиент Cloudflare One должен направлять трафик к адресу PBS HOME
   через private network route (для PBS достаточно адреса /32).
   CORE №40 отвечает только за клиент, проверку маршрута и Pull Sync.
@@ -153,7 +155,7 @@ CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
 данные `pbs-serzhan` и новый `pbs-core` сохраняются без изменений.
 
 Проверка CORE транспорта начнётся с `ip route get 192.168.11.223`
-**внутри VM2250**. Отчёт `DIRECT_LAN_NOT_ACCEPTED` — ожидаемое
+**внутри VM2243**. Отчёт `DIRECT_LAN_NOT_ACCEPTED` — ожидаемое
 состояние до подготовки Cloudflare. Он не означает отказ PBS.
 
 ## Приёмка исправления границ проекта (12.11.2026)
@@ -166,3 +168,27 @@ CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
   **не считается проверкой Cloudflare**.
 - За пределами CORE не было изменений: HOME-задачи и credential-токены
   не создавались, PBS Remote/Sync Jobs не активированы.
+
+## Живая приёмка перенумерации CORE Media/PBS (12.11.2026)
+
+- На `dh-core / ASRock PVE — 192.168.11.240` старую VM2250
+  корректно выключили. Без `qm destroy` и переустановки.
+- Переименованы только два LVM-Thin тома `pve/vm-2250-disk-0` →
+  `pve/vm-2243-disk-0` и `pve/vm-2250-cloudinit` →
+  `pve/vm-2243-cloudinit`, а также конфигурация VMID.
+- `dh-core / Media Server + PBS — VM2243, 192.168.11.243`
+  запущена с прежними MAC, PCI passthrough GPU и SATA-контроллера.
+  Гостевой Linux hostname и имя Proxmox VM пока **сохранены** как
+  `mediaserver-serzhan`; отдельное переименование не требовалось.
+- Гостевая сеть Netplan и Cloud-Init используют `.243`. Портал,
+  rclone GUI и PBS отвечают HTTP 200. ZFS `serzhan-pool` ONLINE.
+- PVE Storage `pbs-serzhan` active; прежний токен и сертификат PBS
+  не менялись. PVE Backup Job `dh-local-pbs-serzhan` исключает VM2243.
+- Существующие datastore `pbs-serzhan` и `pbs-core` доступны по
+  исходным путям. PBS Remote/Sync Jobs пока не настроены.
+- Резервные копии исходных файлов PVE: `/var/lib/digitalhouses/
+  core-media-2243-migration-20261112/`. Копии изменённых файлов
+  гостя: `/root/dh-core-2243-migration/`.
+- Ранее созданные TLS материалы `media-account-pki` автоматически
+  не перевыпускались. При использовании локального HTTPS-портала
+  отдельно проверить, содержит ли сертификат новый IP `.243`.
