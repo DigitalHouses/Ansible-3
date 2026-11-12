@@ -90,3 +90,27 @@ Sync Jobs, credentials или prune нет.
 на `serzhan-home / Local PBS, 192.168.11.223`, закреплённый TLS
 fingerprint и отдельная настройка CORE Remote и Sync Job. Этот этап
 ещё не меняет источник.
+
+## Живая приёмка этапа 2 (12.11.2026)
+
+CORE Semaphore `dh-core / Ansible + Semaphore — CT1241, 192.168.11.241`:
+
+- №00: Job #4 `success`, Survey №40 обновлён: `audit`/`prepare`.
+- №40 `prepare`: Job #5 `success`, `core40_pve ok=30 changed=3 failed=0`;
+  созданы **только** `serzhan-pool/pbs-core` и PBS datastore `pbs-core`
+  внутри `dh-core / Legacy Media/PBS — VM2250, 192.168.11.250`.
+- Независимая проверка: PBS видит оба datastore на разных путях;
+  ZFS `pbs-core` смонтирован, занято около 24 МБ (служебные метаданные),
+  старый `pbs-serzhan` содержит около 315 ГБ и сохранил прежние
+  Prune/GC; Remote/Sync Jobs не появились. PBS HTTPS доступен.
+- `pbs-core` намеренно **не добавлялся в PVE Storage**; он предназначен
+  только как серверная цель PBS Pull Sync, а не локальный backup job PVE.
+- Проверка повторного запуска `prepare` выполняется отдельно.
+
+**Ближайшая зависимость:** на `serzhan-home / Local PBS — VM2223,
+192.168.11.223` нужен отдельный токен с `DatastoreReader` и
+`DatastoreAudit` для всех нужных backup groups и закреплённый
+сертификат. Существующий токен записи `root@pam!pve-local`
+**не следует** применять для Pull. После этого №40 сможет создать
+CORE Remote, sync в namespace `serzhan-home` без `remove-vanished`,
+запустить ручной пилот и отдельно настроить retention/Verify/GC.

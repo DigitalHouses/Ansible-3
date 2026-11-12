@@ -122,6 +122,6 @@
           - "CORE40_STANDARD_MEDIA_VM2243={{ 'PRESENT' if core40_media_standard | length else 'ABSENT' }}"
           - "CORE40_LEGACY_MEDIA_VM2250={{ 'PRESENT' if core40_media_legacy | length else 'ABSENT' }}"
           - "CORE40_LEGACY_PBS_SERZHAN={{ 'PRESENT' if core40_storage_legacy | length else 'ABSENT' }}"
-          - "CORE40_CENTRAL_PBS_STORAGE={{ 'PRESENT' if core40_storage_central | length else 'NOT_CONFIGURED' }}"
+          - "CORE40_PVE_STORAGE_PBS_CORE={{ 'PRESENT' if core40_storage_central | length else 'NOT_CONFIGURED' }}"
           - "CORE40_PULL_SYNC=NOT_CONFIGURED; no remote or sync-job was created"
           - "NEXT=Provide source DatastoreReader token before creating remote and Pull Sync"
