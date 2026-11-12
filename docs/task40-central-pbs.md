@@ -105,7 +105,8 @@ CORE Semaphore `dh-core / Ansible + Semaphore — CT1241, 192.168.11.241`:
   Prune/GC; Remote/Sync Jobs не появились. PBS HTTPS доступен.
 - `pbs-core` намеренно **не добавлялся в PVE Storage**; он предназначен
   только как серверная цель PBS Pull Sync, а не локальный backup job PVE.
-- Проверка повторного запуска `prepare` выполняется отдельно.
+- Повторный `prepare`, CORE Semaphore Job #6: `success`, `core40_pve ok=25 changed=0 failed=0`, `runner ok=4 changed=0 failed=0`.
+  Dataset и datastore не пересозданы — идемпотентность подтверждена.
 
 **Ближайшая зависимость:** на `serzhan-home / Local PBS — VM2223,
 192.168.11.223` нужен отдельный токен с `DatastoreReader` и
