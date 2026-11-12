@@ -181,3 +181,16 @@ retention/GC/Verify для нового datastore пока не активиру
 Обе PBS находятся в домашней LAN; отдельного Cloudflare-туннеля между
 этими двумя серверами не нужно. Для других домов — отдельные маршруты
 и свои source tokens.
+
+## Приёмка публикации этапа 3 (12.11.2026)
+
+- Коммит CORE `98502da`: настройка `configure`, `tasks/core40-pbs-pull.yml`,
+  Survey c секретом токена и SHA256 сертификата.
+- Локально: `ansible-playbook --syntax-check` и `ansible-lint --offline`
+  пройдены. В Ansible-3 нет нового собственного Python.
+- CORE Semaphore №00 Job #7: `success`. Задача №40 имеет три действия
+  `audit`, `prepare`, `configure`; SECRET Survey имеет `target=env`.
+- **Ожидание source credential:** у DEV пока нет допустимого управления
+  Beelink HOME, поэтому `configure` **не запускали** и не создавали
+  ни Remote, ни Sync Job, ни расписание. Существующие archives и
+  оба datastore остаются неизменными.
